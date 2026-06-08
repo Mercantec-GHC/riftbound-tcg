@@ -3,5 +3,9 @@
     <Build />
   </Project>
   <Project Path="riftbound-tcg.AppHost/riftbound-tcg.AppHost.csproj" />
+  <Project Path="riftbound-tcg.Core/riftbound-tcg.Core.csproj" />
+  <Project Path="riftbound-tcg.DomainModels/riftbound-tcg.DomainModels.csproj" />
+  <Project Path="riftbound-tcg.Engine/riftbound-tcg.Engine.csproj" />
   <Project Path="riftbound-tcg.Server/riftbound-tcg.Server.csproj" />
+  <Project Path="riftbound-tcg.Tests/riftbound-tcg.Tests.csproj" />
 </Solution>
