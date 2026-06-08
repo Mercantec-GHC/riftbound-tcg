@@ -21,4 +21,8 @@
     <Using Include="NUnit.Framework" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\riftbound-tcg.DomainModels\riftbound-tcg.DomainModels.csproj" />
+  </ItemGroup>
+
 </Project>
