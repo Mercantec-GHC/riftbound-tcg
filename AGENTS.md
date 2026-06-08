@@ -307,8 +307,9 @@ Use OpenAPI, generated TypeScript types, Zod schemas, or another shared contract
 
 Follow the style already present in the repository. If no style exists yet:
 
-- Use TypeScript for frontend and Node-based backend code.
-- Prefer strict type checking.
+- Use TypeScript for frontend code.
+- Use C# for ASP.NET Core backend code.
+- Prefer strict type checking (TypeScript) and nullable reference types (C#).
 - Avoid `any` unless there is a clear reason.
 - Keep functions small and named by domain behavior.
 - Avoid leaking transport or database types into the rules engine.
