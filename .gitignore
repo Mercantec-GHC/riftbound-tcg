@@ -22,6 +22,18 @@ bld/
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
+[Pp]ublish/
+
+# Visual Studio / VS Code / Rider
+.vs/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
 
 # .NET Core
 project.lock.json
@@ -35,14 +47,49 @@ ScaffoldingReadMe.txt
 *.nupkg
 # NuGet Symbol Packages
 *.snupkg
+packages/
+
+# Node / frontend builds
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # dotenv environment variables file
 .env
+.env.*
+!.env.example
+
+# Local app configuration and secrets
+appsettings.Local.json
+appsettings.*.Local.json
+secrets.json
+
+# Aspire generated deployment output
+aspire-output/
+.azure/
 
 # Others
 ~$*
 *~
+.DS_Store
+*.ntvs*
+*.njsproj
+*.sw?
 CodeCoverage/
+coverage/
+TestResults/
 
 # MSBuild Binary and Structured Log
 *.binlog
