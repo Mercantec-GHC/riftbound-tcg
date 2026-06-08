@@ -1,0 +1,6 @@
+{
+  "appHost": {
+    "path": "riftbound-tcg.AppHost/riftbound-tcg.AppHost.csproj"
+  },
+  "channel": "stable"
+}
