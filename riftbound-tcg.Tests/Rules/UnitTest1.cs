@@ -1,4 +1,4 @@
-﻿namespace riftbound_tcg.Tests;
+﻿namespace riftbound_tcg.Tests.Rules;
 
 public class Tests
 {
