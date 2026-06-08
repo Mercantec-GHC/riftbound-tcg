@@ -1,4 +1,4 @@
-# Riftlike Card Game App
+# Riftbound TCG
 
 A digital card-game application inspired by battlefield-control card game systems. The project is designed around a rules-engine-first architecture, with a React-based client, a server-authoritative game engine, realtime multiplayer, and PostgreSQL persistence.
 
@@ -43,6 +43,7 @@ PostgreSQL
 ### Backend
 
 - ASP.NET Core with C#
+- Redis (cache)
 
 ### Database
 
@@ -128,12 +129,11 @@ Actions should be validated by the engine before being applied.
 
 The engine should expose a small public API:
 
-```ts
-export interface RulesEngine {
-  getLegalActions(state: GameState, playerId: PlayerId): GameAction[];
-  applyAction(state: GameState, action: GameAction): ActionResult;
-}
-```
+    public interface IRulesEngine
+    {
+      IReadOnlyList<GameAction> GetLegalActions(GameState state, PlayerId playerId);
+      ActionResult ApplyAction(GameState state, GameAction action);
+    }
 
 The engine should not know about React, HTML, WebSockets, HTTP, PostgreSQL, or authentication.
 

@@ -56,12 +56,11 @@ The engine may depend on shared type packages, validation libraries, or internal
 
 Expected engine API shape:
 
-```ts
-export interface RulesEngine {
-  getLegalActions(state: GameState, playerId: PlayerId): GameAction[];
-  applyAction(state: GameState, action: GameAction): ActionResult;
-}
-```
+    public interface IRulesEngine
+    {
+      IReadOnlyList<GameAction> GetLegalActions(GameState state, PlayerId playerId);
+      ActionResult ApplyAction(GameState state, GameAction action);
+    }
 
 When adding rules, prefer these concepts:
 
