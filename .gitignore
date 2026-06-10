@@ -102,3 +102,4 @@ TestResults/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+/frontend/data
