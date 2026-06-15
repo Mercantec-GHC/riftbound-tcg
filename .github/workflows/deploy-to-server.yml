@@ -16,7 +16,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Stop current container setup
-        run: sudo docker compose down
+        run: |
+          if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+            sudo docker compose down
+          else
+            docker compose down
+          fi
 
   startup:
     needs: shutdown
@@ -26,4 +31,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Start container setup
-        run: sudo docker compose up -d --build
+        run: |
+          if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+            sudo docker compose up -d --build
+          else
+            docker compose up -d --build
+          fi
