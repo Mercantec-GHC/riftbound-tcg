@@ -1,0 +1,29 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+
+permissions: {}
+
+jobs:
+  shutdown:
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Stop current container setup
+        run: docker compose down
+
+  startup:
+    needs: shutdown
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Start container setup
+        run: docker compose up -d --build
