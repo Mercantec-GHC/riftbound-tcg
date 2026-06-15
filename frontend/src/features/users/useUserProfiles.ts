@@ -5,6 +5,7 @@ import {
   type UserProfile,
   type UserStats,
 } from '../../models'
+import { randomId } from '../../utils/randomId'
 
 const defaultUserId = 'local-user'
 
@@ -82,7 +83,7 @@ export function useUserProfiles() {
 
   function createProfile(displayName: string) {
     const profile: UserProfile = {
-      id: `user-${crypto.randomUUID()}`,
+      id: randomId('user'),
       displayName: displayName.trim() || `Player ${profiles.length + 1}`,
       createdAt: new Date().toISOString(),
       stats: blankStats(),

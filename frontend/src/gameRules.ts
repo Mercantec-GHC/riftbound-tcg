@@ -15,6 +15,7 @@ import {
   type SetupState,
   type Unit,
 } from './models'
+import { randomId } from './utils/randomId'
 
 export type ManualAction =
   | { type: 'adjust-points'; playerId: number; amount: number }
@@ -160,7 +161,7 @@ export function createGameFromSetup(cards: Card[] = [], setup: SetupState = defa
   const turnOrder = setup.turnOrder.length >= playerCount ? setup.turnOrder.slice(0, playerCount) : orderedPlayerIds({ ...setup, playerCount })
   const first = turnOrder[0] ?? 0
   return {
-    id: `game-${crypto.randomUUID()}`,
+    id: randomId('game'),
     mode: setup.mode,
     victoryScore: config.victoryScore,
     players,
@@ -513,7 +514,7 @@ export function playCard(state: GameState, laneId?: string, targetUnitId?: strin
     return addLog(updated, `${player.name} played ${card.name} to base.`)
   }
   if (card.effect.type === 'draw') return addLog(updatePlayer(updated, player.id, (current) => draw(current, card.effect.amount)), `${player.name} drew ${card.effect.amount}.`)
-  if ((card.effect.type === 'buff' || card.effect.type === 'rally') && targetUnitId) return addLog(mapUnit(updated, targetUnitId, (unit) => ({ ...unit, attachedMight: card.effect.type === 'buff' ? unit.attachedMight + card.effect.amount : unit.attachedMight, exhausted: card.effect.type === 'rally' ? false : unit.exhausted })), `${player.name} used ${card.name}.`)
+  if ((card.effect.type === 'buff' || card.effect.type === 'rally') && targetUnitId) return addLog(mapUnit(updated, targetUnitId, (unit) => ({ ...unit, attachedMight: card.effect.type === 'buff' ? unit.attachedMight + card.effect.amount : unit.attachedMight, exhausted: card.effect.type === 'rally' ? false : unit.exhausted })), `${card.name} affected a unit.`)
   if (card.effect.type === 'damage' && laneId) {
     const target = updated.battlefields.find((field) => field.id === laneId)?.units.find((unit) => unit.owner !== player.id)
     return target ? addLog(mapUnit(updated, target.uid, (unit) => ({ ...unit, damage: unit.damage + card.effect.amount })), `${card.name} dealt ${card.effect.amount} damage.`) : updated
@@ -546,7 +547,7 @@ export function handleDrop(state: GameState, payload: DragPayload, laneId?: stri
 }
 
 export function applyManualAction(state: GameState, action: ManualAction): GameState {
-  if (action.type === 'adjust-points') return checkWinners(addLog(updatePlayer(state, action.playerId, (player) => ({ ...player, points: Math.max(0, player.points + action.amount) })), `Adjusted ${state.players[action.playerId]?.name} points by ${action.amount}.`))
+  if (action.type === 'adjust-points') return checkWinners(addLog(updatePlayer(state, action.playerId, (player) => ({ ...player, points: Math.max(0, player.points + action.amount) })), `Adjusted points by ${action.amount}.`))
   if (action.type === 'draw') return addLog(updatePlayer(state, action.playerId, (player) => draw(player, action.amount)), `${state.players[action.playerId]?.name} manually drew ${action.amount}.`)
   if (action.type === 'ready-unit') return addLog(mapUnit(state, action.unitId, (unit) => ({ ...unit, exhausted: false })), 'Manual ready applied.')
   if (action.type === 'exhaust-unit') return addLog(mapUnit(state, action.unitId, (unit) => ({ ...unit, exhausted: true })), 'Manual exhaust applied.')
@@ -559,13 +560,13 @@ export function applyManualAction(state: GameState, action: ManualAction): GameS
     const [without, unit] = removeUnit(state, action.unitId)
     return unit ? addLog(updatePlayer(without, unit.owner, (player) => ({ ...player, base: [...player.base, { ...unit, location: { type: 'base' } }] })), `Recalled ${unit.name}.`) : state
   }
-  if (action.type === 'set-controller') return addLog({ ...state, battlefields: state.battlefields.map((field) => field.id === action.battlefieldId ? { ...field, controllerId: action.controllerId } : field) }, 'Battlefield controller adjusted.')
+  if (action.type === 'set-controller') return addLog({ ...state, battlefields: state.battlefields.map((field) => field.id === action.battlefieldId ? { ...field, controllerId: action.controllerId } : field) }, 'Manual controller update applied.')
   if (action.type === 'stage-showdown' || action.type === 'clear-showdown' || action.type === 'stage-combat' || action.type === 'clear-combat') {
     return addLog({
       ...state,
       battlefields: state.battlefields.map((field) =>
         field.id === action.battlefieldId
-          ? { ...field, stagedShowdown: action.type === 'stage-showdown' ? true : action.type === 'clear-showdown' ? false : field.stagedShowdown, stagedCombat: action.type === 'stage-combat' ? true : action.type === 'clear-combat' ? false : field.stagedCombat, contestedByPlayerId: field.contestedByPlayerId ?? state.turnPlayerId }
+          ? { ...field, stagedShowdown: action.type === 'stage-showdown' ? true : action.type === 'clear-showdown' ? false : field.stagedShowdown, stagedCombat: action.type === 'stage-combat' ? true : action.type === 'clear-combat' ? false : field.stagedCombat }
           : field,
       ),
     }, 'Manual conflict staging adjusted.')

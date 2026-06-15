@@ -6,6 +6,7 @@ import {
   saveCustomCards,
 } from '../../cardUtils'
 import { blankCard, localCardsEndpoint, type Card } from '../../models'
+import { randomId } from '../../utils/randomId'
 
 const noopCardsChanged = () => undefined
 
@@ -46,7 +47,7 @@ export function useCardLibrary({ onCardsChanged = noopCardsChanged }: { onCardsC
     if (!draft.name.trim()) return
     const card: Card = {
       ...draft,
-      id: `custom-${crypto.randomUUID()}`,
+      id: randomId('custom'),
       name: draft.name.trim(),
       cost: Math.max(0, Math.floor(draft.cost)),
       might: Math.max(0, Math.floor(draft.might)),

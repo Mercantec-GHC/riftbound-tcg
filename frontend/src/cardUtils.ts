@@ -11,6 +11,7 @@ import {
   type RiftCodexCard,
   type SavedDeck,
 } from './models'
+import { randomId } from './utils/randomId'
 
 export function inferTagsFromName(name: string) {
   const tag = name.split(' - ')[0]?.trim()
@@ -237,7 +238,7 @@ export function isSavedDeck(value: unknown): value is SavedDeck {
 
 export function normalizeDeck(deck: (Partial<SavedDeck> & { battlefieldId?: string }) | null | undefined, ownerUserId = 'local-user'): SavedDeck {
   return {
-    id: deck?.id || `deck-${crypto.randomUUID()}`,
+    id: deck?.id || randomId('deck'),
     name: deck?.name || 'Imported deck',
     ownerUserId: deck?.ownerUserId || ownerUserId,
     visibility: deck?.visibility === 'public' ? 'public' : 'private',
@@ -251,7 +252,7 @@ export function normalizeDeck(deck: (Partial<SavedDeck> & { battlefieldId?: stri
 
 export function blankDeck(): SavedDeck {
   return {
-    id: `deck-${crypto.randomUUID()}`,
+    id: randomId('deck'),
     name: 'New deck',
     ownerUserId: 'local-user',
     visibility: 'private',
