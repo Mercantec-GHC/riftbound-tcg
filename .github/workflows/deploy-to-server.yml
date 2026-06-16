@@ -26,4 +26,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Start container setup
+        env:
+          POSTGRES__DB: ${{ secrets.POSTGRES__DB }}
+          POSTGRES__USER: ${{ secrets.POSTGRES__USER }}
+          POSTGRES__PASSWORD: ${{ secrets.POSTGRES__PASSWORD }}
         run: docker compose up -d --build

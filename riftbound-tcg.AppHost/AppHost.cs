@@ -1,12 +1,10 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-var cache = builder.AddRedis("cache");
+
 
 var tcgapi = builder.AddExternalService("tcgapi", "https://api.tcgplayer.com"); // TCG Api 
 
 var server = builder.AddProject<Projects.riftbound_tcg_Server>("server")
-    .WithReference(cache)
-    .WaitFor(cache)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
 

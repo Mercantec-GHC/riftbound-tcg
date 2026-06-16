@@ -2,8 +2,6 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add service defaults & Aspire client integrations.
 builder.AddServiceDefaults();
-builder.AddRedisClientBuilder("cache")
-    .WithOutputCache();
 
 // Add services to the container.
 builder.Services.AddProblemDetails();
@@ -21,7 +19,6 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseOutputCache();
 
 string[] summaries = ["Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"];
 
@@ -38,7 +35,6 @@ api.MapGet("weatherforecast", () =>
         .ToArray();
     return forecast;
 })
-.CacheOutput(p => p.Expire(TimeSpan.FromSeconds(5)))
 .WithName("GetWeatherForecast");
 
 app.MapDefaultEndpoints();
