@@ -30,4 +30,8 @@ jobs:
           POSTGRES__DB: ${{ secrets.POSTGRES__DB }}
           POSTGRES__USER: ${{ secrets.POSTGRES__USER }}
           POSTGRES__PASSWORD: ${{ secrets.POSTGRES__PASSWORD }}
+          DOZZLE_ADMIN_USERNAME: ${{ secrets.DOZZLE_ADMIN_USERNAME }}
+          DOZZLE_ADMIN_PASSWORD: ${{ secrets.DOZZLE_ADMIN_PASSWORD }}
+          DOZZLE_ADMIN_EMAIL: ${{ secrets.DOZZLE_ADMIN_EMAIL }}
+          DOZZLE_ADMIN_NAME: ${{ secrets.DOZZLE_ADMIN_NAME }}
         run: docker compose up -d --build

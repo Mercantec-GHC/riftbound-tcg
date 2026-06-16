@@ -103,3 +103,6 @@ TestResults/
 TestResult.xml
 nunit-*.xml
 /frontend/data
+
+
+dozzle/users.*
