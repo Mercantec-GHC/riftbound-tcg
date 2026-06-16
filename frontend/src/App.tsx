@@ -18,6 +18,7 @@ import { CardPreviewModal } from './features/game/CardPreviewModal'
 import { GamePage } from './features/game/GamePage'
 import { useGameController } from './features/game/useGameController'
 import { HomePage } from './features/home/HomePage'
+import { OnlineBattlePage } from './features/online/OnlineBattlePage'
 import {
   localDecksEndpoint,
   type Card,
@@ -120,6 +121,14 @@ function App() {
           setup={gameController.setup}
           startConfiguredGame={gameController.startConfiguredGame}
           updateSetup={gameController.updateSetup}
+        />
+      )}
+
+      {page === 'online' && (
+        <OnlineBattlePage
+          activeUser={users.activeUser}
+          decks={deckBuilder.accessibleDecks}
+          users={users.profiles}
         />
       )}
 

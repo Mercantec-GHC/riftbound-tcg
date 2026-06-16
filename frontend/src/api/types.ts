@@ -121,7 +121,7 @@ export type MatchEvent = {
 }
 
 export type SubmitActionResponse = {
-  accepted: true
+  accepted: boolean
   event: MatchEvent
   state: GameState
   legalActions?: LegalAction[]

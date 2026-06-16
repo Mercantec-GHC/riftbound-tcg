@@ -3,6 +3,7 @@ import type { Page } from '../models'
 const pages: { page: Page; label: string }[] = [
   { page: 'home', label: 'Frontpage' },
   { page: 'game', label: 'Game' },
+  { page: 'online', label: 'Online' },
   { page: 'cards', label: 'Card viewer' },
   { page: 'decks', label: 'Deck builder' },
   { page: 'deck-list', label: 'Deck list' },

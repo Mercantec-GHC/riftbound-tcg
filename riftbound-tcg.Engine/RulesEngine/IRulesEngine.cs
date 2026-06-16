@@ -1,16 +1,43 @@
+using System.Text.Json.Nodes;
+
 namespace riftbound_tcg.Engine.RulesEngine;
 
 public interface IRulesEngine
 {
+    EngineMatchState CreateInitialState(EngineMatchConfig config, IReadOnlyList<EnginePlayerDeck> playerDecks, int seed);
+
     IReadOnlyList<EngineLegalAction> GetLegalActions(EngineMatchState state, int playerId);
 
-    EngineActionResult ApplyAction(EngineMatchState state, EngineGameAction action);
+    EngineActionResult ApplyAction(EngineMatchState state, EngineGameAction action, int? expectedSequenceNumber);
 }
+
+public sealed record EngineMatchConfig(
+    string MatchId,
+    string Mode,
+    IReadOnlyList<EngineSeatConfig> Seats,
+    IReadOnlyList<string> BattlefieldIds,
+    int FirstPlayerId);
+
+public sealed record EngineSeatConfig(
+    int PlayerId,
+    string UserId,
+    string DisplayName,
+    int? TeamId);
+
+public sealed record EnginePlayerDeck(
+    string DeckId,
+    string LegendId,
+    string ChampionId,
+    IReadOnlyList<string> BattlefieldDeckIds,
+    IReadOnlyList<string> RuneDeckIds,
+    IReadOnlyList<string> MainDeckIds);
 
 public sealed record EngineMatchState(
     string MatchId,
+    string Mode,
     string Stage,
     int SequenceNumber,
+    JsonObject State,
     IReadOnlyList<EnginePlayerState> Players);
 
 public sealed record EnginePlayerState(
@@ -23,12 +50,13 @@ public sealed record EngineLegalAction(
     string Id,
     string Type,
     string Label,
-    int PlayerId);
+    int PlayerId,
+    JsonObject? PayloadSchema = null);
 
 public sealed record EngineGameAction(
-    string PlayerId,
+    int PlayerId,
     string ActionType,
-    object Payload);
+    IReadOnlyDictionary<string, object?>? Payload);
 
 public sealed record EngineActionResult(
     bool Accepted,

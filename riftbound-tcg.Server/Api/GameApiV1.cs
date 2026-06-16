@@ -25,11 +25,10 @@ public static class GameApiV1
         var cards = api.MapGroup("/cards")
             .WithTags("Cards");
 
-        cards.MapGet("/", (PlaceholderGameStore store) => Ok(store.Cards))
-            .WithName("ListCards")
-            .CacheOutput(p => p.Expire(TimeSpan.FromSeconds(30)));
+        cards.MapGet("/", (OnlineGameService store) => Ok(store.Cards))
+            .WithName("ListCards");
 
-        cards.MapGet("/{cardId}", Results<Ok<ApiResult<CardDto>>, NotFound> (string cardId, PlaceholderGameStore store) =>
+        cards.MapGet("/{cardId}", Results<Ok<ApiResult<CardDto>>, NotFound> (string cardId, OnlineGameService store) =>
             store.Cards.FirstOrDefault(card => card.Id.Equals(cardId, StringComparison.OrdinalIgnoreCase)) is { } card
                 ? TypedResults.Ok(Envelope(card))
                 : TypedResults.NotFound())
@@ -41,33 +40,33 @@ public static class GameApiV1
         var decks = api.MapGroup("/decks")
             .WithTags("Decks");
 
-        decks.MapGet("/", (PlaceholderGameStore store) => Ok(store.Decks))
+        decks.MapGet("/", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListDecksAsync(cancellationToken)))
             .WithName("ListDecks");
 
-        decks.MapGet("/public", (PlaceholderGameStore store) => Ok(store.Decks))
+        decks.MapGet("/public", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListDecksAsync(cancellationToken)))
             .WithName("ListPublicDecks");
 
-        decks.MapGet("/{deckId}", Results<Ok<ApiResult<DeckDto>>, NotFound> (string deckId, PlaceholderGameStore store) =>
-            store.Decks.FirstOrDefault(deck => deck.Id.Equals(deckId, StringComparison.OrdinalIgnoreCase)) is { } deck
+        decks.MapGet("/{deckId}", async Task<Results<Ok<ApiResult<DeckDto>>, NotFound>> (string deckId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetDeckAsync(deckId, cancellationToken) is { } deck
                 ? TypedResults.Ok(Envelope(deck))
                 : TypedResults.NotFound())
             .WithName("GetDeck");
 
-        decks.MapPost("/", (CreateDeckRequest request, PlaceholderGameStore store) =>
+        decks.MapPost("/", async (CreateDeckRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
         {
-            var deck = store.CreateDeck(request);
+            var deck = await store.CreateDeckAsync(request, cancellationToken);
             return TypedResults.Created($"/api/v1/decks/{deck.Id}", Envelope(deck));
         })
         .WithName("CreateDeck");
 
-        decks.MapPatch("/{deckId}", Results<Ok<ApiResult<DeckDto>>, NotFound> (string deckId, UpdateDeckRequest request, PlaceholderGameStore store) =>
-            store.UpdateDeck(deckId, request) is { } deck
+        decks.MapPatch("/{deckId}", async Task<Results<Ok<ApiResult<DeckDto>>, NotFound>> (string deckId, UpdateDeckRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.UpdateDeckAsync(deckId, request, cancellationToken) is { } deck
                 ? TypedResults.Ok(Envelope(deck))
                 : TypedResults.NotFound())
             .WithName("UpdateDeck");
 
-        decks.MapDelete("/{deckId}", Results<NoContent, NotFound> (string deckId, PlaceholderGameStore store) =>
-            store.DeleteDeck(deckId)
+        decks.MapDelete("/{deckId}", async Task<Results<NoContent, NotFound>> (string deckId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.DeleteDeckAsync(deckId, cancellationToken)
                 ? TypedResults.NoContent()
                 : TypedResults.NotFound())
             .WithName("DeleteDeck");
@@ -78,24 +77,24 @@ public static class GameApiV1
         var users = api.MapGroup("/users")
             .WithTags("Users");
 
-        users.MapGet("/", (PlaceholderGameStore store) => Ok(store.Users))
+        users.MapGet("/", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListUsersAsync(cancellationToken)))
             .WithName("ListUsers");
 
-        users.MapGet("/{userId}", Results<Ok<ApiResult<UserDto>>, NotFound> (string userId, PlaceholderGameStore store) =>
-            store.Users.FirstOrDefault(user => user.Id.Equals(userId, StringComparison.OrdinalIgnoreCase)) is { } user
+        users.MapGet("/{userId}", async Task<Results<Ok<ApiResult<UserDto>>, NotFound>> (string userId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetUserAsync(userId, cancellationToken) is { } user
                 ? TypedResults.Ok(Envelope(user))
                 : TypedResults.NotFound())
             .WithName("GetUser");
 
-        users.MapPost("/", (CreateUserRequest request, PlaceholderGameStore store) =>
+        users.MapPost("/", async (CreateUserRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
         {
-            var user = store.CreateUser(request);
+            var user = await store.CreateUserAsync(request, cancellationToken);
             return TypedResults.Created($"/api/v1/users/{user.Id}", Envelope(user));
         })
         .WithName("CreateUser");
 
-        users.MapPatch("/{userId}", Results<Ok<ApiResult<UserDto>>, NotFound> (string userId, UpdateUserRequest request, PlaceholderGameStore store) =>
-            store.UpdateUser(userId, request) is { } user
+        users.MapPatch("/{userId}", async Task<Results<Ok<ApiResult<UserDto>>, NotFound>> (string userId, UpdateUserRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.UpdateUserAsync(userId, request, cancellationToken) is { } user
                 ? TypedResults.Ok(Envelope(user))
                 : TypedResults.NotFound())
             .WithName("UpdateUser");
@@ -106,43 +105,50 @@ public static class GameApiV1
         var matches = api.MapGroup("/matches")
             .WithTags("Matches");
 
-        matches.MapGet("/", (PlaceholderGameStore store) => Ok(store.Matches))
+        matches.MapGet("/", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListMatchesAsync(cancellationToken)))
             .WithName("ListMatches");
 
-        matches.MapPost("/", (CreateMatchRequest request, PlaceholderGameStore store) =>
+        matches.MapPost("/", async Task<Results<Created<ApiResult<MatchSnapshotDto>>, BadRequest<ApiResult<ApiErrorPayload>>>> (CreateMatchRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
         {
-            var match = store.CreateMatch(request);
-            return TypedResults.Created($"/api/v1/matches/{match.Id}", Envelope(store.GetSnapshot(match)));
+            try
+            {
+                var match = await store.CreateMatchAsync(request, cancellationToken);
+                return TypedResults.Created($"/api/v1/matches/{match.Id}", Envelope(match));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("match.invalid", ex.Message)));
+            }
         })
         .WithName("CreateMatch");
 
-        matches.MapGet("/{matchId}", Results<Ok<ApiResult<MatchSnapshotDto>>, NotFound> (string matchId, PlaceholderGameStore store) =>
-            store.Matches.FirstOrDefault(match => match.Id.Equals(matchId, StringComparison.OrdinalIgnoreCase)) is { } match
-                ? TypedResults.Ok(Envelope(store.GetSnapshot(match)))
+        matches.MapGet("/{matchId}", async Task<Results<Ok<ApiResult<MatchSnapshotDto>>, NotFound>> (string matchId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetMatchAsync(matchId, cancellationToken) is { } match
+                ? TypedResults.Ok(Envelope(match))
                 : TypedResults.NotFound())
             .WithName("GetMatch");
 
-        matches.MapGet("/{matchId}/state", Results<Ok<ApiResult<MatchSnapshotDto>>, NotFound> (string matchId, PlaceholderGameStore store) =>
-            store.Matches.FirstOrDefault(match => match.Id.Equals(matchId, StringComparison.OrdinalIgnoreCase)) is { } match
-                ? TypedResults.Ok(Envelope(store.GetSnapshot(match)))
+        matches.MapGet("/{matchId}/state", async Task<Results<Ok<ApiResult<MatchSnapshotDto>>, NotFound>> (string matchId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetMatchAsync(matchId, cancellationToken) is { } match
+                ? TypedResults.Ok(Envelope(match))
                 : TypedResults.NotFound())
             .WithName("GetMatchState");
 
-        matches.MapGet("/{matchId}/legal-actions", Results<Ok<ApiResult<IReadOnlyList<LegalActionDto>>>, NotFound> (string matchId, int playerId, PlaceholderGameStore store) =>
-            store.Matches.Any(match => match.Id.Equals(matchId, StringComparison.OrdinalIgnoreCase))
-                ? TypedResults.Ok(Envelope(store.GetLegalActions(matchId, playerId)))
+        matches.MapGet("/{matchId}/legal-actions", async Task<Results<Ok<ApiResult<IReadOnlyList<LegalActionDto>>>, NotFound>> (string matchId, int playerId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetLegalActionsAsync(matchId, playerId, cancellationToken) is { } actions
+                ? TypedResults.Ok(Envelope(actions))
                 : TypedResults.NotFound())
             .WithName("GetLegalActions");
 
-        matches.MapGet("/{matchId}/events", Results<Ok<ApiResult<IReadOnlyList<MatchEventDto>>>, NotFound> (string matchId, PlaceholderGameStore store) =>
-            store.Matches.Any(match => match.Id.Equals(matchId, StringComparison.OrdinalIgnoreCase))
-                ? TypedResults.Ok(Envelope(store.GetMatchEvents(matchId)))
+        matches.MapGet("/{matchId}/events", async Task<Results<Ok<ApiResult<IReadOnlyList<MatchEventDto>>>, NotFound>> (string matchId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetMatchEventsAsync(matchId, cancellationToken) is { } events
+                ? TypedResults.Ok(Envelope(events))
                 : TypedResults.NotFound())
             .WithName("GetMatchEvents");
 
-        matches.MapPost("/{matchId}/actions", Results<Accepted<ApiResult<SubmitActionResponseDto>>, NotFound> (string matchId, SubmitMatchActionRequest request, PlaceholderGameStore store) =>
-            store.Matches.Any(match => match.Id.Equals(matchId, StringComparison.OrdinalIgnoreCase))
-                ? TypedResults.Accepted($"/api/v1/matches/{matchId}/events", Envelope(store.SubmitAction(matchId, request)))
+        matches.MapPost("/{matchId}/actions", async Task<Results<Accepted<ApiResult<SubmitActionResponseDto>>, NotFound>> (string matchId, SubmitMatchActionRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.SubmitActionAsync(matchId, request, cancellationToken) is { } result
+                ? TypedResults.Accepted($"/api/v1/matches/{matchId}/events", Envelope(result))
                 : TypedResults.NotFound())
             .WithName("SubmitMatchAction");
     }
@@ -152,54 +158,48 @@ public static class GameApiV1
         var matchmaking = api.MapGroup("/matchmaking")
             .WithTags("Matchmaking");
 
-        matchmaking.MapGet("/queue", (PlaceholderGameStore store) => Ok(store.Queue))
+        matchmaking.MapGet("/queue", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListQueueAsync(cancellationToken)))
             .WithName("GetMatchmakingQueue");
 
-        matchmaking.MapPost("/queue", (JoinMatchmakingRequest request, PlaceholderGameStore store) =>
-            TypedResults.Accepted("/api/v1/matchmaking/queue", Envelope(store.JoinQueue(request))))
+        matchmaking.MapPost("/queue", JoinQueue)
             .WithName("JoinMatchmakingQueue");
 
-        matchmaking.MapGet("/tickets", (PlaceholderGameStore store) => Ok(store.Queue))
+        matchmaking.MapGet("/tickets", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListQueueAsync(cancellationToken)))
             .WithName("ListMatchmakingTickets");
 
-        matchmaking.MapPost("/tickets", (JoinMatchmakingRequest request, PlaceholderGameStore store) =>
-            TypedResults.Accepted("/api/v1/matchmaking/tickets", Envelope(store.JoinQueue(request))))
+        matchmaking.MapPost("/tickets", JoinQueue)
             .WithName("CreateMatchmakingTicket");
 
-        matchmaking.MapGet("/tickets/{ticketId}", Results<Ok<ApiResult<MatchmakingTicketDto>>, NotFound> (string ticketId, PlaceholderGameStore store) =>
-        {
-            var userId = ticketId.StartsWith("ticket-", StringComparison.OrdinalIgnoreCase)
-                ? ticketId["ticket-".Length..]
-                : ticketId;
-            var entry = store.Queue.FirstOrDefault(candidate => candidate.UserId.Equals(userId, StringComparison.OrdinalIgnoreCase));
-            return entry is null
-                ? TypedResults.NotFound()
-                : TypedResults.Ok(Envelope(new MatchmakingTicketDto(ticketId, entry.UserId, entry.DeckId, "duel-1v1", "queued", entry.JoinedAt, null)));
-        })
-        .WithName("GetMatchmakingTicket");
+        matchmaking.MapGet("/tickets/{ticketId}", async Task<Results<Ok<ApiResult<MatchmakingTicketDto>>, NotFound>> (string ticketId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetTicketAsync(ticketId, cancellationToken) is { } ticket
+                ? TypedResults.Ok(Envelope(ticket))
+                : TypedResults.NotFound())
+            .WithName("GetMatchmakingTicket");
 
-        matchmaking.MapDelete("/tickets/{ticketId}", Results<Ok<ApiResult<MatchmakingTicketDto>>, NotFound> (string ticketId, PlaceholderGameStore store) =>
-        {
-            var userId = ticketId.StartsWith("ticket-", StringComparison.OrdinalIgnoreCase)
-                ? ticketId["ticket-".Length..]
-                : ticketId;
-            var entry = store.Queue.FirstOrDefault(candidate => candidate.UserId.Equals(userId, StringComparison.OrdinalIgnoreCase));
-            if (entry is null)
-            {
-                return TypedResults.NotFound();
-            }
+        matchmaking.MapDelete("/tickets/{ticketId}", async Task<Results<Ok<ApiResult<MatchmakingTicketDto>>, NotFound>> (string ticketId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.CancelTicketAsync(ticketId, cancellationToken) is { } ticket
+                ? TypedResults.Ok(Envelope(ticket))
+                : TypedResults.NotFound())
+            .WithName("CancelMatchmakingTicket");
 
-            store.LeaveQueue(entry.UserId);
-            return TypedResults.Ok(Envelope(new MatchmakingTicketDto(ticketId, entry.UserId, entry.DeckId, "duel-1v1", "cancelled", entry.JoinedAt, null)));
-        })
-        .WithName("CancelMatchmakingTicket");
-
-        matchmaking.MapDelete("/queue/{userId}", NoContent (string userId, PlaceholderGameStore store) =>
+        matchmaking.MapDelete("/queue/{userId}", async (string userId, OnlineGameService store, CancellationToken cancellationToken) =>
         {
-            store.LeaveQueue(userId);
+            await store.LeaveQueueAsync(userId, cancellationToken);
             return TypedResults.NoContent();
         })
         .WithName("LeaveMatchmakingQueue");
+    }
+
+    private static async Task<Results<Accepted<ApiResult<MatchmakingTicketDto>>, BadRequest<ApiResult<ApiErrorPayload>>>> JoinQueue(JoinMatchmakingRequest request, OnlineGameService store, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return TypedResults.Accepted("/api/v1/matchmaking/tickets", Envelope(await store.JoinQueueAsync(request, cancellationToken)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return TypedResults.BadRequest(Envelope(Error("matchmaking.invalid", ex.Message)));
+        }
     }
 
     private static Ok<ApiResult<T>> Ok<T>(T data)
@@ -210,5 +210,10 @@ public static class GameApiV1
     private static ApiResult<T> Envelope<T>(T data)
     {
         return new ApiResult<T>(data);
+    }
+
+    private static ApiErrorPayload Error(string code, string message)
+    {
+        return new ApiErrorPayload(code, message);
     }
 }
