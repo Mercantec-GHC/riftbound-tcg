@@ -1,21 +1,19 @@
 import { HubConnectionBuilder, HubConnectionState, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createApiClient, createDecksApi, createMatchesApi, createMatchmakingApi } from '../../api'
-import type { LegalAction, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../api'
-import type { GameState, SavedDeck, UserProfile } from '../../models'
+import { createDecksApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../api'
+import type { AuthSession, LegalAction, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../api'
+import type { GameState, SavedDeck } from '../../models'
 
 type OnlineBattlePageProps = {
+  apiClient: ApiClient
   decks: SavedDeck[]
-  users: UserProfile[]
-  activeUser: UserProfile
+  session: AuthSession | null
 }
 
-export function OnlineBattlePage({ activeUser, decks, users }: OnlineBattlePageProps) {
-  const api = useMemo(() => createApiClient(), [])
-  const deckApi = useMemo(() => createDecksApi(api), [api])
-  const matchmakingApi = useMemo(() => createMatchmakingApi(api), [api])
-  const matchApi = useMemo(() => createMatchesApi(api), [api])
-  const [userId, setUserId] = useState(activeUser.id)
+export function OnlineBattlePage({ apiClient, decks, session }: OnlineBattlePageProps) {
+  const deckApi = useMemo(() => createDecksApi(apiClient), [apiClient])
+  const matchmakingApi = useMemo(() => createMatchmakingApi(apiClient), [apiClient])
+  const matchApi = useMemo(() => createMatchesApi(apiClient), [apiClient])
   const [deckId, setDeckId] = useState(decks[0]?.id ?? '')
   const [ticket, setTicket] = useState<MatchmakingTicket | null>(null)
   const [match, setMatch] = useState<MatchSnapshot | null>(null)
@@ -27,7 +25,7 @@ export function OnlineBattlePage({ activeUser, decks, users }: OnlineBattlePageP
 
   const selectedDeckId = deckId || decks[0]?.id || ''
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null
-  const playerId = match?.players.find((player) => player.userId === userId)?.playerId ?? 0
+  const playerId = match?.players.find((player) => player.userId === session?.user.id)?.playerId ?? 0
 
   useEffect(() => {
     return () => {
@@ -36,10 +34,11 @@ export function OnlineBattlePage({ activeUser, decks, users }: OnlineBattlePageP
   }, [])
 
   async function ensureConnection() {
+    if (!session) throw new Error('Sign in before connecting to online battles.')
     if (connectionRef.current?.state === HubConnectionState.Connected) return connectionRef.current
 
     const connection = new HubConnectionBuilder()
-      .withUrl('/hubs/matches')
+      .withUrl('/hubs/matches', { accessTokenFactory: () => session.accessToken })
       .withAutomaticReconnect()
       .configureLogging(LogLevel.Warning)
       .build()
@@ -81,17 +80,22 @@ export function OnlineBattlePage({ activeUser, decks, users }: OnlineBattlePageP
   }
 
   async function joinQueue() {
+    if (!session) {
+      setStatus('Sign in before entering online queue.')
+      return
+    }
+
     if (!selectedDeck) {
       setStatus('Choose a deck first.')
       return
     }
 
     setStatus('Uploading deck and joining queue...')
-    const serverDeck = await deckApi.createDeck({ ...selectedDeck, ownerUserId: userId })
+    const serverDeck = await deckApi.createDeck(selectedDeck)
     const connection = await ensureConnection()
-    const nextTicket = await matchmakingApi.joinQueue({ userId, deckId: serverDeck.id, mode: 'duel-1v1' })
+    const nextTicket = await matchmakingApi.joinQueue({ deckId: serverDeck.id, mode: 'duel-1v1' })
     setTicket(nextTicket)
-    await connection.invoke('SubscribeTicket', nextTicket.id, userId)
+    await connection.invoke('SubscribeTicket', nextTicket.id)
     if (nextTicket.matchId) {
       await loadMatch(connection, nextTicket.matchId)
     } else {
@@ -104,8 +108,8 @@ export function OnlineBattlePage({ activeUser, decks, users }: OnlineBattlePageP
     setMatch(nextMatch)
     setState(nextMatch.state)
     setEvents(await matchApi.listEvents(matchId))
-    await connection.invoke('JoinMatch', matchId, userId)
-    const seat = nextMatch.players.find((player) => player.userId === userId)
+    await connection.invoke('JoinMatch', matchId)
+    const seat = nextMatch.players.find((player) => player.userId === session?.user.id)
     if (seat) {
       const actions = await matchApi.listLegalActions(matchId, seat.playerId)
       setLegalActions(actions)
@@ -134,19 +138,17 @@ export function OnlineBattlePage({ activeUser, decks, users }: OnlineBattlePageP
           <h2>Matchmaking</h2>
           <p>{status}</p>
         </div>
-        <label>
-          User
-          <select value={userId} onChange={(event) => setUserId(event.target.value)}>
-            {users.map((user) => <option key={user.id} value={user.id}>{user.displayName}</option>)}
-          </select>
-        </label>
+        <div className="online-account">
+          <span>Account</span>
+          <strong>{session?.user.displayName ?? 'Not signed in'}</strong>
+        </div>
         <label>
           Deck
           <select value={selectedDeckId} onChange={(event) => setDeckId(event.target.value)}>
             {decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.name}</option>)}
           </select>
         </label>
-        <button type="button" onClick={() => void joinQueue()}>Enter queue</button>
+        <button type="button" onClick={() => void joinQueue()} disabled={!session}>Enter queue</button>
       </div>
 
       {ticket && (

@@ -29,13 +29,14 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
     public async Task EnsureCreatedAsync(CancellationToken cancellationToken)
     {
         await db.Database.EnsureCreatedAsync(cancellationToken);
+        await MigrateSchemaAsync(cancellationToken);
 
         if (!await db.Users.AnyAsync(cancellationToken))
         {
             var now = DateTimeOffset.UtcNow;
             db.Users.AddRange(
-                new UserEntity { Id = "user-demo-001", DisplayName = "Demo Player One", CreatedAt = now },
-                new UserEntity { Id = "user-demo-002", DisplayName = "Demo Player Two", CreatedAt = now });
+                new UserEntity { Id = "user-demo-001", Email = "demo1@riftbound.local", NormalizedEmail = "DEMO1@RIFTBOUND.LOCAL", DisplayName = "Demo Player One", PasswordHash = string.Empty, CreatedAt = now, UpdatedAt = now },
+                new UserEntity { Id = "user-demo-002", Email = "demo2@riftbound.local", NormalizedEmail = "DEMO2@RIFTBOUND.LOCAL", DisplayName = "Demo Player Two", PasswordHash = string.Empty, CreatedAt = now, UpdatedAt = now });
             await db.SaveChangesAsync(cancellationToken);
         }
     }
@@ -45,7 +46,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         await EnsureCreatedAsync(cancellationToken);
         return await db.Users
             .OrderBy(user => user.DisplayName)
-            .Select(user => new UserDto(user.Id, user.DisplayName))
+            .Select(user => AuthService.ToDto(user))
             .ToArrayAsync(cancellationToken);
     }
 
@@ -54,22 +55,27 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         await EnsureCreatedAsync(cancellationToken);
         return await db.Users
             .Where(user => user.Id == userId)
-            .Select(user => new UserDto(user.Id, user.DisplayName))
+            .Select(user => AuthService.ToDto(user))
             .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<UserDto> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
+        var email = $"{Guid.NewGuid():N}@legacy.riftbound.local";
         var user = new UserEntity
         {
             Id = $"user-{Guid.NewGuid():N}",
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
             DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? "Online Player" : request.DisplayName.Trim(),
-            CreatedAt = DateTimeOffset.UtcNow
+            PasswordHash = string.Empty,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
         };
         db.Users.Add(user);
         await db.SaveChangesAsync(cancellationToken);
-        return new UserDto(user.Id, user.DisplayName);
+        return AuthService.ToDto(user);
     }
 
     public async Task<UserDto?> UpdateUserAsync(string userId, UpdateUserRequest request, CancellationToken cancellationToken)
@@ -84,40 +90,52 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         if (!string.IsNullOrWhiteSpace(request.DisplayName))
         {
             user.DisplayName = request.DisplayName.Trim();
+            user.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        return new UserDto(user.Id, user.DisplayName);
+        return AuthService.ToDto(user);
     }
 
-    public async Task<IReadOnlyList<DeckDto>> ListDecksAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DeckDto>> ListDecksAsync(string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
-        return (await db.Decks.OrderBy(deck => deck.Name).ToArrayAsync(cancellationToken)).Select(ToDto).ToArray();
+        return (await db.Decks
+            .Where(deck => deck.DeletedAt == null && deck.OwnerUserId == userId)
+            .OrderBy(deck => deck.Name)
+            .ToArrayAsync(cancellationToken)).Select(ToDto).ToArray();
     }
 
-    public async Task<DeckDto?> GetDeckAsync(string deckId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DeckDto>> ListPublicDecksAsync(CancellationToken cancellationToken)
+    {
+        await EnsureCreatedAsync(cancellationToken);
+        return (await db.Decks
+            .Where(deck => deck.DeletedAt == null && deck.Visibility == "public")
+            .OrderBy(deck => deck.Name)
+            .ToArrayAsync(cancellationToken)).Select(ToDto).ToArray();
+    }
+
+    public async Task<DeckDto?> GetDeckAsync(string deckId, string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         var deck = await db.Decks.FindAsync([deckId], cancellationToken);
-        return deck is null ? null : ToDto(deck);
+        return deck is null || deck.DeletedAt is not null || (deck.OwnerUserId != userId && deck.Visibility != "public") ? null : ToDto(deck);
     }
 
-    public async Task<DeckDto> CreateDeckAsync(CreateDeckRequest request, CancellationToken cancellationToken)
+    public async Task<DeckDto> CreateDeckAsync(string userId, CreateDeckRequest request, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
-        if (!await db.Users.AnyAsync(user => user.Id == request.OwnerUserId, cancellationToken))
-        {
-            db.Users.Add(new UserEntity { Id = request.OwnerUserId, DisplayName = request.OwnerUserId, CreatedAt = DateTimeOffset.UtcNow });
-        }
+        ValidateDeck(request.LegendId, request.ChampionId, request.BattlefieldDeckIds, request.RuneDeckIds, request.MainDeckIds);
 
         var now = DateTimeOffset.UtcNow;
         var deck = new DeckEntity
         {
             Id = string.IsNullOrWhiteSpace(request.Name) ? $"deck-{Guid.NewGuid():N}" : $"deck-{Guid.NewGuid():N}",
-            OwnerUserId = request.OwnerUserId,
+            OwnerUserId = userId,
             Name = string.IsNullOrWhiteSpace(request.Name) ? "Online deck" : request.Name.Trim(),
             Visibility = request.Visibility == "public" ? "public" : "private",
+            Description = request.Description,
+            TagsJson = Serialize(request.Tags ?? []),
             LegendId = request.LegendId,
             ChampionId = request.ChampionId,
             BattlefieldDeckIdsJson = Serialize(request.BattlefieldDeckIds),
@@ -131,17 +149,26 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return ToDto(deck);
     }
 
-    public async Task<DeckDto?> UpdateDeckAsync(string deckId, UpdateDeckRequest request, CancellationToken cancellationToken)
+    public async Task<DeckDto?> UpdateDeckAsync(string deckId, string userId, UpdateDeckRequest request, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         var deck = await db.Decks.FindAsync([deckId], cancellationToken);
-        if (deck is null)
+        if (deck is null || deck.DeletedAt is not null || deck.OwnerUserId != userId)
         {
             return null;
         }
 
+        ValidateDeck(
+            request.LegendId ?? deck.LegendId,
+            request.ChampionId ?? deck.ChampionId,
+            request.BattlefieldDeckIds ?? Deserialize(deck.BattlefieldDeckIdsJson),
+            request.RuneDeckIds ?? Deserialize(deck.RuneDeckIdsJson),
+            request.MainDeckIds ?? Deserialize(deck.MainDeckIdsJson));
+
         deck.Name = request.Name ?? deck.Name;
         deck.Visibility = request.Visibility ?? deck.Visibility;
+        deck.Description = request.Description ?? deck.Description;
+        deck.TagsJson = request.Tags is null ? deck.TagsJson : Serialize(request.Tags);
         deck.LegendId = request.LegendId ?? deck.LegendId;
         deck.ChampionId = request.ChampionId ?? deck.ChampionId;
         deck.BattlefieldDeckIdsJson = request.BattlefieldDeckIds is null ? deck.BattlefieldDeckIdsJson : Serialize(request.BattlefieldDeckIds);
@@ -152,11 +179,19 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return ToDto(deck);
     }
 
-    public async Task<bool> DeleteDeckAsync(string deckId, CancellationToken cancellationToken)
+    public async Task<bool> DeleteDeckAsync(string deckId, string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
-        var count = await db.Decks.Where(deck => deck.Id == deckId).ExecuteDeleteAsync(cancellationToken);
-        return count > 0;
+        var deck = await db.Decks.FindAsync([deckId], cancellationToken);
+        if (deck is null || deck.OwnerUserId != userId || deck.DeletedAt is not null)
+        {
+            return false;
+        }
+
+        deck.DeletedAt = DateTimeOffset.UtcNow;
+        deck.UpdatedAt = deck.DeletedAt.Value;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     public async Task<IReadOnlyList<MatchSummaryDto>> ListMatchesAsync(CancellationToken cancellationToken)
@@ -181,7 +216,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return ToSnapshot(match, players, snapshot?.StateJson ?? "{}", snapshot?.SequenceNumber ?? match.SequenceNumber);
     }
 
-    public async Task<MatchSnapshotDto> CreateMatchAsync(CreateMatchRequest request, CancellationToken cancellationToken)
+    public async Task<MatchSnapshotDto> CreateMatchAsync(string userId, CreateMatchRequest request, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         if (request.Mode != "duel-1v1" || request.Players.Count != 2)
@@ -194,6 +229,10 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         {
             var deck = await db.Decks.FindAsync([player.DeckId], cancellationToken)
                 ?? throw new InvalidOperationException($"Deck '{player.DeckId}' was not found.");
+            if (deck.OwnerUserId != player.UserId || (player.UserId == userId && deck.OwnerUserId != userId))
+            {
+                throw new InvalidOperationException($"Deck '{player.DeckId}' is not owned by its seated player.");
+            }
             decks.Add(deck);
         }
 
@@ -230,7 +269,10 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
 
         var engineState = await LoadEngineStateAsync(matchId, cancellationToken) ?? throw new InvalidOperationException("Match snapshot is missing.");
         var result = rulesEngine.ApplyAction(engineState, new EngineGameAction(request.PlayerId, request.Type, request.Payload), request.ExpectedSequenceNumber);
-        var nextSequence = result.Accepted ? result.State.SequenceNumber : match.SequenceNumber + 1;
+        var lastEventSequence = await db.MatchEvents
+            .Where(matchEvent => matchEvent.MatchId == matchId)
+            .MaxAsync(matchEvent => (int?)matchEvent.SequenceNumber, cancellationToken) ?? match.SequenceNumber;
+        var nextSequence = result.Accepted ? Math.Max(result.State.SequenceNumber, lastEventSequence + 1) : lastEventSequence + 1;
         var now = DateTimeOffset.UtcNow;
         var actionPayload = Serialize(request.Payload ?? new Dictionary<string, object?>());
         var resultPayload = Serialize(new { result.ResultMessage, result.Status });
@@ -257,11 +299,15 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             match.CompletedAt = result.State.Stage == "game-over" ? now : match.CompletedAt;
             match.WinnerPlayerId = result.State.State["winner"]?.GetValue<int?>();
             match.WinningTeamId = result.State.State["winningTeamId"]?.GetValue<int?>();
+            if (match.CompletedAt == now)
+            {
+                await UpdateCompletedMatchStatsAsync(matchId, match.WinnerPlayerId, cancellationToken);
+            }
             db.MatchSnapshots.Add(new MatchSnapshotEntity
             {
                 Id = $"snapshot-{Guid.NewGuid():N}",
                 MatchId = matchId,
-                SequenceNumber = result.State.SequenceNumber,
+                SequenceNumber = match.SequenceNumber,
                 StateJson = result.State.State.ToJsonString(JsonOptions),
                 CreatedAt = now
             });
@@ -271,7 +317,32 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return new SubmitActionResponseDto(result.Accepted, ToDto(entity), result.State.State, result.LegalActions.Select(ToDto).ToArray());
     }
 
-    public async Task<MatchmakingTicketDto> JoinQueueAsync(JoinMatchmakingRequest request, CancellationToken cancellationToken)
+    private async Task UpdateCompletedMatchStatsAsync(string matchId, int? winnerPlayerId, CancellationToken cancellationToken)
+    {
+        var players = await db.MatchPlayers.Where(player => player.MatchId == matchId).ToArrayAsync(cancellationToken);
+        foreach (var player in players)
+        {
+            var user = await db.Users.FindAsync([player.UserId], cancellationToken);
+            if (user is null)
+            {
+                continue;
+            }
+
+            user.GamesPlayed += 1;
+            if (winnerPlayerId is not null && player.PlayerId == winnerPlayerId)
+            {
+                user.Wins += 1;
+            }
+            else if (winnerPlayerId is not null)
+            {
+                user.Losses += 1;
+            }
+            user.LastPlayedAt = DateTimeOffset.UtcNow;
+            user.UpdatedAt = user.LastPlayedAt.Value;
+        }
+    }
+
+    public async Task<MatchmakingTicketDto> JoinQueueAsync(string userId, JoinMatchmakingRequest request, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         if (request.Mode != "duel-1v1")
@@ -279,19 +350,19 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             throw new InvalidOperationException("Only duel-1v1 matchmaking is supported.");
         }
 
-        if (!await db.Decks.AnyAsync(deck => deck.Id == request.DeckId, cancellationToken))
+        if (!await db.Decks.AnyAsync(deck => deck.Id == request.DeckId && deck.OwnerUserId == userId && deck.DeletedAt == null, cancellationToken))
         {
-            throw new InvalidOperationException($"Deck '{request.DeckId}' was not found.");
+            throw new InvalidOperationException($"Deck '{request.DeckId}' was not found for the current user.");
         }
 
         var now = DateTimeOffset.UtcNow;
-        var ticket = await db.MatchmakingTickets.FirstOrDefaultAsync(candidate => candidate.UserId == request.UserId && candidate.Mode == request.Mode && candidate.Status == "queued", cancellationToken);
+        var ticket = await db.MatchmakingTickets.FirstOrDefaultAsync(candidate => candidate.UserId == userId && candidate.Mode == request.Mode && candidate.Status == "queued", cancellationToken);
         if (ticket is null)
         {
             ticket = new MatchmakingTicketEntity
             {
                 Id = $"ticket-{Guid.NewGuid():N}",
-                UserId = request.UserId,
+                UserId = userId,
                 DeckId = request.DeckId,
                 Mode = request.Mode,
                 Status = "queued",
@@ -321,18 +392,18 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             .ToArrayAsync(cancellationToken);
     }
 
-    public async Task<MatchmakingTicketDto?> GetTicketAsync(string ticketId, CancellationToken cancellationToken)
+    public async Task<MatchmakingTicketDto?> GetTicketAsync(string ticketId, string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         var ticket = await db.MatchmakingTickets.FindAsync([ticketId], cancellationToken);
-        return ticket is null ? null : ToDto(ticket);
+        return ticket is null || ticket.UserId != userId ? null : ToDto(ticket);
     }
 
-    public async Task<MatchmakingTicketDto?> CancelTicketAsync(string ticketId, CancellationToken cancellationToken)
+    public async Task<MatchmakingTicketDto?> CancelTicketAsync(string ticketId, string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         var ticket = await db.MatchmakingTickets.FindAsync([ticketId], cancellationToken);
-        if (ticket is null)
+        if (ticket is null || ticket.UserId != userId)
         {
             return null;
         }
@@ -351,10 +422,25 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             .ExecuteUpdateAsync(updates => updates.SetProperty(ticket => ticket.Status, "cancelled"), cancellationToken);
     }
 
+    public async Task<IReadOnlyList<MatchSummaryDto>> ListMatchesForUserAsync(string userId, CancellationToken cancellationToken)
+    {
+        await EnsureCreatedAsync(cancellationToken);
+        var matchIds = await db.MatchPlayers.Where(player => player.UserId == userId).Select(player => player.MatchId).ToArrayAsync(cancellationToken);
+        var matches = await db.Matches.Where(match => matchIds.Contains(match.Id)).OrderByDescending(match => match.CreatedAt).ToArrayAsync(cancellationToken);
+        var players = await db.MatchPlayers.Where(player => matchIds.Contains(player.MatchId)).ToArrayAsync(cancellationToken);
+        return matches.Select(match => ToSummary(match, players.Where(player => player.MatchId == match.Id))).ToArray();
+    }
+
     public async Task<bool> IsUserSeatedAsync(string matchId, string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         return await db.MatchPlayers.AnyAsync(player => player.MatchId == matchId && player.UserId == userId, cancellationToken);
+    }
+
+    public async Task<bool> UserOwnsPlayerSeatAsync(string matchId, string userId, int playerId, CancellationToken cancellationToken)
+    {
+        await EnsureCreatedAsync(cancellationToken);
+        return await db.MatchPlayers.AnyAsync(player => player.MatchId == matchId && player.UserId == userId && player.PlayerId == playerId, cancellationToken);
     }
 
     private async Task TryPairTicketAsync(MatchmakingTicketEntity ticket, CancellationToken cancellationToken)
@@ -480,7 +566,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
 
     private static DeckDto ToDto(DeckEntity deck)
     {
-        return new DeckDto(deck.Id, deck.Name, deck.OwnerUserId, deck.Visibility, deck.LegendId, deck.ChampionId, Deserialize(deck.BattlefieldDeckIdsJson), Deserialize(deck.RuneDeckIdsJson), Deserialize(deck.MainDeckIdsJson));
+        return new DeckDto(deck.Id, deck.Name, deck.OwnerUserId, deck.Visibility, deck.Description, Deserialize(deck.TagsJson), deck.LegendId, deck.ChampionId, Deserialize(deck.BattlefieldDeckIdsJson), Deserialize(deck.RuneDeckIdsJson), Deserialize(deck.MainDeckIdsJson), deck.CreatedAt, deck.UpdatedAt);
     }
 
     private static MatchSummaryDto ToSummary(MatchEntity match, IEnumerable<MatchPlayerEntity> players)
@@ -519,6 +605,69 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
     private static MatchmakingTicketDto ToDto(MatchmakingTicketEntity ticket)
     {
         return new MatchmakingTicketDto(ticket.Id, ticket.UserId, ticket.DeckId, ticket.Mode, ticket.Status, ticket.CreatedAt, ticket.MatchId);
+    }
+
+    private async Task MigrateSchemaAsync(CancellationToken cancellationToken)
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "Email" text NOT NULL DEFAULT '';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "NormalizedEmail" text NOT NULL DEFAULT '';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "PasswordHash" text NOT NULL DEFAULT '';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamptz NOT NULL DEFAULT now();
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "LastLoginAt" timestamptz NULL;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "GamesPlayed" integer NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "Wins" integer NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "Losses" integer NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "PointsScored" integer NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "LastPlayedAt" timestamptz NULL;
+            UPDATE users SET "Email" = lower("Id") || '@legacy.riftbound.local' WHERE "Email" = '';
+            UPDATE users SET "NormalizedEmail" = upper("Email") WHERE "NormalizedEmail" = '';
+
+            ALTER TABLE decks ADD COLUMN IF NOT EXISTS "Description" text NULL;
+            ALTER TABLE decks ADD COLUMN IF NOT EXISTS "TagsJson" jsonb NOT NULL DEFAULT '[]'::jsonb;
+            ALTER TABLE decks ADD COLUMN IF NOT EXISTS "DeletedAt" timestamptz NULL;
+
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                "Id" text PRIMARY KEY,
+                "UserId" text NOT NULL,
+                "TokenHash" text NOT NULL,
+                "ExpiresAt" timestamptz NOT NULL,
+                "RevokedAt" timestamptz NULL,
+                "CreatedAt" timestamptz NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_users_NormalizedEmail" ON users("NormalizedEmail");
+            CREATE INDEX IF NOT EXISTS "IX_refresh_tokens_UserId" ON refresh_tokens("UserId");
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_refresh_tokens_TokenHash" ON refresh_tokens("TokenHash");
+            CREATE INDEX IF NOT EXISTS "IX_decks_DeletedAt" ON decks("DeletedAt");
+            """, cancellationToken);
+    }
+
+    private static void ValidateDeck(string legendId, string championId, IReadOnlyList<string> battlefieldDeckIds, IReadOnlyList<string> runeDeckIds, IReadOnlyList<string> mainDeckIds)
+    {
+        if (string.IsNullOrWhiteSpace(legendId))
+        {
+            throw new InvalidOperationException("Deck must include a legend.");
+        }
+
+        if (string.IsNullOrWhiteSpace(championId))
+        {
+            throw new InvalidOperationException("Deck must include a champion.");
+        }
+
+        if (battlefieldDeckIds.Count is < 1 or > 3 || battlefieldDeckIds.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException("Battlefield deck must contain 1 to 3 battlefield card ids.");
+        }
+
+        if (runeDeckIds.Count < 1 || runeDeckIds.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException("Rune deck must contain at least one rune card id.");
+        }
+
+        if (mainDeckIds.Count > 40 || mainDeckIds.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException("Main deck must contain at most 40 card ids.");
+        }
     }
 
     private static string Serialize<T>(T value)

@@ -2,8 +2,13 @@ using RiftboundTcg.Server.Api;
 using RiftboundTcg.Server.Api.Data;
 using RiftboundTcg.Server.Api.Realtime;
 using RiftboundTcg.Server.Api.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using riftbound_tcg.Engine.RulesEngine;
+using System.Security.Cryptography;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,7 +37,51 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddDbContext<GameDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("riftbound")));
+var authSigningKey = builder.Configuration["Auth:SigningKey"];
+if (string.IsNullOrWhiteSpace(authSigningKey))
+{
+    authSigningKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48));
+}
+
+builder.Services.Configure<AuthSettings>(settings =>
+{
+    settings.Issuer = builder.Configuration["Auth:Issuer"] ?? "riftbound-tcg";
+    settings.Audience = builder.Configuration["Auth:Audience"] ?? "riftbound-tcg";
+    settings.SigningKey = authSigningKey;
+    settings.AccessTokenMinutes = int.TryParse(builder.Configuration["Auth:AccessTokenMinutes"], out var accessMinutes) ? accessMinutes : 60;
+    settings.RefreshTokenDays = int.TryParse(builder.Configuration["Auth:RefreshTokenDays"], out var refreshDays) ? refreshDays : 14;
+});
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Auth:Issuer"] ?? "riftbound-tcg",
+            ValidAudience = builder.Configuration["Auth:Audience"] ?? "riftbound-tcg",
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authSigningKey))
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrWhiteSpace(accessToken) && context.HttpContext.Request.Path.StartsWithSegments("/hubs/matches"))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+    });
+builder.Services.AddAuthorization();
 builder.Services.AddSignalR();
+builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<PasswordHasher<UserEntity>>();
 builder.Services.AddScoped<OnlineGameService>();
 builder.Services.AddSingleton<IRulesEngine, DefaultRulesEngine>();
 
@@ -44,6 +93,8 @@ var app = builder.Build();
 // Configure the HTTP request pipeline.
 app.UseExceptionHandler();
 app.UseCors("Frontend");
+app.UseAuthentication();
+app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())
 {

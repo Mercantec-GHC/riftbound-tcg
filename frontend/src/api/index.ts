@@ -1,6 +1,7 @@
 export { ApiError, createApiClient, queryString, unwrapData } from './http'
 export type { ApiClient, ApiClientOptions } from './http'
 export { createCardsApi } from './cards'
+export { createAuthApi } from './auth'
 export { createDecksApi } from './decks'
 export { createMatchmakingApi } from './matchmaking'
 export { createMatchesApi } from './matches'
@@ -14,10 +15,12 @@ export type {
   ApiResult,
   ApiSharedDeck,
   ApiUserProfile,
+  AuthSession,
   CardListQuery,
   CreateDeckRequest,
   CreateMatchRequest,
   CreateUserRequest,
+  LoginRequest,
   DeckListQuery,
   IsoDateTime,
   JoinMatchmakingRequest,
@@ -31,6 +34,7 @@ export type {
   MatchSummary,
   MatchmakingTicket,
   MatchmakingTicketStatus,
+  RegisterRequest,
   SubmitActionRequest,
   SubmitActionResponse,
   UpdateDeckRequest,

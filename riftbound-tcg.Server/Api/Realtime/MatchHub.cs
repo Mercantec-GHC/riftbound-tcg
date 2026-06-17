@@ -1,13 +1,22 @@
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.Authorization;
 using RiftboundTcg.Server.Api.Models;
 using RiftboundTcg.Server.Api.Services;
 
 namespace RiftboundTcg.Server.Api.Realtime;
 
+[Authorize]
 public sealed class MatchHub(OnlineGameService gameService) : Hub
 {
-    public async Task JoinMatch(string matchId, string userId)
+    public async Task JoinMatch(string matchId)
     {
+        var userId = AuthService.GetUserId(Context.User!);
+        if (userId is null)
+        {
+            await Clients.Caller.SendAsync("error", new ApiErrorPayload("auth.required", "Authentication is required."), Context.ConnectionAborted);
+            return;
+        }
+
         if (!await gameService.IsUserSeatedAsync(matchId, userId, Context.ConnectionAborted))
         {
             await Clients.Caller.SendAsync("error", new ApiErrorPayload("match.forbidden", "User is not seated in this match."), Context.ConnectionAborted);
@@ -30,6 +39,13 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
 
     public async Task SubmitAction(string matchId, SubmitMatchActionRequest action)
     {
+        var userId = AuthService.GetUserId(Context.User!);
+        if (userId is null || !await gameService.UserOwnsPlayerSeatAsync(matchId, userId, action.PlayerId, Context.ConnectionAborted))
+        {
+            await Clients.Caller.SendAsync("match.actionRejected", matchId, action.PlayerId, new ApiErrorPayload("match.forbidden", "Authenticated user does not own that player seat."), Context.ConnectionAborted);
+            return;
+        }
+
         var result = await gameService.SubmitActionAsync(matchId, action, Context.ConnectionAborted);
         if (result is null)
         {
@@ -55,6 +71,13 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
 
     public async Task RequestLegalActions(string matchId, int playerId)
     {
+        var userId = AuthService.GetUserId(Context.User!);
+        if (userId is null || !await gameService.UserOwnsPlayerSeatAsync(matchId, userId, playerId, Context.ConnectionAborted))
+        {
+            await Clients.Caller.SendAsync("error", new ApiErrorPayload("match.forbidden", "Authenticated user does not own that player seat."), Context.ConnectionAborted);
+            return;
+        }
+
         var actions = await gameService.GetLegalActionsAsync(matchId, playerId, Context.ConnectionAborted);
         if (actions is null)
         {
@@ -65,10 +88,17 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
         await Clients.Caller.SendAsync("match.legalActions", matchId, playerId, actions, Context.ConnectionAborted);
     }
 
-    public async Task SubscribeTicket(string ticketId, string userId)
+    public async Task SubscribeTicket(string ticketId)
     {
-        var ticket = await gameService.GetTicketAsync(ticketId, Context.ConnectionAborted);
-        if (ticket is null || !ticket.UserId.Equals(userId, StringComparison.OrdinalIgnoreCase))
+        var userId = AuthService.GetUserId(Context.User!);
+        if (userId is null)
+        {
+            await Clients.Caller.SendAsync("error", new ApiErrorPayload("auth.required", "Authentication is required."), Context.ConnectionAborted);
+            return;
+        }
+
+        var ticket = await gameService.GetTicketAsync(ticketId, userId, Context.ConnectionAborted);
+        if (ticket is null)
         {
             await Clients.Caller.SendAsync("error", new ApiErrorPayload("ticket.forbidden", "Ticket was not found for this user."), Context.ConnectionAborted);
             return;

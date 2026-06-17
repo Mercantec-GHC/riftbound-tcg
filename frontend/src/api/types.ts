@@ -35,8 +35,33 @@ export type DeckListQuery = ListQuery & {
   visibility?: SavedDeck['visibility']
 }
 
-export type CreateDeckRequest = Omit<SavedDeck, 'id'>
+export type CreateDeckRequest = Omit<SavedDeck, 'id' | 'ownerUserId'> & {
+  description?: string | null
+  tags?: string[]
+}
 export type UpdateDeckRequest = Partial<CreateDeckRequest>
+
+export type ApiUserProfile = UserProfile & {
+  email: string
+}
+
+export type RegisterRequest = {
+  email: string
+  displayName: string
+  password: string
+}
+
+export type LoginRequest = {
+  email: string
+  password: string
+}
+
+export type AuthSession = {
+  accessToken: string
+  refreshToken: string
+  expiresAt: IsoDateTime
+  user: ApiUserProfile
+}
 
 export type CreateUserRequest = {
   displayName: string
@@ -140,12 +165,15 @@ export type MatchmakingTicket = {
 }
 
 export type JoinMatchmakingRequest = {
-  userId: ApiId
   deckId: ApiId
   mode: GameMode
 }
 
 export type ApiCard = Card
-export type ApiDeck = SavedDeck
+export type ApiDeck = SavedDeck & {
+  description?: string | null
+  tags?: string[]
+  createdAt?: IsoDateTime
+  updatedAt?: IsoDateTime
+}
 export type ApiSharedDeck = SharedDeck
-export type ApiUserProfile = UserProfile

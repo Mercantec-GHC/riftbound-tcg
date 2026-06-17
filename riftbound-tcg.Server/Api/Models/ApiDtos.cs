@@ -38,16 +38,21 @@ public sealed record DeckDto(
     string Name,
     string OwnerUserId,
     string Visibility,
+    string? Description,
+    IReadOnlyList<string> Tags,
     string LegendId,
     string ChampionId,
     IReadOnlyList<string> BattlefieldDeckIds,
     IReadOnlyList<string> RuneDeckIds,
-    IReadOnlyList<string> MainDeckIds);
+    IReadOnlyList<string> MainDeckIds,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
 
 public sealed record CreateDeckRequest(
-    string OwnerUserId,
     string Name,
     string? Visibility,
+    string? Description,
+    IReadOnlyList<string>? Tags,
     string LegendId,
     string ChampionId,
     IReadOnlyList<string> BattlefieldDeckIds,
@@ -57,6 +62,8 @@ public sealed record CreateDeckRequest(
 public sealed record UpdateDeckRequest(
     string? Name,
     string? Visibility,
+    string? Description,
+    IReadOnlyList<string>? Tags,
     string? LegendId,
     string? ChampionId,
     IReadOnlyList<string>? BattlefieldDeckIds,
@@ -65,13 +72,44 @@ public sealed record UpdateDeckRequest(
 
 public sealed record UserDto(
     string Id,
-    string DisplayName);
+    string Email,
+    string DisplayName,
+    DateTimeOffset CreatedAt,
+    UserStatsDto Stats);
+
+public sealed record UserStatsDto(
+    int GamesPlayed,
+    int Wins,
+    int Losses,
+    int PointsScored,
+    DateTimeOffset? LastPlayedAt);
 
 public sealed record CreateUserRequest(
     string DisplayName);
 
 public sealed record UpdateUserRequest(
     string? DisplayName);
+
+public sealed record RegisterRequest(
+    string Email,
+    string DisplayName,
+    string Password);
+
+public sealed record LoginRequest(
+    string Email,
+    string Password);
+
+public sealed record RefreshTokenRequest(
+    string RefreshToken);
+
+public sealed record LogoutRequest(
+    string RefreshToken);
+
+public sealed record AuthSessionDto(
+    string AccessToken,
+    string RefreshToken,
+    DateTimeOffset ExpiresAt,
+    UserDto User);
 
 public sealed record MatchPlayerDto(
     int PlayerId,
@@ -171,6 +209,5 @@ public sealed record MatchmakingTicketDto(
     string? MatchId);
 
 public sealed record JoinMatchmakingRequest(
-    string UserId,
     string DeckId,
     string Mode);

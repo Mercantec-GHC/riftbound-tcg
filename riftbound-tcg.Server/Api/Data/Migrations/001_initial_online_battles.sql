@@ -1,24 +1,52 @@
 CREATE TABLE IF NOT EXISTS users (
     "Id" text PRIMARY KEY,
+    "Email" text NOT NULL,
+    "NormalizedEmail" text NOT NULL,
     "DisplayName" text NOT NULL,
+    "PasswordHash" text NOT NULL,
+    "CreatedAt" timestamptz NOT NULL,
+    "UpdatedAt" timestamptz NOT NULL,
+    "LastLoginAt" timestamptz NULL,
+    "GamesPlayed" integer NOT NULL DEFAULT 0,
+    "Wins" integer NOT NULL DEFAULT 0,
+    "Losses" integer NOT NULL DEFAULT 0,
+    "PointsScored" integer NOT NULL DEFAULT 0,
+    "LastPlayedAt" timestamptz NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_users_NormalizedEmail" ON users("NormalizedEmail");
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    "Id" text PRIMARY KEY,
+    "UserId" text NOT NULL,
+    "TokenHash" text NOT NULL,
+    "ExpiresAt" timestamptz NOT NULL,
+    "RevokedAt" timestamptz NULL,
     "CreatedAt" timestamptz NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS "IX_refresh_tokens_UserId" ON refresh_tokens("UserId");
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_refresh_tokens_TokenHash" ON refresh_tokens("TokenHash");
 
 CREATE TABLE IF NOT EXISTS decks (
     "Id" text PRIMARY KEY,
     "OwnerUserId" text NOT NULL,
     "Name" text NOT NULL,
     "Visibility" text NOT NULL,
+    "Description" text NULL,
+    "TagsJson" jsonb NOT NULL DEFAULT '[]'::jsonb,
     "LegendId" text NOT NULL,
     "ChampionId" text NOT NULL,
     "BattlefieldDeckIdsJson" jsonb NOT NULL,
     "RuneDeckIdsJson" jsonb NOT NULL,
     "MainDeckIdsJson" jsonb NOT NULL,
     "CreatedAt" timestamptz NOT NULL,
-    "UpdatedAt" timestamptz NOT NULL
+    "UpdatedAt" timestamptz NOT NULL,
+    "DeletedAt" timestamptz NULL
 );
 
 CREATE INDEX IF NOT EXISTS "IX_decks_OwnerUserId" ON decks("OwnerUserId");
+CREATE INDEX IF NOT EXISTS "IX_decks_DeletedAt" ON decks("DeletedAt");
 
 CREATE TABLE IF NOT EXISTS matches (
     "Id" text PRIMARY KEY,

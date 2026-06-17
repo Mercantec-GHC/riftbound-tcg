@@ -19,6 +19,8 @@ import { GamePage } from './features/game/GamePage'
 import { useGameController } from './features/game/useGameController'
 import { HomePage } from './features/home/HomePage'
 import { OnlineBattlePage } from './features/online/OnlineBattlePage'
+import { AuthPanel } from './features/auth/AuthPanel'
+import { useAuthSession } from './features/auth/useAuthSession'
 import {
   localDecksEndpoint,
   type Card,
@@ -40,6 +42,7 @@ function App() {
   const [previewCard, setPreviewCard] = useState<Card | null>(null)
 
   const users = useUserProfiles()
+  const auth = useAuthSession()
   const cardLibrary = useCardLibrary()
   const battlefieldOptions = useMemo(() => battlefieldOptionsFromCards(cardLibrary.cardLibrary), [cardLibrary.cardLibrary])
   const deckBuilder = useDeckBuilder({
@@ -94,6 +97,13 @@ function App() {
             onCreateProfile={users.createProfile}
             onSetActiveUser={users.setActiveUserId}
           />
+          <AuthPanel
+            session={auth.session}
+            status={auth.status}
+            onLogin={auth.login}
+            onLogout={auth.logout}
+            onRegister={auth.register}
+          />
         </header>
 
       {page === 'home' && (
@@ -126,9 +136,9 @@ function App() {
 
       {page === 'online' && (
         <OnlineBattlePage
-          activeUser={users.activeUser}
+          apiClient={auth.apiClient}
+          session={auth.session}
           decks={deckBuilder.accessibleDecks}
-          users={users.profiles}
         />
       )}
 
