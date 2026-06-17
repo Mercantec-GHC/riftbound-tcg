@@ -1,33 +1,30 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import { createDecksApi } from './api'
 import { AppNav } from './app/AppNav'
-import { battlefieldOptionsFromCards } from './cardUtils'
 import { CardHoverPreviewProvider } from './components/cardHoverPreview'
-import {
-  filterSharedDecks,
-  isSharedDeck,
-  normalizeSharedDeck,
-} from './domain/decks/deckRules'
+import { filterSharedDecks } from './domain/decks/deckRules'
 import { CardViewerPage } from './features/cards/CardViewerPage'
 import { useCardLibrary } from './features/cards/useCardLibrary'
+import { AccountPage } from './features/account/AccountPage'
 import { DeckListPage } from './features/deck-list/DeckListPage'
 import { DeckForm } from './features/decks/DeckForm'
 import { SavedDecksPanel } from './features/decks/SavedDecksPanel'
 import { SelectedDeckList } from './features/decks/SelectedDeckList'
 import { CardPreviewModal } from './features/game/CardPreviewModal'
-import { GamePage } from './features/game/GamePage'
-import { useGameController } from './features/game/useGameController'
 import { HomePage } from './features/home/HomePage'
+import { OnlineBattlePage } from './features/online/OnlineBattlePage'
+import { AuthPanel } from './features/auth/AuthPanel'
+import { useAuthSession } from './features/auth/useAuthSession'
+import { LocalDataMigration } from './features/migration/LocalDataMigration'
+import { AdminPage } from './features/admin/AdminPage'
 import {
-  localDecksEndpoint,
   type Card,
   type Page,
   type SharedDeck,
 } from './models'
 import { DeckCardPool } from './features/decks/DeckCardPool'
 import { useDeckBuilder } from './features/decks/useDeckBuilder'
-import { ProfileSwitcher } from './features/users/ProfileSwitcher'
-import { useUserProfiles } from './features/users/useUserProfiles'
 
 function App() {
   const [page, setPage] = useState<Page>('home')
@@ -38,88 +35,68 @@ function App() {
   const [deckListTag, setDeckListTag] = useState('')
   const [previewCard, setPreviewCard] = useState<Card | null>(null)
 
-  const users = useUserProfiles()
-  const cardLibrary = useCardLibrary()
-  const battlefieldOptions = useMemo(() => battlefieldOptionsFromCards(cardLibrary.cardLibrary), [cardLibrary.cardLibrary])
+  const auth = useAuthSession()
+  const deckApi = useMemo(() => createDecksApi(auth.apiClient), [auth.apiClient])
+  const cardLibrary = useCardLibrary({ apiClient: auth.apiClient })
   const deckBuilder = useDeckBuilder({
-    activeUser: users.activeUser,
+    apiClient: auth.apiClient,
     cards: cardLibrary.cardLibrary,
-    setDeckListStatus,
-    setSharedDecks,
-    sharedDecks,
-  })
-  const gameController = useGameController({
-    cards: cardLibrary.cardLibrary,
-    decks: deckBuilder.accessibleDecks,
-    profiles: users.profiles,
-    updateStats: users.updateStats,
+    session: auth.session,
   })
 
   useEffect(() => {
     let cancelled = false
-    async function loadLocalDecks() {
+    async function loadPublicDecks() {
       try {
-        const response = await fetch(localDecksEndpoint)
-        if (!response.ok) return
-        const payload = (await response.json()) as { data?: unknown[] }
-        const decks = Array.isArray(payload.data) ? payload.data.filter(isSharedDeck).map(normalizeSharedDeck) : []
+        const decks = await deckApi.listPublicDecks()
         if (cancelled) return
         setSharedDecks(decks)
-        setDeckListStatus(`Loaded ${decks.length} deck${decks.length === 1 ? '' : 's'} from data\\riftbound-decks.json.`)
-      } catch {
-        if (!cancelled) setDeckListStatus('Local deck list is unavailable.')
+        setDeckListStatus(`Loaded ${decks.length} public API deck${decks.length === 1 ? '' : 's'}.`)
+      } catch (error) {
+        if (!cancelled) setDeckListStatus(error instanceof Error ? error.message : 'Public API deck list is unavailable.')
       }
     }
-    loadLocalDecks()
+    void loadPublicDecks()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [deckApi])
 
   const filteredSharedDecks = filterSharedDecks(sharedDecks, {
     search: deckListSearch,
     visibility: deckListVisibility,
     tag: deckListTag,
-  }, users.activeUser.id)
+  }, auth.session?.user.id ?? '')
 
   return (
     <CardHoverPreviewProvider>
       <main className="app-shell">
         <header className="app-header">
-          <AppNav page={page} onPageChange={setPage} />
-          <ProfileSwitcher
-            activeUser={users.activeUser}
-            profiles={users.profiles}
-            onCreateProfile={users.createProfile}
-            onSetActiveUser={users.setActiveUserId}
+          <AppNav page={page} isAdmin={auth.session?.user.isAdmin === true} isSignedIn={Boolean(auth.session)} onPageChange={setPage} />
+          <AuthPanel
+            session={auth.session}
+            status={auth.status}
+            onLogin={auth.login}
+            onLogout={auth.logout}
+            onRegister={auth.register}
           />
         </header>
+        <LocalDataMigration apiClient={auth.apiClient} session={auth.session} onImported={() => window.location.reload()} />
 
       {page === 'home' && (
         <HomePage
-          activePlayer={gameController.activePlayer}
           cardCount={cardLibrary.customCards.length}
           savedDeckCount={deckBuilder.savedDecks.length}
-          setup={gameController.setup}
           onNavigate={setPage}
         />
       )}
 
-      {page === 'game' && (
-        <GamePage
-          activePlayer={gameController.activePlayer}
-          battlefieldOptions={battlefieldOptions}
+      {page === 'online' && (
+        <OnlineBattlePage
+          apiClient={auth.apiClient}
           cards={cardLibrary.cardLibrary}
-          deckAssignments={gameController.deckAssignments}
-          decks={deckBuilder.accessibleDecks}
-          game={gameController.game}
-          profiles={users.profiles}
-          restart={gameController.restart}
-          setGame={gameController.setGame}
-          setSetup={gameController.setSetup}
-          setup={gameController.setup}
-          startConfiguredGame={gameController.startConfiguredGame}
-          updateSetup={gameController.updateSetup}
+          session={auth.session}
+          decks={deckBuilder.activeDecks}
         />
       )}
 
@@ -131,11 +108,6 @@ function App() {
         <CardViewerPage
           cacheStatus={cardLibrary.cacheStatus}
           cardLibrary={cardLibrary.cardLibrary}
-          customCards={cardLibrary.customCards}
-          draft={cardLibrary.draft}
-          onAddCard={cardLibrary.addCustomCard}
-          onDraftChange={cardLibrary.setDraft}
-          onRemoveCard={cardLibrary.removeCustomCard}
         />
       )}
 
@@ -154,6 +126,24 @@ function App() {
           onSearchChange={setDeckListSearch}
           onTagChange={setDeckListTag}
           onVisibilityChange={setDeckListVisibility}
+        />
+      )}
+
+      {page === 'admin' && (
+        <AdminPage
+          apiClient={auth.apiClient}
+          currentUser={auth.session?.user ?? null}
+          onCardsChanged={() => undefined}
+        />
+      )}
+
+      {page === 'account' && (
+        <AccountPage
+          activeDecks={deckBuilder.activeDecks}
+          apiClient={auth.apiClient}
+          session={auth.session}
+          onDecksChanged={deckBuilder.refreshDecks}
+          onUpdateMe={auth.updateMe}
         />
       )}
 
