@@ -18,6 +18,7 @@ public static class GameApiV1
         MapDecks(api);
         MapUsers(api);
         MapMatches(api);
+        MapLobbies(api);
         MapMatchmaking(api);
 
         return app;
@@ -114,6 +115,38 @@ public static class GameApiV1
             var userId = AuthService.GetUserId(user);
             return userId is null ? TypedResults.Unauthorized() : TypedResults.Ok(Envelope(await store.ListMatchesForUserAsync(userId, cancellationToken)));
         }).RequireAuthorization();
+
+        api.MapGet("/me/active-decks", async Task<Results<Ok<ApiResult<IReadOnlyList<DeckDto>>>, UnauthorizedHttpResult>> (ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            return userId is null ? TypedResults.Unauthorized() : TypedResults.Ok(Envelope(await store.ListActiveDecksAsync(userId, cancellationToken)));
+        }).RequireAuthorization();
+
+        api.MapPost("/me/active-decks/{deckId}", async Task<Results<Ok<ApiResult<DeckDto>>, UnauthorizedHttpResult, BadRequest<ApiResult<ApiErrorPayload>>>> (string deckId, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            return await store.AddActiveDeckAsync(userId, deckId, cancellationToken) is { } deck
+                ? TypedResults.Ok(Envelope(deck))
+                : TypedResults.BadRequest(Envelope(Error("deck.not_addable", "Deck is not available to add to the active deck list.")));
+        }).RequireAuthorization();
+
+        api.MapDelete("/me/active-decks/{deckId}", async Task<Results<NoContent, UnauthorizedHttpResult, NotFound>> (string deckId, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            return await store.RemoveActiveDeckAsync(userId, deckId, cancellationToken)
+                ? TypedResults.NoContent()
+                : TypedResults.NotFound();
+        }).RequireAuthorization();
     }
 
     private static void MapCards(RouteGroupBuilder api)
@@ -144,6 +177,70 @@ public static class GameApiV1
         admin.MapPost("/cards/import/riftcodex", async Task<Ok<ApiResult<RiftCodexImportResultDto>>> (OnlineGameService store, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken) =>
             TypedResults.Ok(Envelope(await store.ImportRiftCodexAsync(httpClientFactory.CreateClient(), cancellationToken))))
             .WithName("AdminImportRiftCodexCards");
+
+        admin.MapDelete("/cards/{cardId}", async Task<Results<NoContent, NotFound, Conflict<ApiResult<ApiErrorPayload>>>> (string cardId, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            return await store.DeleteCardAsync(cardId, cancellationToken) switch
+            {
+                true => TypedResults.NoContent(),
+                false => TypedResults.Conflict(Envelope(Error("card.in_use", "Card is used by one or more saved decks and cannot be deleted."))),
+                _ => TypedResults.NotFound()
+            };
+        })
+            .WithName("AdminDeleteCard");
+
+        admin.MapGet("/users", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListUsersAsync(cancellationToken)))
+            .WithName("AdminListUsers");
+
+        admin.MapPatch("/users/{userId}", async Task<Results<Ok<ApiResult<UserDto>>, NotFound, BadRequest<ApiResult<ApiErrorPayload>>, UnauthorizedHttpResult>> (string userId, AdminUpdateUserRequest request, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var currentAdminUserId = AuthService.GetUserId(user);
+            if (currentAdminUserId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            try
+            {
+                return await store.AdminUpdateUserAsync(currentAdminUserId, userId, request, cancellationToken) is { } updated
+                    ? TypedResults.Ok(Envelope(updated))
+                    : TypedResults.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("admin.user.invalid", ex.Message)));
+            }
+        })
+            .WithName("AdminUpdateUser");
+
+        admin.MapGet("/decks", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListAdminDecksAsync(cancellationToken)))
+            .WithName("AdminListDecks");
+
+        admin.MapPatch("/decks/{deckId}", async Task<Results<Ok<ApiResult<AdminDeckDto>>, NotFound, BadRequest<ApiResult<ApiErrorPayload>>>> (string deckId, AdminUpdateDeckRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                return await store.AdminUpdateDeckAsync(deckId, request, cancellationToken) is { } deck
+                    ? TypedResults.Ok(Envelope(deck))
+                    : TypedResults.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("admin.deck.invalid", ex.Message)));
+            }
+        })
+            .WithName("AdminUpdateDeck");
+
+        admin.MapDelete("/decks/{deckId}", async Task<Results<NoContent, NotFound>> (string deckId, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            return await store.AdminDeleteDeckAsync(deckId, cancellationToken) switch
+            {
+                true => TypedResults.NoContent(),
+                false => TypedResults.NotFound(),
+                null => TypedResults.NotFound()
+            };
+        })
+            .WithName("AdminDeleteDeck");
     }
 
     private static void MapDecks(RouteGroupBuilder api)
@@ -161,6 +258,14 @@ public static class GameApiV1
 
         decks.MapGet("/public", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListPublicDecksAsync(cancellationToken)))
             .WithName("ListPublicDecks");
+
+        decks.MapGet("/browse", async Task<Results<Ok<ApiResult<IReadOnlyList<BrowseDeckDto>>>, UnauthorizedHttpResult>> (ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            return userId is null ? TypedResults.Unauthorized() : TypedResults.Ok(Envelope(await store.BrowseDecksAsync(userId, cancellationToken)));
+        })
+            .RequireAuthorization()
+            .WithName("BrowseDecks");
 
         decks.MapGet("/{deckId}", async Task<Results<Ok<ApiResult<DeckDto>>, UnauthorizedHttpResult, NotFound>> (string deckId, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
         {
@@ -226,12 +331,14 @@ public static class GameApiV1
             .WithTags("Users");
 
         users.MapGet("/", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListUsersAsync(cancellationToken)))
+            .RequireAuthorization("RequireAdmin")
             .WithName("ListUsers");
 
         users.MapGet("/{userId}", async Task<Results<Ok<ApiResult<UserDto>>, NotFound>> (string userId, OnlineGameService store, CancellationToken cancellationToken) =>
             await store.GetUserAsync(userId, cancellationToken) is { } user
                 ? TypedResults.Ok(Envelope(user))
                 : TypedResults.NotFound())
+            .RequireAuthorization("RequireAdmin")
             .WithName("GetUser");
 
         users.MapPost("/", async (CreateUserRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
@@ -239,12 +346,14 @@ public static class GameApiV1
             var user = await store.CreateUserAsync(request, cancellationToken);
             return TypedResults.Created($"/api/v1/users/{user.Id}", Envelope(user));
         })
+        .RequireAuthorization("RequireAdmin")
         .WithName("CreateUser");
 
         users.MapPatch("/{userId}", async Task<Results<Ok<ApiResult<UserDto>>, NotFound>> (string userId, UpdateUserRequest request, OnlineGameService store, CancellationToken cancellationToken) =>
             await store.UpdateUserAsync(userId, request, cancellationToken) is { } user
                 ? TypedResults.Ok(Envelope(user))
                 : TypedResults.NotFound())
+            .RequireAuthorization("RequireAdmin")
             .WithName("UpdateUser");
     }
 
@@ -337,6 +446,115 @@ public static class GameApiV1
         })
             .RequireAuthorization()
             .WithName("SubmitMatchAction");
+    }
+
+    private static void MapLobbies(RouteGroupBuilder api)
+    {
+        var lobbies = api.MapGroup("/lobbies")
+            .WithTags("Lobbies")
+            .RequireAuthorization();
+
+        lobbies.MapGet("/", async Task<Results<Ok<ApiResult<IReadOnlyList<LobbyDto>>>, UnauthorizedHttpResult>> (ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            return AuthService.GetUserId(user) is null
+                ? TypedResults.Unauthorized()
+                : TypedResults.Ok(Envelope(await store.ListOpenLobbiesAsync(cancellationToken)));
+        })
+            .WithName("ListLobbies");
+
+        lobbies.MapPost("/", async Task<Results<Created<ApiResult<LobbyDto>>, UnauthorizedHttpResult, BadRequest<ApiResult<ApiErrorPayload>>>> (CreateLobbyRequest request, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null) return TypedResults.Unauthorized();
+            try
+            {
+                var lobby = await store.CreateLobbyAsync(userId, request, cancellationToken);
+                return TypedResults.Created($"/api/v1/lobbies/{lobby.Id}", Envelope(lobby));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("lobby.invalid", ex.Message)));
+            }
+        })
+            .WithName("CreateLobby");
+
+        lobbies.MapGet("/{lobbyId}", async Task<Results<Ok<ApiResult<LobbyDto>>, UnauthorizedHttpResult, NotFound>> (string lobbyId, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null) return TypedResults.Unauthorized();
+            return await store.GetLobbyAsync(lobbyId, userId, cancellationToken) is { } lobby
+                ? TypedResults.Ok(Envelope(lobby))
+                : TypedResults.NotFound();
+        })
+            .WithName("GetLobby");
+
+        lobbies.MapPost("/{lobbyId}/join", LobbyMutation((lobbyId, userId, store, cancellationToken) => store.JoinLobbyAsync(lobbyId, userId, cancellationToken)))
+            .WithName("JoinLobby");
+
+        lobbies.MapPost("/{lobbyId}/leave", LobbyMutation((lobbyId, userId, store, cancellationToken) => store.LeaveLobbyAsync(lobbyId, userId, cancellationToken)))
+            .WithName("LeaveLobby");
+
+        lobbies.MapPatch("/{lobbyId}/settings", async Task<Results<Ok<ApiResult<LobbyDto>>, UnauthorizedHttpResult, NotFound, BadRequest<ApiResult<ApiErrorPayload>>>> (string lobbyId, UpdateLobbySettingsRequest request, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null) return TypedResults.Unauthorized();
+            try
+            {
+                return await store.UpdateLobbySettingsAsync(lobbyId, userId, request, cancellationToken) is { } lobby
+                    ? TypedResults.Ok(Envelope(lobby))
+                    : TypedResults.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("lobby.invalid", ex.Message)));
+            }
+        })
+            .WithName("UpdateLobbySettings");
+
+        lobbies.MapPatch("/{lobbyId}/loadout", async Task<Results<Ok<ApiResult<LobbyDto>>, UnauthorizedHttpResult, NotFound, BadRequest<ApiResult<ApiErrorPayload>>>> (string lobbyId, UpdateLobbyLoadoutRequest request, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null) return TypedResults.Unauthorized();
+            try
+            {
+                return await store.UpdateLobbyLoadoutAsync(lobbyId, userId, request, cancellationToken) is { } lobby
+                    ? TypedResults.Ok(Envelope(lobby))
+                    : TypedResults.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("lobby.invalid", ex.Message)));
+            }
+        })
+            .WithName("UpdateLobbyLoadout");
+
+        lobbies.MapPost("/{lobbyId}/ready", LobbyMutation((lobbyId, userId, store, cancellationToken) => store.SetLobbyReadyAsync(lobbyId, userId, true, cancellationToken)))
+            .WithName("ReadyLobby");
+
+        lobbies.MapPost("/{lobbyId}/unready", LobbyMutation((lobbyId, userId, store, cancellationToken) => store.SetLobbyReadyAsync(lobbyId, userId, false, cancellationToken)))
+            .WithName("UnreadyLobby");
+
+        lobbies.MapPost("/{lobbyId}/start", LobbyMutation((lobbyId, userId, store, cancellationToken) => store.StartLobbyAsync(lobbyId, userId, cancellationToken)))
+            .WithName("StartLobby");
+    }
+
+    private static Delegate LobbyMutation(Func<string, string, OnlineGameService, CancellationToken, Task<LobbyDto?>> mutation)
+    {
+        return async Task<Results<Ok<ApiResult<LobbyDto>>, UnauthorizedHttpResult, NotFound, BadRequest<ApiResult<ApiErrorPayload>>>> (string lobbyId, ClaimsPrincipal user, OnlineGameService store, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null) return TypedResults.Unauthorized();
+            try
+            {
+                return await mutation(lobbyId, userId, store, cancellationToken) is { } lobby
+                    ? TypedResults.Ok(Envelope(lobby))
+                    : TypedResults.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("lobby.invalid", ex.Message)));
+            }
+        };
     }
 
     private static void MapMatchmaking(RouteGroupBuilder api)

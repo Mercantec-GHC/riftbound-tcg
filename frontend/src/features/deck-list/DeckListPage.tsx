@@ -25,10 +25,9 @@ export function DeckListPage({
     <section className="deck-list-page">
       <div>
         <p className="eyebrow">deck list</p>
-        <h2>Browse private and public decks</h2>
+        <h2>Browse public decks</h2>
         <p>
-          This pulls from <code> data\riftbound-decks.json</code> through the local dev endpoint. The list can stay
-          empty until we have shared decks to display.
+          This list comes from the API. Add eligible public decks and your own private decks to your active list from My Account.
         </p>
       </div>
 
@@ -75,7 +74,7 @@ export function DeckListPage({
         {decks.length === 0 && (
           <div className="empty-deck-list">
             <h3>No decks found</h3>
-            <p>When <code>data\riftbound-decks.json</code> has private or public decks, they will show up here.</p>
+            <p>Public API decks will show up here after they are created.</p>
           </div>
         )}
       </section>

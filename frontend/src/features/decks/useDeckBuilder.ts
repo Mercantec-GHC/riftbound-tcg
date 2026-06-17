@@ -8,7 +8,7 @@ import {
   normalizeDeck,
 } from '../../cardUtils'
 import { filterAndSortCards, type DeckSort } from '../../domain/cards/cardFilters'
-import { isDeckBuilderMainDeckCard, userCanAccessDeck } from '../../domain/decks/deckRules'
+import { isDeckBuilderMainDeckCard } from '../../domain/decks/deckRules'
 import { schemaVersion, type Card, type Domain, type SavedDeck } from '../../models'
 import type { DeckTab } from './deckBuilderTypes'
 
@@ -35,26 +35,51 @@ export function useDeckBuilder({
   const [deckMinMight, setDeckMinMight] = useState('')
   const [deckSort, setDeckSort] = useState<DeckSort>('name-asc')
   const [savedDecks, setSavedDecks] = useState<SavedDeck[]>([])
+  const [activeDecks, setActiveDecks] = useState<SavedDeck[]>([])
   const [deckDraft, setDeckDraft] = useState<SavedDeck>(() => ({ ...blankDeck(), ownerUserId: session?.user.id ?? '' }))
   const [deckImportText, setDeckImportText] = useState('')
   const [deckStatus, setDeckStatus] = useState('Sign in to load and save API decks.')
+
+  async function refreshDecks() {
+    if (!session) {
+      setSavedDecks([])
+      setActiveDecks([])
+      setDeckDraft({ ...blankDeck(), ownerUserId: '' })
+      setDeckStatus('Sign in to load and save API decks.')
+      return
+    }
+
+    const [ownedDecks, nextActiveDecks] = await Promise.all([
+      deckApi.listDecks({ ownerUserId: 'me' }),
+      deckApi.listActiveDecks(),
+    ])
+    setSavedDecks(ownedDecks)
+    setActiveDecks(nextActiveDecks)
+    setDeckDraft((current) => ({ ...current, ownerUserId: session.user.id }))
+    setDeckStatus(`Loaded ${ownedDecks.length} owned deck${ownedDecks.length === 1 ? '' : 's'} and ${nextActiveDecks.length} active deck${nextActiveDecks.length === 1 ? '' : 's'}.`)
+  }
 
   useEffect(() => {
     let cancelled = false
     async function loadDecks() {
       if (!session) {
         setSavedDecks([])
+        setActiveDecks([])
         setDeckDraft({ ...blankDeck(), ownerUserId: '' })
         setDeckStatus('Sign in to load and save API decks.')
         return
       }
 
       try {
-        const decks = await deckApi.listDecks({ ownerUserId: 'me' })
+        const [decks, active] = await Promise.all([
+          deckApi.listDecks({ ownerUserId: 'me' }),
+          deckApi.listActiveDecks(),
+        ])
         if (cancelled) return
         setSavedDecks(decks)
+        setActiveDecks(active)
         setDeckDraft((current) => ({ ...current, ownerUserId: session.user.id }))
-        setDeckStatus(`Loaded ${decks.length} API deck${decks.length === 1 ? '' : 's'}.`)
+        setDeckStatus(`Loaded ${decks.length} owned deck${decks.length === 1 ? '' : 's'} and ${active.length} active deck${active.length === 1 ? '' : 's'}.`)
       } catch (error) {
         if (!cancelled) setDeckStatus(error instanceof Error ? error.message : 'Could not load API decks.')
       }
@@ -117,6 +142,9 @@ export function useDeckBuilder({
         : await deckApi.createDeck(request)
       const next = [...savedDecks.filter((candidate) => candidate.id !== saved.id), saved]
       setSavedDecks(next)
+      setActiveDecks((current) => current.some((candidate) => candidate.id === saved.id)
+        ? current.map((candidate) => candidate.id === saved.id ? saved : candidate)
+        : [...current, saved])
       setDeckDraft(saved)
       setDeckStatus(`Saved ${saved.name} to the API.`)
     } catch (error) {
@@ -139,6 +167,7 @@ export function useDeckBuilder({
       await deckApi.deleteDeck(id)
       const next = savedDecks.filter((deck) => deck.id !== id)
       setSavedDecks(next)
+      setActiveDecks((current) => current.filter((deck) => deck.id !== id))
       if (deckDraft.id === id) newDeck()
       setDeckStatus('Deleted API deck.')
     } catch (error) {
@@ -172,6 +201,7 @@ export function useDeckBuilder({
         mainDeckIds: deck.mainDeckIds,
       })
       setSavedDecks((current) => [...current.filter((candidate) => candidate.id !== saved.id), saved])
+      setActiveDecks((current) => [...current.filter((candidate) => candidate.id !== saved.id), saved])
       setDeckDraft(saved)
       setDeckStatus(`Imported ${saved.name} to the API.`)
     } catch (error) {
@@ -198,10 +228,10 @@ export function useDeckBuilder({
     sort: deckSort,
   }
   const ownedDecks = savedDecks.filter((deck) => deck.ownerUserId === session?.user.id)
-  const accessibleDecks = savedDecks.filter((deck) => userCanAccessDeck(deck, session?.user.id ?? ''))
 
   return {
-    accessibleDecks,
+    accessibleDecks: activeDecks,
+    activeDecks,
     deckDomainFilter,
     deckDraft,
     deckImportText,
@@ -231,6 +261,8 @@ export function useDeckBuilder({
     newDeck,
     saveDeck,
     savedDecks: ownedDecks,
+    ownedDecks,
+    refreshDecks,
     selectedChampion,
     selectedChampionTags: cardTags(selectedChampion),
     selectedDeckSections,

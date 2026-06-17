@@ -1,6 +1,6 @@
 import type { ApiClient } from './http'
 import { queryString, unwrapData } from './http'
-import type { ApiDeck, ApiResult, ApiSharedDeck, CreateDeckRequest, DeckListQuery, UpdateDeckRequest } from './types'
+import type { ApiBrowseDeck, ApiDeck, ApiResult, ApiSharedDeck, CreateDeckRequest, DeckListQuery, UpdateDeckRequest } from './types'
 
 export function createDecksApi(client: ApiClient) {
   return {
@@ -10,6 +10,24 @@ export function createDecksApi(client: ApiClient) {
 
     async listPublicDecks(query?: Omit<DeckListQuery, 'visibility'>): Promise<ApiSharedDeck[]> {
       return unwrapData(await client.request<ApiResult<ApiSharedDeck[]>>(`/decks/public${queryString(query)}`))
+    },
+
+    async listBrowseDecks(): Promise<ApiBrowseDeck[]> {
+      return unwrapData(await client.request<ApiResult<ApiBrowseDeck[]>>('/decks/browse'))
+    },
+
+    async listActiveDecks(): Promise<ApiDeck[]> {
+      return unwrapData(await client.request<ApiResult<ApiDeck[]>>('/me/active-decks'))
+    },
+
+    async addActiveDeck(deckId: string): Promise<ApiDeck> {
+      return unwrapData(await client.request<ApiResult<ApiDeck>>(`/me/active-decks/${encodeURIComponent(deckId)}`, {
+        method: 'POST',
+      }))
+    },
+
+    async removeActiveDeck(deckId: string): Promise<void> {
+      await client.request<void>(`/me/active-decks/${encodeURIComponent(deckId)}`, { method: 'DELETE' })
     },
 
     async getDeck(deckId: string): Promise<ApiDeck> {

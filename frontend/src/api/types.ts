@@ -43,6 +43,10 @@ export type UpdateDeckRequest = Partial<CreateDeckRequest>
 
 export type ApiUserProfile = UserProfile & {
   email: string
+  isAdmin: boolean
+  isDisabled: boolean
+  lastLoginAt?: IsoDateTime | null
+  disabledAt?: IsoDateTime | null
 }
 
 export type RegisterRequest = {
@@ -69,6 +73,30 @@ export type CreateUserRequest = {
 
 export type UpdateUserRequest = {
   displayName?: string
+}
+
+export type AdminUpdateUserRequest = {
+  email?: string
+  displayName?: string
+  isAdmin?: boolean
+  isDisabled?: boolean
+}
+
+export type AdminUpdateDeckRequest = {
+  visibility?: 'public' | 'private'
+}
+
+export type CardUpsertResult = {
+  card: ApiCard
+  created: boolean
+}
+
+export type RiftCodexImportResult = {
+  imported: number
+  updated: number
+  skipped: number
+  pages: number
+  errors: string[]
 }
 
 export type MatchStatus = 'configuring' | 'mulligan' | 'active' | 'completed' | 'abandoned'
@@ -169,6 +197,51 @@ export type JoinMatchmakingRequest = {
   mode: GameMode
 }
 
+export type LobbyStatus = 'open' | 'starting' | 'matched' | 'cancelled'
+
+export type LobbyPlayer = {
+  userId: ApiId
+  seatIndex: number
+  displayName: string
+  deckId?: ApiId | null
+  selectedBattlefieldIds: ApiId[]
+  teamId?: number | null
+  isReady: boolean
+}
+
+export type Lobby = {
+  id: ApiId
+  hostUserId: ApiId
+  name: string
+  status: LobbyStatus
+  allowedModes: GameMode[]
+  selectedMode: GameMode
+  requiredPlayerCount: number
+  requiredBattlefieldCount: number
+  players: LobbyPlayer[]
+  canStart: boolean
+  matchId?: ApiId | null
+  createdAt: IsoDateTime
+  updatedAt: IsoDateTime
+}
+
+export type CreateLobbyRequest = {
+  name?: string
+  allowedModes?: GameMode[]
+  selectedMode?: GameMode
+}
+
+export type UpdateLobbySettingsRequest = {
+  name?: string
+  allowedModes?: GameMode[]
+  selectedMode?: GameMode
+}
+
+export type UpdateLobbyLoadoutRequest = {
+  deckId: ApiId
+  selectedBattlefieldIds: ApiId[]
+}
+
 export type ApiCard = Card
 export type ApiDeck = SavedDeck & {
   description?: string | null
@@ -177,3 +250,26 @@ export type ApiDeck = SavedDeck & {
   updatedAt?: IsoDateTime
 }
 export type ApiSharedDeck = SharedDeck
+export type ApiBrowseDeck = SharedDeck & {
+  isActive: boolean
+}
+export type ApiAdminDeck = {
+  id: ApiId
+  name: string
+  ownerUserId: ApiId
+  ownerDisplayName: string
+  visibility: 'public' | 'private'
+  legendId: ApiId
+  championId: ApiId
+  legendName: string
+  championName: string
+  cardCounts: SharedDeck['cardCounts']
+  tags: string[]
+  domains: string[]
+  description?: string | null
+  createdAt: IsoDateTime
+  updatedAt: IsoDateTime
+  activeUsageCount: number
+  queuedTicketCount: number
+  lobbySelectionCount: number
+}

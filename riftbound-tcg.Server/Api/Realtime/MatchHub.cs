@@ -108,6 +108,39 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
         await Clients.Caller.SendAsync("matchmaking.ticketUpdated", ticket, Context.ConnectionAborted);
     }
 
+    public async Task SubscribeLobby(string lobbyId)
+    {
+        var userId = AuthService.GetUserId(Context.User!);
+        if (userId is null)
+        {
+            await Clients.Caller.SendAsync("error", new ApiErrorPayload("auth.required", "Authentication is required."), Context.ConnectionAborted);
+            return;
+        }
+
+        if (!await gameService.IsUserInLobbyAsync(lobbyId, userId, Context.ConnectionAborted))
+        {
+            await Clients.Caller.SendAsync("error", new ApiErrorPayload("lobby.forbidden", "User is not in this lobby."), Context.ConnectionAborted);
+            return;
+        }
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, LobbyGroupName(lobbyId), Context.ConnectionAborted);
+        var lobby = await gameService.GetLobbyAsync(lobbyId, userId, Context.ConnectionAborted);
+        if (lobby is not null)
+        {
+            await Clients.Caller.SendAsync("lobby.updated", lobby, Context.ConnectionAborted);
+        }
+    }
+
+    public Task JoinLobby(string lobbyId)
+    {
+        return SubscribeLobby(lobbyId);
+    }
+
+    public Task LeaveLobby(string lobbyId)
+    {
+        return Groups.RemoveFromGroupAsync(Context.ConnectionId, LobbyGroupName(lobbyId), Context.ConnectionAborted);
+    }
+
     public static string MatchGroupName(string matchId)
     {
         return $"match:{matchId}";
@@ -116,5 +149,10 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
     public static string TicketGroupName(string ticketId)
     {
         return $"ticket:{ticketId}";
+    }
+
+    public static string LobbyGroupName(string lobbyId)
+    {
+        return $"lobby:{lobbyId}";
     }
 }

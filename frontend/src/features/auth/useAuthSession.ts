@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createApiClient, createAuthApi } from '../../api'
-import type { AuthSession, LoginRequest, RegisterRequest } from '../../api'
+import type { AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest } from '../../api'
 
 const refreshTokenKey = 'riftbound-refresh-token-v1'
 
@@ -52,6 +52,13 @@ export function useAuthSession() {
     setStatus('Signed out.')
   }
 
+  async function updateMe(request: UpdateUserRequest) {
+    const user = await authApi.updateMe(request)
+    setSession((current) => current ? { ...current, user } : current)
+    setStatus(`Updated ${user.displayName}.`)
+    return user
+  }
+
   return {
     apiClient,
     login,
@@ -60,5 +67,6 @@ export function useAuthSession() {
     register,
     session,
     status,
+    updateMe,
   }
 }

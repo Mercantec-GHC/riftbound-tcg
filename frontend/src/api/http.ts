@@ -34,6 +34,10 @@ async function readError(response: Response): Promise<ApiErrorPayload | null> {
     if (!payload || typeof payload !== 'object') return null
     const candidate = payload as Partial<ApiErrorPayload>
     if (typeof candidate.code === 'string' && typeof candidate.message === 'string') return candidate as ApiErrorPayload
+    const result = payload as { data?: Partial<ApiErrorPayload> }
+    if (result.data && typeof result.data.code === 'string' && typeof result.data.message === 'string') {
+      return result.data as ApiErrorPayload
+    }
     return null
   } catch {
     return null

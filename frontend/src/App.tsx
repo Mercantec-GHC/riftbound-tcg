@@ -6,6 +6,7 @@ import { CardHoverPreviewProvider } from './components/cardHoverPreview'
 import { filterSharedDecks } from './domain/decks/deckRules'
 import { CardViewerPage } from './features/cards/CardViewerPage'
 import { useCardLibrary } from './features/cards/useCardLibrary'
+import { AccountPage } from './features/account/AccountPage'
 import { DeckListPage } from './features/deck-list/DeckListPage'
 import { DeckForm } from './features/decks/DeckForm'
 import { SavedDecksPanel } from './features/decks/SavedDecksPanel'
@@ -16,6 +17,7 @@ import { OnlineBattlePage } from './features/online/OnlineBattlePage'
 import { AuthPanel } from './features/auth/AuthPanel'
 import { useAuthSession } from './features/auth/useAuthSession'
 import { LocalDataMigration } from './features/migration/LocalDataMigration'
+import { AdminPage } from './features/admin/AdminPage'
 import {
   type Card,
   type Page,
@@ -70,7 +72,7 @@ function App() {
     <CardHoverPreviewProvider>
       <main className="app-shell">
         <header className="app-header">
-          <AppNav page={page} onPageChange={setPage} />
+          <AppNav page={page} isAdmin={auth.session?.user.isAdmin === true} isSignedIn={Boolean(auth.session)} onPageChange={setPage} />
           <AuthPanel
             session={auth.session}
             status={auth.status}
@@ -92,8 +94,9 @@ function App() {
       {page === 'online' && (
         <OnlineBattlePage
           apiClient={auth.apiClient}
+          cards={cardLibrary.cardLibrary}
           session={auth.session}
-          decks={deckBuilder.accessibleDecks}
+          decks={deckBuilder.activeDecks}
         />
       )}
 
@@ -123,6 +126,24 @@ function App() {
           onSearchChange={setDeckListSearch}
           onTagChange={setDeckListTag}
           onVisibilityChange={setDeckListVisibility}
+        />
+      )}
+
+      {page === 'admin' && (
+        <AdminPage
+          apiClient={auth.apiClient}
+          currentUser={auth.session?.user ?? null}
+          onCardsChanged={() => undefined}
+        />
+      )}
+
+      {page === 'account' && (
+        <AccountPage
+          activeDecks={deckBuilder.activeDecks}
+          apiClient={auth.apiClient}
+          session={auth.session}
+          onDecksChanged={deckBuilder.refreshDecks}
+          onUpdateMe={auth.updateMe}
         />
       )}
 

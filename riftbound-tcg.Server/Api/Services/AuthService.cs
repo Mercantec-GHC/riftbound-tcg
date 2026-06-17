@@ -92,6 +92,11 @@ public sealed class AuthService(
             throw new InvalidOperationException("Invalid email or password.");
         }
 
+        if (user.IsDisabled)
+        {
+            throw new InvalidOperationException("Account is disabled.");
+        }
+
         user.LastLoginAt = DateTimeOffset.UtcNow;
         user.UpdatedAt = user.LastLoginAt.Value;
         await db.SaveChangesAsync(cancellationToken);
@@ -111,6 +116,13 @@ public sealed class AuthService(
 
         var user = await db.Users.FindAsync([token.UserId], cancellationToken)
             ?? throw new InvalidOperationException("Refresh token user was not found.");
+        if (user.IsDisabled)
+        {
+            token.RevokedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(cancellationToken);
+            throw new InvalidOperationException("Account is disabled.");
+        }
+
         token.RevokedAt = DateTimeOffset.UtcNow;
         return await CreateSessionAsync(user, cancellationToken);
     }
@@ -161,7 +173,10 @@ public sealed class AuthService(
             user.DisplayName,
             user.CreatedAt,
             new UserStatsDto(user.GamesPlayed, user.Wins, user.Losses, user.PointsScored, user.LastPlayedAt),
-            user.IsAdmin);
+            user.IsAdmin,
+            user.IsDisabled,
+            user.LastLoginAt,
+            user.DisabledAt);
     }
 
     public static string? GetUserId(ClaimsPrincipal principal)
@@ -194,7 +209,9 @@ public sealed class AuthService(
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "NormalizedEmail" text NOT NULL DEFAULT '';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "PasswordHash" text NOT NULL DEFAULT '';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "IsAdmin" boolean NOT NULL DEFAULT false;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "IsDisabled" boolean NOT NULL DEFAULT false;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamptz NOT NULL DEFAULT now();
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "DisabledAt" timestamptz NULL;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "LastLoginAt" timestamptz NULL;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "GamesPlayed" integer NOT NULL DEFAULT 0;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "Wins" integer NOT NULL DEFAULT 0;
@@ -247,6 +264,13 @@ public sealed class AuthService(
         if (!admin.IsAdmin)
         {
             admin.IsAdmin = true;
+            changed = true;
+        }
+
+        if (admin.IsDisabled)
+        {
+            admin.IsDisabled = false;
+            admin.DisabledAt = null;
             changed = true;
         }
 

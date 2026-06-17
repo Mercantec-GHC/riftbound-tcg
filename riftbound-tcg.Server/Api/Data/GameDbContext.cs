@@ -12,6 +12,9 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
     public DbSet<MatchEventEntity> MatchEvents => Set<MatchEventEntity>();
     public DbSet<MatchSnapshotEntity> MatchSnapshots => Set<MatchSnapshotEntity>();
     public DbSet<MatchmakingTicketEntity> MatchmakingTickets => Set<MatchmakingTicketEntity>();
+    public DbSet<LobbyEntity> Lobbies => Set<LobbyEntity>();
+    public DbSet<LobbyPlayerEntity> LobbyPlayers => Set<LobbyPlayerEntity>();
+    public DbSet<UserActiveDeckEntity> UserActiveDecks => Set<UserActiveDeckEntity>();
     public DbSet<RefreshTokenEntity> RefreshTokens => Set<RefreshTokenEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -86,6 +89,31 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
             entity.HasIndex(ticket => ticket.Status);
         });
 
+        modelBuilder.Entity<LobbyEntity>(entity =>
+        {
+            entity.ToTable("lobbies");
+            entity.HasKey(lobby => lobby.Id);
+            entity.HasIndex(lobby => lobby.Status);
+            entity.HasIndex(lobby => lobby.HostUserId);
+            entity.Property(lobby => lobby.AllowedModesJson).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<LobbyPlayerEntity>(entity =>
+        {
+            entity.ToTable("lobby_players");
+            entity.HasKey(player => new { player.LobbyId, player.UserId });
+            entity.HasIndex(player => player.LobbyId);
+            entity.HasIndex(player => player.UserId);
+            entity.Property(player => player.SelectedBattlefieldIdsJson).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<UserActiveDeckEntity>(entity =>
+        {
+            entity.ToTable("user_active_decks");
+            entity.HasKey(activeDeck => new { activeDeck.UserId, activeDeck.DeckId });
+            entity.HasIndex(activeDeck => activeDeck.DeckId);
+        });
+
         modelBuilder.Entity<RefreshTokenEntity>(entity =>
         {
             entity.ToTable("refresh_tokens");
@@ -124,8 +152,10 @@ public sealed class UserEntity
     public string DisplayName { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
     public bool IsAdmin { get; set; }
+    public bool IsDisabled { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+    public DateTimeOffset? DisabledAt { get; set; }
     public DateTimeOffset? LastLoginAt { get; set; }
     public int GamesPlayed { get; set; }
     public int Wins { get; set; }
@@ -207,6 +237,41 @@ public sealed class MatchmakingTicketEntity
     public string? MatchId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class LobbyEntity
+{
+    public string Id { get; set; } = string.Empty;
+    public string HostUserId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Status { get; set; } = "open";
+    public string AllowedModesJson { get; set; } = "[]";
+    public string SelectedMode { get; set; } = "duel-1v1";
+    public int MaxPlayers { get; set; } = 2;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public string? MatchId { get; set; }
+}
+
+public sealed class LobbyPlayerEntity
+{
+    public string LobbyId { get; set; } = string.Empty;
+    public string UserId { get; set; } = string.Empty;
+    public int SeatIndex { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+    public string? DeckId { get; set; }
+    public string SelectedBattlefieldIdsJson { get; set; } = "[]";
+    public int? TeamId { get; set; }
+    public bool IsReady { get; set; }
+    public DateTimeOffset JoinedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class UserActiveDeckEntity
+{
+    public string UserId { get; set; } = string.Empty;
+    public string DeckId { get; set; } = string.Empty;
+    public DateTimeOffset AddedAt { get; set; }
 }
 
 public sealed class RefreshTokenEntity

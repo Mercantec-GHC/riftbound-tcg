@@ -78,6 +78,46 @@ public sealed record SharedDeckDto(
     string? Description,
     DateTimeOffset UpdatedAt);
 
+public sealed record BrowseDeckDto(
+    string Id,
+    string Name,
+    string OwnerUserId,
+    string Visibility,
+    string Author,
+    string LegendId,
+    string ChampionId,
+    IReadOnlyList<string> BattlefieldDeckIds,
+    IReadOnlyList<string> RuneDeckIds,
+    IReadOnlyList<string> MainDeckIds,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Domains,
+    string LegendName,
+    string ChampionName,
+    DeckCardCountsDto CardCounts,
+    string? Description,
+    DateTimeOffset UpdatedAt,
+    bool IsActive);
+
+public sealed record AdminDeckDto(
+    string Id,
+    string Name,
+    string OwnerUserId,
+    string OwnerDisplayName,
+    string Visibility,
+    string LegendId,
+    string ChampionId,
+    string LegendName,
+    string ChampionName,
+    DeckCardCountsDto CardCounts,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Domains,
+    string? Description,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    int ActiveUsageCount,
+    int QueuedTicketCount,
+    int LobbySelectionCount);
+
 public sealed record DeckCardCountsDto(
     int Main,
     int Runes,
@@ -111,7 +151,10 @@ public sealed record UserDto(
     string DisplayName,
     DateTimeOffset CreatedAt,
     UserStatsDto Stats,
-    bool IsAdmin);
+    bool IsAdmin,
+    bool IsDisabled,
+    DateTimeOffset? LastLoginAt,
+    DateTimeOffset? DisabledAt);
 
 public sealed record UserStatsDto(
     int GamesPlayed,
@@ -125,6 +168,15 @@ public sealed record CreateUserRequest(
 
 public sealed record UpdateUserRequest(
     string? DisplayName);
+
+public sealed record AdminUpdateUserRequest(
+    string? Email,
+    string? DisplayName,
+    bool? IsAdmin,
+    bool? IsDisabled);
+
+public sealed record AdminUpdateDeckRequest(
+    string? Visibility);
 
 public sealed record RegisterRequest(
     string Email,
@@ -247,3 +299,41 @@ public sealed record MatchmakingTicketDto(
 public sealed record JoinMatchmakingRequest(
     string DeckId,
     string Mode);
+
+public sealed record LobbyDto(
+    string Id,
+    string HostUserId,
+    string Name,
+    string Status,
+    IReadOnlyList<string> AllowedModes,
+    string SelectedMode,
+    int RequiredPlayerCount,
+    int RequiredBattlefieldCount,
+    IReadOnlyList<LobbyPlayerDto> Players,
+    bool CanStart,
+    string? MatchId,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
+
+public sealed record LobbyPlayerDto(
+    string UserId,
+    int SeatIndex,
+    string DisplayName,
+    string? DeckId,
+    IReadOnlyList<string> SelectedBattlefieldIds,
+    int? TeamId,
+    bool IsReady);
+
+public sealed record CreateLobbyRequest(
+    string? Name,
+    IReadOnlyList<string>? AllowedModes,
+    string? SelectedMode);
+
+public sealed record UpdateLobbySettingsRequest(
+    string? Name,
+    IReadOnlyList<string>? AllowedModes,
+    string? SelectedMode);
+
+public sealed record UpdateLobbyLoadoutRequest(
+    string DeckId,
+    IReadOnlyList<string> SelectedBattlefieldIds);

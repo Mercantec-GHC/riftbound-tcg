@@ -1,5 +1,5 @@
 import type { GameState } from '../models'
-import type { ApiErrorPayload, LegalAction, MatchEvent, MatchSnapshot, MatchmakingTicket, SubmitActionRequest } from './types'
+import type { ApiErrorPayload, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket, SubmitActionRequest } from './types'
 
 export type RealtimeClientMessage =
   | { type: 'match.join'; matchId: string; userId: string }
@@ -7,6 +7,7 @@ export type RealtimeClientMessage =
   | { type: 'match.actionSubmit'; matchId: string; action: SubmitActionRequest }
   | { type: 'match.legalActionsRequest'; matchId: string; playerId: number }
   | { type: 'matchmaking.subscribe'; ticketId: string }
+  | { type: 'lobby.subscribe'; lobbyId: string }
   | { type: 'ping'; sentAt: string }
 
 export type RealtimeServerMessage =
@@ -18,6 +19,13 @@ export type RealtimeServerMessage =
   | { type: 'match.eventAppended'; matchId: string; event: MatchEvent }
   | { type: 'match.completed'; matchId: string; state: GameState; winnerPlayerId: number | null; winningTeamId: number | null }
   | { type: 'matchmaking.ticketUpdated'; ticket: MatchmakingTicket }
+  | { type: 'lobby.updated'; lobby: Lobby }
+  | { type: 'lobby.playerJoined'; lobby: Lobby }
+  | { type: 'lobby.playerLeft'; lobby: Lobby }
+  | { type: 'lobby.loadoutUpdated'; lobby: Lobby }
+  | { type: 'lobby.readyChanged'; lobby: Lobby }
+  | { type: 'lobby.matched'; lobby: Lobby }
+  | { type: 'lobby.cancelled'; lobby: Lobby }
   | { type: 'error'; error: ApiErrorPayload }
   | { type: 'pong'; sentAt: string; receivedAt: string }
 

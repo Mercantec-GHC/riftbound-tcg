@@ -1206,6 +1206,151 @@ textarea {
   gap: 18px;
 }
 
+.admin-page {
+  background: rgba(8, 12, 24, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.admin-page > header {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.admin-grid {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+}
+
+.admin-list,
+.admin-panel,
+.admin-editor,
+.admin-import,
+.admin-import-result {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.admin-panel {
+  align-content: start;
+}
+
+.admin-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.account-stats {
+  display: grid;
+  gap: 10px;
+}
+
+.account-stats span {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.admin-list {
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+}
+
+.admin-list article {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px;
+}
+
+.admin-list article div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.admin-list article small {
+  color: #c8bddb;
+  overflow-wrap: anywhere;
+}
+
+.admin-list-item {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f7efe2;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  text-align: left;
+}
+
+.admin-list-item.active {
+  border-color: #ffdc8a;
+  box-shadow: 0 0 0 1px rgba(255, 220, 138, 0.4);
+}
+
+.admin-list-item small,
+.admin-list-item span {
+  color: #c8bddb;
+  overflow-wrap: anywhere;
+}
+
+.admin-editor {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card-admin-editor {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-check {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f7efe2;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.admin-check input {
+  width: auto;
+}
+
+.admin-import {
+  max-width: 720px;
+}
+
+.admin-import-result {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-import-result textarea {
+  grid-column: 1 / -1;
+}
+
 .online-toolbar,
 .online-status,
 .online-board,
@@ -1222,6 +1367,31 @@ textarea {
   display: grid;
   gap: 14px;
   grid-template-columns: minmax(240px, 1fr) minmax(180px, 240px) minmax(220px, 300px) auto;
+}
+
+.compact-online-toolbar {
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+}
+
+.lobby-layout {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+}
+
+.lobby-browser,
+.lobby-room {
+  background: rgba(8, 12, 24, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.lobby-mode-grid,
+.lobby-list {
+  display: grid;
+  gap: 10px;
 }
 
 .online-account {
@@ -1341,6 +1511,12 @@ textarea {
   .online-board header,
   .online-players,
   .online-battlefields,
+  .compact-online-toolbar,
+  .lobby-layout,
+  .admin-grid,
+  .admin-editor,
+  .card-admin-editor,
+  .admin-import-result,
   .import-grid,
   .editor form {
     grid-template-columns: 1fr;
