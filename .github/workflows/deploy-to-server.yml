@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Stop current container setup
-        run: docker compose down -v
+        run: docker compose down 
 
   startup:
     needs: shutdown
@@ -34,4 +34,6 @@ jobs:
           DOZZLE_ADMIN_PASSWORD: ${{ secrets.DOZZLE_ADMIN_PASSWORD }}
           DOZZLE_ADMIN_EMAIL: ${{ secrets.DOZZLE_ADMIN_EMAIL }}
           DOZZLE_ADMIN_NAME: ${{ secrets.DOZZLE_ADMIN_NAME }}
+          PGADMIN_DEFAULT_EMAIL: ${{ secrets.PGADMIN_DEFAULT_EMAIL }}
+          PGADMIN_DEFAULT_PASSWORD: ${{ secrets.PGADMIN_DEFAULT_PASSWORD }}
         run: docker compose up -d --build
