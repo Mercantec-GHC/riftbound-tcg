@@ -1,9 +1,45 @@
+CREATE TABLE IF NOT EXISTS cards (
+    "Id" text PRIMARY KEY,
+    "Name" text NOT NULL,
+    "Kind" text NOT NULL,
+    "TagsJson" jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "Domain" text NOT NULL,
+    "DomainsJson" jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "Cost" integer NOT NULL,
+    "Might" integer NOT NULL,
+    "Text" text NOT NULL,
+    "Image" text NOT NULL,
+    "CardType" text NOT NULL,
+    "Supertype" text NULL,
+    "EffectType" text NOT NULL,
+    "EffectAmount" integer NOT NULL,
+    "CreatedAt" timestamptz NOT NULL,
+    "UpdatedAt" timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS "IX_cards_Kind" ON cards("Kind");
+CREATE INDEX IF NOT EXISTS "IX_cards_Domain" ON cards("Domain");
+
+DELETE FROM cards
+WHERE "Id" IN (
+    'ember-initiate',
+    'glade-warden',
+    'skyline-surge',
+    'iron-vow',
+    'ember-rune',
+    'skybridge',
+    'emberfield',
+    'ember-legend',
+    'ember-champion'
+);
+
 CREATE TABLE IF NOT EXISTS users (
     "Id" text PRIMARY KEY,
     "Email" text NOT NULL,
     "NormalizedEmail" text NOT NULL,
     "DisplayName" text NOT NULL,
     "PasswordHash" text NOT NULL,
+    "IsAdmin" boolean NOT NULL DEFAULT false,
     "CreatedAt" timestamptz NOT NULL,
     "UpdatedAt" timestamptz NOT NULL,
     "LastLoginAt" timestamptz NULL,

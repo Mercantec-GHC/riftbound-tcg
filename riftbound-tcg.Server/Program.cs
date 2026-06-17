@@ -51,6 +51,12 @@ builder.Services.Configure<AuthSettings>(settings =>
     settings.AccessTokenMinutes = int.TryParse(builder.Configuration["Auth:AccessTokenMinutes"], out var accessMinutes) ? accessMinutes : 60;
     settings.RefreshTokenDays = int.TryParse(builder.Configuration["Auth:RefreshTokenDays"], out var refreshDays) ? refreshDays : 14;
 });
+builder.Services.Configure<AdminSettings>(settings =>
+{
+    settings.Email = builder.Configuration["Admin:Email"] ?? "admin@riftbound.local";
+    settings.Password = builder.Configuration["Admin:Password"] ?? "ChangeMe123!";
+    settings.DisplayName = builder.Configuration["Admin:DisplayName"] ?? "Admin";
+});
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -78,8 +84,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             }
         };
     });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("RequireAdmin", policy => policy.RequireClaim("admin", "true"));
+});
 builder.Services.AddSignalR();
+builder.Services.AddHttpClient();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<PasswordHasher<UserEntity>>();
 builder.Services.AddScoped<OnlineGameService>();
@@ -89,6 +99,11 @@ builder.Services.AddSingleton<IRulesEngine, DefaultRulesEngine>();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    await scope.ServiceProvider.GetRequiredService<AuthService>().EnsureAuthReadyAsync(CancellationToken.None);
+}
 
 // Configure the HTTP request pipeline.
 app.UseExceptionHandler();

@@ -14,6 +14,7 @@ public static class GameApiV1
 
         MapAuth(api);
         MapCards(api);
+        MapAdmin(api);
         MapDecks(api);
         MapUsers(api);
         MapMatches(api);
@@ -120,14 +121,29 @@ public static class GameApiV1
         var cards = api.MapGroup("/cards")
             .WithTags("Cards");
 
-        cards.MapGet("/", (OnlineGameService store) => Ok(store.Cards))
+        cards.MapGet("/", async (OnlineGameService store, CancellationToken cancellationToken) => Ok(await store.ListCardsAsync(cancellationToken)))
             .WithName("ListCards");
 
-        cards.MapGet("/{cardId}", Results<Ok<ApiResult<CardDto>>, NotFound> (string cardId, OnlineGameService store) =>
-            store.Cards.FirstOrDefault(card => card.Id.Equals(cardId, StringComparison.OrdinalIgnoreCase)) is { } card
+        cards.MapGet("/{cardId}", async Task<Results<Ok<ApiResult<CardDto>>, NotFound>> (string cardId, OnlineGameService store, CancellationToken cancellationToken) =>
+            await store.GetCardAsync(cardId, cancellationToken) is { } card
                 ? TypedResults.Ok(Envelope(card))
                 : TypedResults.NotFound())
             .WithName("GetCard");
+    }
+
+    private static void MapAdmin(RouteGroupBuilder api)
+    {
+        var admin = api.MapGroup("/admin")
+            .WithTags("Admin")
+            .RequireAuthorization("RequireAdmin");
+
+        admin.MapPost("/cards", async Task<Ok<ApiResult<CardUpsertResultDto>>> (CardDto request, OnlineGameService store, CancellationToken cancellationToken) =>
+            TypedResults.Ok(Envelope(await store.UpsertCardAsync(request, cancellationToken))))
+            .WithName("AdminUpsertCard");
+
+        admin.MapPost("/cards/import/riftcodex", async Task<Ok<ApiResult<RiftCodexImportResultDto>>> (OnlineGameService store, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken) =>
+            TypedResults.Ok(Envelope(await store.ImportRiftCodexAsync(httpClientFactory.CreateClient(), cancellationToken))))
+            .WithName("AdminImportRiftCodexCards");
     }
 
     private static void MapDecks(RouteGroupBuilder api)

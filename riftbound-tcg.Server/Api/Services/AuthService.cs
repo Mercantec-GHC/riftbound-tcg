@@ -20,12 +20,27 @@ public sealed class AuthSettings
     public int RefreshTokenDays { get; set; } = 14;
 }
 
+public sealed class AdminSettings
+{
+    public string Email { get; set; } = "admin@riftbound.local";
+    public string Password { get; set; } = "ChangeMe123!";
+    public string DisplayName { get; set; } = "Admin";
+}
+
 public sealed class AuthService(
     GameDbContext db,
     PasswordHasher<UserEntity> passwordHasher,
-    IOptions<AuthSettings> options)
+    IOptions<AuthSettings> options,
+    IOptions<AdminSettings> adminOptions)
 {
     private readonly AuthSettings _settings = options.Value;
+    private readonly AdminSettings _adminSettings = adminOptions.Value;
+
+    public async Task EnsureAuthReadyAsync(CancellationToken cancellationToken)
+    {
+        await EnsureAuthSchemaAsync(cancellationToken);
+        await SeedAdminAsync(cancellationToken);
+    }
 
     public async Task<AuthSessionDto> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken)
     {
@@ -53,6 +68,7 @@ public sealed class AuthService(
             Email = request.Email.Trim(),
             NormalizedEmail = email,
             DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? request.Email.Trim() : request.DisplayName.Trim(),
+            IsAdmin = false,
             CreatedAt = now,
             UpdatedAt = now,
             LastLoginAt = now
@@ -144,7 +160,8 @@ public sealed class AuthService(
             user.Email,
             user.DisplayName,
             user.CreatedAt,
-            new UserStatsDto(user.GamesPlayed, user.Wins, user.Losses, user.PointsScored, user.LastPlayedAt));
+            new UserStatsDto(user.GamesPlayed, user.Wins, user.Losses, user.PointsScored, user.LastPlayedAt),
+            user.IsAdmin);
     }
 
     public static string? GetUserId(ClaimsPrincipal principal)
@@ -176,6 +193,7 @@ public sealed class AuthService(
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "Email" text NOT NULL DEFAULT '';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "NormalizedEmail" text NOT NULL DEFAULT '';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "PasswordHash" text NOT NULL DEFAULT '';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "IsAdmin" boolean NOT NULL DEFAULT false;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamptz NOT NULL DEFAULT now();
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "LastLoginAt" timestamptz NULL;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "GamesPlayed" integer NOT NULL DEFAULT 0;
@@ -200,6 +218,51 @@ public sealed class AuthService(
             """, cancellationToken);
     }
 
+    private async Task SeedAdminAsync(CancellationToken cancellationToken)
+    {
+        var email = string.IsNullOrWhiteSpace(_adminSettings.Email) ? "admin@riftbound.local" : _adminSettings.Email.Trim();
+        var normalizedEmail = NormalizeEmail(email);
+        var password = string.IsNullOrWhiteSpace(_adminSettings.Password) ? "ChangeMe123!" : _adminSettings.Password;
+        var now = DateTimeOffset.UtcNow;
+        var admin = await db.Users.FirstOrDefaultAsync(user => user.NormalizedEmail == normalizedEmail, cancellationToken);
+        if (admin is null)
+        {
+            admin = new UserEntity
+            {
+                Id = "user-admin",
+                Email = email,
+                NormalizedEmail = normalizedEmail,
+                DisplayName = string.IsNullOrWhiteSpace(_adminSettings.DisplayName) ? "Admin" : _adminSettings.DisplayName.Trim(),
+                IsAdmin = true,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            admin.PasswordHash = passwordHasher.HashPassword(admin, password);
+            db.Users.Add(admin);
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        var changed = false;
+        if (!admin.IsAdmin)
+        {
+            admin.IsAdmin = true;
+            changed = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(admin.PasswordHash))
+        {
+            admin.PasswordHash = passwordHasher.HashPassword(admin, password);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            admin.UpdatedAt = now;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+    }
+
     private string CreateAccessToken(UserEntity user, DateTimeOffset expiresAt)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.SigningKey));
@@ -209,7 +272,9 @@ public sealed class AuthService(
             new Claim(JwtRegisteredClaimNames.Sub, user.Id),
             new Claim(ClaimTypes.NameIdentifier, user.Id),
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
-            new Claim(ClaimTypes.Name, user.DisplayName)
+            new Claim(ClaimTypes.Name, user.DisplayName),
+            new Claim("admin", user.IsAdmin ? "true" : "false"),
+            new Claim(ClaimTypes.Role, user.IsAdmin ? "Admin" : "User")
         };
 
         var token = new JwtSecurityToken(

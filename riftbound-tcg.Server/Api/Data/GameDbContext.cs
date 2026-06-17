@@ -4,6 +4,7 @@ namespace RiftboundTcg.Server.Api.Data;
 
 public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbContext(options)
 {
+    public DbSet<CardEntity> Cards => Set<CardEntity>();
     public DbSet<UserEntity> Users => Set<UserEntity>();
     public DbSet<DeckEntity> Decks => Set<DeckEntity>();
     public DbSet<MatchEntity> Matches => Set<MatchEntity>();
@@ -15,6 +16,16 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<CardEntity>(entity =>
+        {
+            entity.ToTable("cards");
+            entity.HasKey(card => card.Id);
+            entity.HasIndex(card => card.Kind);
+            entity.HasIndex(card => card.Domain);
+            entity.Property(card => card.TagsJson).HasColumnType("jsonb");
+            entity.Property(card => card.DomainsJson).HasColumnType("jsonb");
+        });
+
         modelBuilder.Entity<UserEntity>(entity =>
         {
             entity.ToTable("users");
@@ -85,6 +96,26 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
     }
 }
 
+public sealed class CardEntity
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Kind { get; set; } = "unit";
+    public string TagsJson { get; set; } = "[]";
+    public string Domain { get; set; } = "Fury";
+    public string DomainsJson { get; set; } = "[]";
+    public int Cost { get; set; }
+    public int Might { get; set; }
+    public string Text { get; set; } = string.Empty;
+    public string Image { get; set; } = "*";
+    public string CardType { get; set; } = "unit";
+    public string? Supertype { get; set; }
+    public string EffectType { get; set; } = "rally";
+    public int EffectAmount { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 public sealed class UserEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -92,6 +123,7 @@ public sealed class UserEntity
     public string NormalizedEmail { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
+    public bool IsAdmin { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? LastLoginAt { get; set; }

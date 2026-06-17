@@ -33,6 +33,17 @@ public sealed record CardEffectDto(
     string Type,
     int Amount);
 
+public sealed record CardUpsertResultDto(
+    CardDto Card,
+    bool Created);
+
+public sealed record RiftCodexImportResultDto(
+    int Imported,
+    int Updated,
+    int Skipped,
+    int Pages,
+    IReadOnlyList<string> Errors);
+
 public sealed record DeckDto(
     string Id,
     string Name,
@@ -47,6 +58,30 @@ public sealed record DeckDto(
     IReadOnlyList<string> MainDeckIds,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+public sealed record SharedDeckDto(
+    string Id,
+    string Name,
+    string OwnerUserId,
+    string Visibility,
+    string Author,
+    string LegendId,
+    string ChampionId,
+    IReadOnlyList<string> BattlefieldDeckIds,
+    IReadOnlyList<string> RuneDeckIds,
+    IReadOnlyList<string> MainDeckIds,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Domains,
+    string LegendName,
+    string ChampionName,
+    DeckCardCountsDto CardCounts,
+    string? Description,
+    DateTimeOffset UpdatedAt);
+
+public sealed record DeckCardCountsDto(
+    int Main,
+    int Runes,
+    int Battlefields);
 
 public sealed record CreateDeckRequest(
     string Name,
@@ -75,7 +110,8 @@ public sealed record UserDto(
     string Email,
     string DisplayName,
     DateTimeOffset CreatedAt,
-    UserStatsDto Stats);
+    UserStatsDto Stats,
+    bool IsAdmin);
 
 public sealed record UserStatsDto(
     int GamesPlayed,

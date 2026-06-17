@@ -1,7 +1,7 @@
 export type Domain = 'Fury' | 'Calm' | 'Mind' | 'Body' | 'Chaos' | 'Order'
 export type CardKind = 'unit' | 'spell' | 'gear' | 'champion' | 'legend' | 'battlefield' | 'token' | 'rune'
 export type EffectType = 'damage' | 'draw' | 'buff' | 'rally'
-export type Page = 'home' | 'online' | 'cards' | 'decks' | 'deck-list'
+export type Page = 'home' | 'game' | 'online' | 'cards' | 'decks' | 'deck-list'
 
 export type Effect = {
   type: EffectType
