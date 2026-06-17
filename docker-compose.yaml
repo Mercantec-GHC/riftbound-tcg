@@ -84,6 +84,21 @@ services:
       - "8080:8080"
     networks:
       - backend
+  
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "8082:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
 
 networks:
   backend: {}
@@ -91,3 +106,4 @@ networks:
 volumes:
   db-data: {}
   dozzle: {}
+  pgadmin-data: {}
