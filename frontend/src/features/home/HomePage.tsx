@@ -1,17 +1,11 @@
-import type { Player, SetupState } from '../../models'
-
 export function HomePage({
-  activePlayer,
   cardCount,
   savedDeckCount,
-  setup,
   onNavigate,
 }: {
-  activePlayer: Player
   cardCount: number
   savedDeckCount: number
-  setup: SetupState
-  onNavigate: (page: 'game' | 'cards' | 'decks' | 'deck-list') => void
+  onNavigate: (page: 'online' | 'cards' | 'decks' | 'deck-list') => void
 }) {
   return (
     <section className="hero-panel frontpage">
@@ -19,12 +13,11 @@ export function HomePage({
         <p className="eyebrow">fan-made multiplayer tabletop prototype</p>
         <h1>Riftbound Baybeeeee</h1>
         <p>
-          Play the hot-seat prototype, manage imported Riftbound cards, or browse the cached card library without
-          cramming everything onto one giant page.
+          Manage API-backed cards and decks, then enter online matchmaking with saved account data.
         </p>
         <div className="button-row">
-          <button type="button" onClick={() => onNavigate('game')}>
-            Play game
+          <button type="button" onClick={() => onNavigate('online')}>
+            Online battle
           </button>
           <button type="button" onClick={() => onNavigate('cards')}>
             Open card viewer
@@ -39,11 +32,11 @@ export function HomePage({
       </div>
       <div className="home-stats">
         <article className="player">
-          <span>Players</span>
-          <strong>{setup.playerCount}</strong>
+          <span>Mode</span>
+          <strong>API</strong>
         </article>
         <article className="player">
-          <span>Cached cards</span>
+          <span>Cards</span>
           <strong>{cardCount}</strong>
         </article>
         <article className="player">
@@ -51,8 +44,8 @@ export function HomePage({
           <strong>{savedDeckCount}</strong>
         </article>
         <article className="player">
-          <span>Active turn</span>
-          <strong>{activePlayer.name}</strong>
+          <span>Hot-seat</span>
+          <strong>Archived</strong>
         </article>
       </div>
     </section>

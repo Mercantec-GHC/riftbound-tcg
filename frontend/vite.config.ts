@@ -8,6 +8,8 @@ import type { Plugin, ViteDevServer } from 'vite'
 const cacheDir = path.resolve(__dirname, 'data')
 const cardCacheFile = path.join(cacheDir, 'riftbound-cards.json')
 const deckCacheFile = path.join(cacheDir, 'riftbound-decks.json')
+const apiProxyTarget =
+  process.env.VITE_API_PROXY_TARGET ?? process.env.services__server__http__0 ?? process.env.services__server__https__0
 
 function localJsonCache(route: string, cacheFile: string): Plugin {
   return {
@@ -48,4 +50,21 @@ function localJsonCache(route: string, cacheFile: string): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), localJsonCache('/api/local-cards', cardCacheFile), localJsonCache('/api/local-decks', deckCacheFile)],
+  server: {
+    proxy: apiProxyTarget
+      ? {
+          '/api/v1': {
+            target: apiProxyTarget,
+            changeOrigin: true,
+            secure: false,
+          },
+          '/hubs': {
+            target: apiProxyTarget,
+            changeOrigin: true,
+            secure: false,
+            ws: true,
+          },
+        }
+      : undefined,
+  },
 })
