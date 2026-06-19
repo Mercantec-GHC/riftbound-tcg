@@ -1,11 +1,22 @@
 export type Domain = 'Fury' | 'Calm' | 'Mind' | 'Body' | 'Chaos' | 'Order'
 export type CardKind = 'unit' | 'spell' | 'gear' | 'champion' | 'legend' | 'battlefield' | 'token' | 'rune'
 export type EffectType = 'damage' | 'draw' | 'buff' | 'rally'
+export type SpellSubtype = 'action' | 'reaction'
 export type Page = 'home' | 'game' | 'cards' | 'decks' | 'deck-list'
 
 export type Effect = {
   type: EffectType
   amount: number
+}
+
+export type StackItem = {
+  id: string
+  cardId: string
+  cardName: string
+  playerId: number
+  effect: Effect
+  targetUnitId?: string
+  targetLaneId?: string
 }
 
 export type Card = {
@@ -104,6 +115,8 @@ export type GameState = {
   nextLogId: number
   log: { id: number; text: string }[]
   passShield: boolean
+  effectStack: StackItem[]
+  chainWindow: { passedByPlayer: Record<number, boolean> } | null
 }
 
 export type GameMode = 'duel-1v1' | 'ffa-3' | 'ffa-4' | 'teams-2v2'
