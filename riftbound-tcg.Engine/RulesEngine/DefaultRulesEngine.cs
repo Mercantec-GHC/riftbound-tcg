@@ -48,6 +48,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var battlefields = battlefieldIds.Take(mode.BattlefieldCount).Select((id, index) => new JsonObject
         {
             ["id"] = $"{id}-{index}",
+            ["catalogId"] = id,
             ["name"] = DisplayName(id),
             ["claim"] = 2,
             ["chosenBy"] = index % mode.PlayerCount,
@@ -375,6 +376,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return new JsonObject
         {
             ["id"] = $"{id}-{instanceSuffix}",
+            ["catalogId"] = id,
             ["name"] = DisplayName(id),
             ["kind"] = id.Contains("rune", StringComparison.OrdinalIgnoreCase) ? "rune" : "unit",
             ["tags"] = new JsonArray(),

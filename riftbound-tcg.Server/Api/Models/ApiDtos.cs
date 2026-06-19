@@ -327,7 +327,8 @@ public sealed record LobbyPlayerDto(
 public sealed record CreateLobbyRequest(
     string? Name,
     IReadOnlyList<string>? AllowedModes,
-    string? SelectedMode);
+    string? SelectedMode,
+    bool? IncludeReadyDummy);
 
 public sealed record UpdateLobbySettingsRequest(
     string? Name,

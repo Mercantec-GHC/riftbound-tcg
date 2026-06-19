@@ -229,6 +229,7 @@ export type CreateLobbyRequest = {
   name?: string
   allowedModes?: GameMode[]
   selectedMode?: GameMode
+  includeReadyDummy?: boolean
 }
 
 export type UpdateLobbySettingsRequest = {

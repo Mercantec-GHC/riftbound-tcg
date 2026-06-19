@@ -10,6 +10,7 @@ export type Effect = {
 
 export type Card = {
   id: string
+  catalogId?: string
   name: string
   kind: CardKind
   tags: string[]
@@ -59,6 +60,7 @@ export type Player = {
 
 export type Battlefield = {
   id: string
+  catalogId?: string
   name: string
   claim: number
   chosenBy: number

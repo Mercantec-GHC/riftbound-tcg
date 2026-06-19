@@ -601,6 +601,40 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             JoinedAt = now,
             UpdatedAt = now
         });
+
+        if (request.IncludeReadyDummy == true)
+        {
+            if (!host.IsAdmin)
+            {
+                throw new InvalidOperationException("Only admins can add a ready dummy player.");
+            }
+
+            var dummyUser = CreateDummyUser(now);
+            var dummyDeck = await CreateRandomLegalDummyDeckAsync(dummyUser.Id, mode, now, cancellationToken);
+            var dummyBattlefieldId = Deserialize(dummyDeck.BattlefieldDeckIdsJson)[0];
+            db.Users.Add(dummyUser);
+            db.Decks.Add(dummyDeck);
+            db.UserActiveDecks.Add(new UserActiveDeckEntity
+            {
+                UserId = dummyUser.Id,
+                DeckId = dummyDeck.Id,
+                AddedAt = now
+            });
+            db.LobbyPlayers.Add(new LobbyPlayerEntity
+            {
+                LobbyId = lobby.Id,
+                UserId = dummyUser.Id,
+                SeatIndex = 1,
+                DisplayName = dummyUser.DisplayName,
+                DeckId = dummyDeck.Id,
+                SelectedBattlefieldIdsJson = Serialize(new[] { dummyBattlefieldId }),
+                TeamId = TeamForSeat(selectedMode, 1),
+                IsReady = true,
+                JoinedAt = now,
+                UpdatedAt = now
+            });
+        }
+
         await db.SaveChangesAsync(cancellationToken);
         return await GetLobbyRequiredAsync(lobby.Id, cancellationToken);
     }
@@ -619,6 +653,73 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         }
 
         return result;
+    }
+
+    private async Task<DeckEntity> CreateRandomLegalDummyDeckAsync(string ownerUserId, ModeSpec mode, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var cards = await db.Cards.ToArrayAsync(cancellationToken);
+        var legends = cards.Where(card => EffectiveKind(card) == "legend").ToArray();
+        var champions = cards.Where(card => EffectiveKind(card) == "champion").ToArray();
+        var battlefields = cards.Where(card => EffectiveKind(card) == "battlefield").ToArray();
+        var runes = cards.Where(card => EffectiveKind(card) == "rune").ToArray();
+        var mainDeckCards = cards.Where(card => EffectiveKind(card) is not "legend" and not "battlefield" and not "rune" and not "token").ToArray();
+
+        if (legends.Length == 0 || champions.Length == 0 || battlefields.Length == 0 || runes.Length == 0 || mainDeckCards.Length == 0)
+        {
+            throw new InvalidOperationException("Card catalog does not have enough legal cards to create a random dummy deck.");
+        }
+
+        var battlefieldCount = Math.Clamp(mode.BattlefieldCount, 1, 3);
+        var battlefieldIds = PickRandomDistinct(battlefields, battlefieldCount).Select(card => card.Id).ToArray();
+        var deck = new DeckEntity
+        {
+            Id = $"deck-dummy-{Guid.NewGuid():N}",
+            OwnerUserId = ownerUserId,
+            Name = $"Dummy Deck {now:HHmmss}",
+            Visibility = "private",
+            Description = "Generated automatically for an admin-created dummy lobby seat.",
+            TagsJson = Serialize(new[] { "dummy", "generated" }),
+            LegendId = PickRandom(legends).Id,
+            ChampionId = PickRandom(champions).Id,
+            BattlefieldDeckIdsJson = Serialize(battlefieldIds),
+            RuneDeckIdsJson = Serialize(PickRandomMany(runes, 12).Select(card => card.Id).ToArray()),
+            MainDeckIdsJson = Serialize(PickRandomMany(mainDeckCards, 40).Select(card => card.Id).ToArray()),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        await ValidateDeckAsync(deck.LegendId, deck.ChampionId, battlefieldIds, Deserialize(deck.RuneDeckIdsJson), Deserialize(deck.MainDeckIdsJson), cancellationToken);
+        return deck;
+    }
+
+    private static UserEntity CreateDummyUser(DateTimeOffset now)
+    {
+        var id = $"user-dummy-{Guid.NewGuid():N}";
+        return new UserEntity
+        {
+            Id = id,
+            Email = $"{id}@riftbound.local",
+            NormalizedEmail = $"{id.ToUpperInvariant()}@RIFTBOUND.LOCAL",
+            DisplayName = $"Dummy {now:HHmmss}",
+            PasswordHash = string.Empty,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+    }
+
+    private static CardEntity PickRandom(IReadOnlyList<CardEntity> cards)
+    {
+        return cards[Random.Shared.Next(cards.Count)];
+    }
+
+    private static IReadOnlyList<CardEntity> PickRandomMany(IReadOnlyList<CardEntity> cards, int count)
+    {
+        return Enumerable.Range(0, count).Select(_ => PickRandom(cards)).ToArray();
+    }
+
+    private static IReadOnlyList<CardEntity> PickRandomDistinct(IReadOnlyList<CardEntity> cards, int count)
+    {
+        return cards.OrderBy(_ => Random.Shared.Next()).Take(Math.Min(count, cards.Count)).ToArray();
     }
 
     public async Task<LobbyDto?> GetLobbyAsync(string lobbyId, string userId, CancellationToken cancellationToken)
@@ -1844,7 +1945,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             throw new InvalidOperationException("Rune deck must contain at least 12 valid rune cards.");
         }
 
-        if (mainDeckIds.Count > 40 || mainDeckIds.Any(id => !cards.TryGetValue(id, out var card) || EffectiveKind(card) is "legend" or "champion" or "battlefield" or "rune" or "token"))
+        if (mainDeckIds.Count > 40 || mainDeckIds.Any(id => !cards.TryGetValue(id, out var card) || EffectiveKind(card) is "legend" or "battlefield" or "rune" or "token"))
         {
             throw new InvalidOperationException("Main deck contains invalid cards.");
         }

@@ -1455,6 +1455,273 @@ textarea {
   gap: 10px;
 }
 
+.online-shared-playmat {
+  background: linear-gradient(90deg, rgba(20, 20, 24, 0.96), rgba(42, 36, 28, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  grid-template-areas:
+    "opponent"
+    "battle"
+    "viewer";
+  min-height: 0;
+  padding: 18px;
+}
+
+.shared-table-playmat {
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "battle"
+    "players";
+}
+
+.duel-playmat > .opponent-player-mat {
+  grid-area: opponent;
+}
+
+.duel-playmat > .viewer-player-mat {
+  grid-area: viewer;
+}
+
+.online-battlefields-zone {
+  grid-area: battle;
+}
+
+.online-player-mats {
+  display: grid;
+  gap: 16px;
+  grid-area: players;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.online-player-mat {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-width: 0;
+  padding: 14px;
+}
+
+.online-player-mat-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.viewer-player-mat {
+  border-color: rgba(255, 220, 138, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(255, 220, 138, 0.18);
+}
+
+.online-player-mat-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.online-player-mat-header h3,
+.online-battlefield h3 {
+  margin-bottom: 0;
+}
+
+.online-player-mat-header span {
+  color: #c8bddb;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.online-player-mat-header strong {
+  background: rgba(255, 189, 89, 0.16);
+  border-radius: 999px;
+  color: #ffdc8a;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.online-player-zones {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: auto minmax(132px, auto) auto;
+  grid-template-areas:
+    "champion legend deck trash"
+    "base base runes runeDeck"
+    "hand hand hand hand";
+}
+
+.opponent-player-mat .online-player-zones {
+  grid-template-areas:
+    "hand hand hand hand"
+    "deck trash runes runeDeck"
+    "base base champion legend";
+}
+
+.online-player-zones .mat-zone {
+  min-height: 104px;
+}
+
+.online-art-card {
+  aspect-ratio: 2.5 / 3.5;
+  border-radius: 8px;
+  display: block;
+  max-width: 132px;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.online-art-card .card-art {
+  height: 100%;
+  width: 100%;
+}
+
+.online-art-card .card-art span {
+  font-size: 2.2rem;
+}
+
+.online-art-card img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.online-zone-card {
+  margin: 0 auto;
+  max-width: 116px;
+}
+
+.online-player-zones .base-zone,
+.online-player-zones .runes-zone,
+.online-player-zones .hand-zone {
+  min-width: 0;
+}
+
+.online-unit-card-wrap {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  width: min(92px, 100%);
+}
+
+.online-unit-card {
+  cursor: default;
+  max-width: 92px;
+}
+
+.online-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
+
+.online-card-badges small {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: #f2ecff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 6px;
+}
+
+.online-hand {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  max-height: none;
+  overflow: visible;
+}
+
+.online-hand-card {
+  max-width: 128px;
+}
+
+.online-battlefields-row {
+  align-items: center;
+  display: grid;
+  gap: 16px;
+  justify-content: center;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.online-battlefield {
+  display: grid;
+  justify-items: center;
+  width: fit-content;
+}
+
+.online-battlefield-art {
+  aspect-ratio: 3.5 / 2.5;
+  max-width: none;
+  width: 360px;
+}
+
+.online-battlefield-art .horizontal-card-art img,
+.online-battlefield-art img {
+  object-fit: cover;
+}
+
+.online-battlefield-fallback {
+  align-items: center;
+  display: grid;
+  aspect-ratio: 3.5 / 2.5;
+  text-align: center;
+  width: 360px;
+}
+
+.online-player-zones .unit-row {
+  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hidden-hand {
+  align-items: center;
+  border: 1px dashed rgba(255, 255, 255, 0.32);
+  border-radius: 8px;
+  color: #c8bddb;
+  display: grid;
+  height: 100%;
+  justify-items: center;
+  min-height: 92px;
+  padding: 12px;
+  text-align: center;
+}
+
+.hidden-hand strong {
+  color: #ffdc8a;
+  font-size: 2rem;
+}
+
+.hidden-hand span,
+.zone-empty-text {
+  color: #c8bddb;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.online-victory-track {
+  align-self: stretch;
+  grid-area: auto;
+}
+
+.online-battlefield header,
+.online-board .online-player-mat-header {
+  display: flex;
+}
+
 @media (max-width: 1100px) {
   .hero-panel,
   .table,
@@ -1500,9 +1767,53 @@ textarea {
     min-height: 0;
   }
 
+  .online-shared-playmat {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "opponent"
+      "battle"
+      "viewer";
+  }
+
+  .shared-table-playmat {
+    grid-template-areas:
+      "battle"
+      "players";
+  }
+
+  .online-player-zones {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas:
+      "champion"
+      "legend"
+      "base"
+      "deck"
+      "runeDeck"
+      "runes"
+      "trash"
+      "hand";
+  }
+
+  .online-battlefields-row {
+    grid-auto-flow: column;
+    grid-template-columns: none !important;
+    justify-content: start;
+  }
+
+  .online-battlefield-art,
+  .online-battlefield-fallback {
+    width: min(320px, calc(100vw - 64px));
+  }
+
   .victory-track {
     flex-direction: row;
     flex-wrap: wrap;
+  }
+
+  .online-player-mat .online-victory-track {
+    flex-direction: column;
+    flex-wrap: nowrap;
   }
 
   .battlefields,

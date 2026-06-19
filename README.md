@@ -237,6 +237,17 @@ GamePage
 └── MatchLog
 ```
 
+### Online Battlemat / Playspace
+
+Online matches render a shared battlemat based on the archived local hot-seat playmat in `archive/local-hotseat/frontend-src/features-game/GamePage.tsx`. The active online implementation should keep the same recognizable zones:
+
+- central battlefields with controller, claim value, and units grouped by player
+- each player's champion, legend, base, main deck, rune deck, rune pool, trash, and hand zone
+- the signed-in player's hand face-up
+- opponent hands shown as counts only
+
+The online battlemat is display-only. It must render `MatchSnapshot.state` from the server, and player decisions must go through server-provided legal actions and SignalR/API submission. Do not import local hot-seat mutation helpers, drag/drop handlers, or client-side rule resolution into online match play.
+
 ## Backend Guidelines
 
 The server should:

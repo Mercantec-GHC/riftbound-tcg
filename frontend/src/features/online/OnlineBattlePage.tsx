@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../api'
 import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../api'
 import { gameModes, type Card, type GameMode, type GameState, type SavedDeck } from '../../models'
+import { OnlinePlaymat } from './OnlinePlaymat'
 
 type OnlineBattlePageProps = {
   apiClient: ApiClient
@@ -24,6 +25,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [lobbies, setLobbies] = useState<Lobby[]>([])
   const [lobby, setLobby] = useState<Lobby | null>(null)
   const [lobbyName, setLobbyName] = useState('Riftbound lobby')
+  const [includeReadyDummy, setIncludeReadyDummy] = useState(false)
   const [selectedMode, setSelectedMode] = useState<GameMode>('duel-1v1')
   const [allowedModes, setAllowedModes] = useState<GameMode[]>(['duel-1v1'])
   const [selectedBattlefieldId, setSelectedBattlefieldId] = useState('')
@@ -43,21 +45,14 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       name: cards.find((card) => card.id === id)?.name ?? battlefieldNames[id] ?? 'Loading battlefield...',
     }))
     : []
+  const effectiveSelectedBattlefieldId = selectedDeck?.battlefieldDeckIds.includes(selectedBattlefieldId)
+    ? selectedBattlefieldId
+    : selectedDeck?.battlefieldDeckIds[0] ?? ''
   const playerId = match?.players.find((player) => player.userId === session?.user.id)?.playerId ?? 0
   const currentLobbyPlayer = lobby?.players.find((player) => player.userId === session?.user.id) ?? null
   const isHost = lobby?.hostUserId === session?.user.id
-  const canReady = Boolean(lobby && selectedDeck && selectedDeck.battlefieldDeckIds.includes(selectedBattlefieldId))
-
-  useEffect(() => {
-    if (!selectedDeck) {
-      setSelectedBattlefieldId('')
-      return
-    }
-
-    if (!selectedBattlefieldId || !selectedDeck.battlefieldDeckIds.includes(selectedBattlefieldId)) {
-      setSelectedBattlefieldId(selectedDeck.battlefieldDeckIds[0] ?? '')
-    }
-  }, [selectedBattlefieldId, selectedDeck])
+  const isAdmin = session?.user.isAdmin === true
+  const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
 
   useEffect(() => {
     if (!session) return
@@ -181,7 +176,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     }
 
     try {
-      const nextLobby = await lobbiesApi.createLobby({ name: lobbyName, allowedModes, selectedMode })
+      const nextLobby = await lobbiesApi.createLobby({ name: lobbyName, allowedModes, selectedMode, includeReadyDummy: isAdmin && includeReadyDummy })
       setLobby(nextLobby)
       setStatus('Lobby created.')
       const connection = await ensureConnection()
@@ -216,9 +211,9 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   }
 
   async function saveLoadout() {
-    if (!lobby || !selectedDeck || !selectedBattlefieldId) return
+    if (!lobby || !selectedDeck || !effectiveSelectedBattlefieldId) return
     try {
-      const nextLobby = await lobbiesApi.updateLoadout(lobby.id, { deckId: selectedDeck.id, selectedBattlefieldIds: [selectedBattlefieldId] })
+      const nextLobby = await lobbiesApi.updateLoadout(lobby.id, { deckId: selectedDeck.id, selectedBattlefieldIds: [effectiveSelectedBattlefieldId] })
       setLobby(nextLobby)
       setStatus('Loadout saved.')
     } catch (error) {
@@ -378,6 +373,12 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 </label>
               ))}
             </div>
+            {isAdmin && (
+              <label className="admin-check">
+                <input checked={includeReadyDummy} type="checkbox" onChange={(event) => setIncludeReadyDummy(event.target.checked)} />
+                Add ready dummy player
+              </label>
+            )}
             <button type="button" disabled={!session} onClick={() => void createLobby()}>Create lobby</button>
 
             <h3>Open lobbies</h3>
@@ -443,7 +444,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 </label>
                 <label>
                   Battlefield
-                  <select value={selectedBattlefieldId} onChange={(event) => setSelectedBattlefieldId(event.target.value)}>
+                  <select value={effectiveSelectedBattlefieldId} onChange={(event) => setSelectedBattlefieldId(event.target.value)}>
                     {battlefieldOptions.map((battlefield) => <option key={battlefield.id} value={battlefield.id}>{battlefield.name}</option>)}
                   </select>
                 </label>
@@ -475,15 +476,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 </article>
               ))}
             </div>
-            <div className="online-battlefields">
-              {state.battlefields.map((battlefield) => (
-                <article key={battlefield.id}>
-                  <strong>{battlefield.name}</strong>
-                  <span>Control: {battlefield.controllerId === null ? 'none' : battlefield.controllerId}</span>
-                  <small>{battlefield.units.length} units</small>
-                </article>
-              ))}
-            </div>
+            <OnlinePlaymat cards={cards} game={state} viewerPlayerId={playerId} />
           </section>
 
           <aside className="online-actions">
