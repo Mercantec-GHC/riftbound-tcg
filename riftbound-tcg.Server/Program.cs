@@ -99,8 +99,11 @@ builder.Services.AddSingleton<IRulesEngine, DefaultRulesEngine>();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
-builder.Services.AddControllers();
-
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+});
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
