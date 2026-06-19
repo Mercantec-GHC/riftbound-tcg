@@ -17,4 +17,9 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.1" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\riftbound-tcg.Core\riftbound-tcg.Core.csproj" />
+    <ProjectReference Include="..\riftbound-tcg.Engine\riftbound-tcg.Engine.csproj" />
+  </ItemGroup>
 </Project>
