@@ -37,6 +37,12 @@ public sealed record CardDefinition(
     string? Supertype,
     CardEffectDefinition Effect);
 
+public enum SpellSubtype
+{
+    Action,
+    Reaction,
+}
+
 public enum CardEffectType
 {
     Damage,

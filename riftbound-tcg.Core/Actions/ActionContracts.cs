@@ -11,7 +11,8 @@ public enum GameActionType
     PassFocus,
     OpenShowdown,
     ResolveShowdown,
-    ResolveCombat
+    ResolveCombat,
+    PassChainWindow
 }
 
 public enum ActionTargetType

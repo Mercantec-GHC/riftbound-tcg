@@ -10,8 +10,25 @@ import {
   type Effect,
   type RiftCodexCard,
   type SavedDeck,
+  type SpellSubtype,
 } from './models'
 import { randomId } from './utils/randomId'
+
+// [Reaction] in card text means it can be played in response to any effect on the chain.
+// All other spells are action spells played on your turn or chained by the turn player.
+export function getSpellSubtype(card: Card): SpellSubtype {
+  if (card.kind !== 'spell') return 'action'
+  if (card.text.includes('[Reaction]')) return 'reaction'
+  return 'action'
+}
+
+// Units, champions, legends, and gear with "When you play me" / "As you play me" triggers
+// push an on-play effect to the chain when they enter play.
+export function cardHasOnPlayEffect(card: Card): boolean {
+  if (card.kind === 'spell' || card.kind === 'rune' || card.kind === 'battlefield' || card.kind === 'token') return false
+  const lower = card.text.toLowerCase()
+  return lower.includes('when you play me') || lower.includes('as you play me')
+}
 
 export function inferTagsFromName(name: string) {
   const tag = name.split(' - ')[0]?.trim()

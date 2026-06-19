@@ -1,4 +1,5 @@
 using riftbound_tcg.Core.Cards;
+using riftbound_tcg.Core.Effects;
 
 namespace riftbound_tcg.Core.GameState;
 
@@ -136,7 +137,9 @@ public sealed record GameState(
     int NextUid,
     int NextLogId,
     IReadOnlyList<GameLogEntry> Log,
-    bool PassShield);
+    bool PassShield,
+    IReadOnlyList<StackItem> EffectStack,
+    ChainWindow? ChainWindow);
 
 public sealed record MatchSummary(
     string Id,

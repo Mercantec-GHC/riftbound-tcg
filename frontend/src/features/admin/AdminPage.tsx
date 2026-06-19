@@ -59,7 +59,6 @@ export function AdminPage({
   const [cardDraft, setCardDraft] = useState<Card>(createBlankAdminCard)
 
   const selectedUser = users.find((user) => user.id === selectedUserId) ?? users[0] ?? null
-  const selectedCard = cards.find((card) => card.id === selectedCardId) ?? null
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? decks[0] ?? null
   const filteredCards = cards.filter((card) => {
     const query = cardSearch.trim().toLowerCase()
@@ -90,11 +89,6 @@ export function AdminPage({
     void loadDecks()
   }, [currentUser?.isAdmin])
 
-  useEffect(() => {
-    if (!selectedCard) return
-    setCardDraft(selectedCard)
-  }, [selectedCard])
-
   if (!currentUser?.isAdmin) {
     return (
       <section className="admin-page">
@@ -123,7 +117,11 @@ export function AdminPage({
       const next = await cardsApi.listCards()
       setCards(next)
       onCardsChanged(next)
-      setSelectedCardId((current) => current || next[0]?.id || '')
+      setSelectedCardId((current) => {
+        const resolved = next.some((card) => card.id === current) ? current : (next[0]?.id || '')
+        setCardDraft(next.find((card) => card.id === resolved) ?? createBlankAdminCard())
+        return resolved
+      })
       setCardStatus(`Loaded ${next.length} card${next.length === 1 ? '' : 's'}.`)
     } catch (error) {
       setCardStatus(error instanceof Error ? error.message : 'Unable to load cards.')
@@ -162,6 +160,7 @@ export function AdminPage({
       setCardStatus(`${result.created ? 'Created' : 'Updated'} ${result.card.name}.`)
       await loadCards()
       setSelectedCardId(result.card.id)
+      setCardDraft(result.card)
     } catch (error) {
       setCardStatus(error instanceof Error ? error.message : 'Unable to save card.')
     }
@@ -308,7 +307,10 @@ export function AdminPage({
             </button>
             <p className="import-status">{cardStatus}</p>
             {filteredCards.slice(0, 200).map((card) => (
-              <button className={selectedCardId === card.id ? 'admin-list-item active' : 'admin-list-item'} key={card.id} type="button" onClick={() => setSelectedCardId(card.id)}>
+              <button className={selectedCardId === card.id ? 'admin-list-item active' : 'admin-list-item'} key={card.id} type="button" onClick={() => {
+                setSelectedCardId(card.id)
+                setCardDraft(card)
+              }}>
                 <strong>{card.name}</strong>
                 <small>{card.id}</small>
                 <span>{card.kind} · {card.domain}</span>

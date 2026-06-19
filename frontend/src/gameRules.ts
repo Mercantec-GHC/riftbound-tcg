@@ -1,4 +1,4 @@
-import { battlefieldOptionsFromCards, cloneCard, makeDeck, makeRuneDeck } from './cardUtils'
+import { battlefieldOptionsFromCards, cardHasOnPlayEffect, cloneCard, getSpellSubtype, makeDeck, makeRuneDeck } from './cardUtils'
 import {
   defaultSetup,
   gameModes,
@@ -13,6 +13,7 @@ import {
   type Player,
   type SavedDeck,
   type SetupState,
+  type StackItem,
   type Unit,
 } from './models'
 import { randomId } from './utils/randomId'
@@ -189,6 +190,8 @@ export function createGameFromSetup(cards: Card[] = [], setup: SetupState = defa
     nextUid: 1,
     nextLogId: 1,
     passShield: true,
+    effectStack: [],
+    chainWindow: null,
     log: [{ id: 0, text: `${config.label} setup complete. Players drew 4 and entered mulligan.` }],
   }
 }
@@ -495,12 +498,23 @@ export function resolveCombat(state: GameState): GameState {
 
 export function playCard(state: GameState, laneId?: string, targetUnitId?: string): GameState {
   const selection = state.selectedCard
-  if (!selection || state.stage !== 'playing' || selection.player !== state.turnPlayerId) return state
+  if (!selection || state.stage !== 'playing') return state
   const player = state.players[selection.player]
-  const card = player.hand[selection.handIndex]
+  const card = player?.hand[selection.handIndex]
   if (!card || ['legend', 'battlefield', 'token', 'rune'].includes(card.kind)) return state
+
+  const subtype = getSpellSubtype(card)
+  // Reactions can be played by any player during a chain window.
+  // Action spells during a chain window are "plus" chains — only the turn player may add them.
+  const isReactionDuringChain = subtype === 'reaction' && state.chainWindow !== null
+  const isTurnPlayer = selection.player === state.turnPlayerId
+  if (!isReactionDuringChain && !isTurnPlayer) return state
+
+  if (subtype === 'reaction' && !state.chainWindow) return addLog({ ...state, selectedCard: null }, `${card.name} is a [Reaction] — it can only be played in response to an effect on the chain.`)
+
   const energyNeeded = Math.max(0, card.cost - player.runePool.energy)
   if (readyRuneCount(player) < energyNeeded) return addLog({ ...state, selectedCard: null }, `${player.name} needs ${card.cost} Energy to play ${card.name}.`)
+
   let updated = updatePlayer({ ...state, selectedCard: null }, player.id, (current) => ({
     ...current,
     runes: { ready: current.runes.ready.slice(energyNeeded), exhausted: [...current.runes.exhausted, ...current.runes.ready.slice(0, energyNeeded)] },
@@ -508,18 +522,55 @@ export function playCard(state: GameState, laneId?: string, targetUnitId?: strin
     hand: current.hand.filter((_, index) => index !== selection.handIndex),
     trash: card.kind === 'unit' || card.kind === 'champion' || card.kind === 'gear' ? current.trash : [card, ...current.trash],
   }))
+
   if (card.kind === 'unit' || card.kind === 'champion' || card.kind === 'gear') {
     const unit: Unit = { ...card, uid: `u-${state.nextUid}`, owner: player.id, location: { type: 'base' }, exhausted: card.kind !== 'gear', damage: 0, attachedMight: 0 }
     updated = updatePlayer({ ...updated, nextUid: state.nextUid + 1 }, player.id, (current) => ({ ...current, base: [...current.base, unit] }))
+    if (cardHasOnPlayEffect(card)) {
+      const stackItem: StackItem = { id: `stack-${updated.nextUid}`, cardId: card.id, cardName: card.name, playerId: player.id, effect: card.effect, targetUnitId, targetLaneId: laneId }
+      return addLog({ ...updated, effectStack: [stackItem, ...updated.effectStack], chainWindow: { passedByPlayer: {} }, nextUid: updated.nextUid + 1 }, `${player.name} played ${card.name} to base. Players may respond to its effect.`)
+    }
     return addLog(updated, `${player.name} played ${card.name} to base.`)
   }
-  if (card.effect.type === 'draw') return addLog(updatePlayer(updated, player.id, (current) => draw(current, card.effect.amount)), `${player.name} drew ${card.effect.amount}.`)
-  if ((card.effect.type === 'buff' || card.effect.type === 'rally') && targetUnitId) return addLog(mapUnit(updated, targetUnitId, (unit) => ({ ...unit, attachedMight: card.effect.type === 'buff' ? unit.attachedMight + card.effect.amount : unit.attachedMight, exhausted: card.effect.type === 'rally' ? false : unit.exhausted })), `${card.name} affected a unit.`)
-  if (card.effect.type === 'damage' && laneId) {
-    const target = updated.battlefields.find((field) => field.id === laneId)?.units.find((unit) => unit.owner !== player.id)
-    return target ? addLog(mapUnit(updated, target.uid, (unit) => ({ ...unit, damage: unit.damage + card.effect.amount })), `${card.name} dealt ${card.effect.amount} damage.`) : updated
+
+  // Spells go on the chain; reset pass tracking so all players get a response window.
+  const stackItem: StackItem = { id: `stack-${updated.nextUid}`, cardId: card.id, cardName: card.name, playerId: player.id, effect: card.effect, targetUnitId, targetLaneId: laneId }
+  const subtypeLabel = subtype === 'reaction' ? 'Reaction Spell' : 'Spell'
+  return addLog(
+    { ...updated, effectStack: [stackItem, ...updated.effectStack], chainWindow: { passedByPlayer: {} }, nextUid: updated.nextUid + 1 },
+    `${player.name} played ${card.name} (${subtypeLabel}). Players may respond.`,
+  )
+}
+
+function applyStackEffect(state: GameState, item: StackItem): GameState {
+  if (item.effect.type === 'draw') return updatePlayer(state, item.playerId, (player) => draw(player, item.effect.amount))
+  if (item.effect.type === 'buff' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, attachedMight: unit.attachedMight + item.effect.amount }))
+  if (item.effect.type === 'rally' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, exhausted: false }))
+  if (item.effect.type === 'damage') {
+    const laneId = item.targetLaneId
+    const target = laneId
+      ? state.battlefields.find((field) => field.id === laneId)?.units.find((unit) => unit.owner !== item.playerId)
+      : allUnits(state).find((unit) => unit.uid === item.targetUnitId && unit.owner !== item.playerId)
+    return target ? mapUnit(state, target.uid, (unit) => ({ ...unit, damage: unit.damage + item.effect.amount })) : state
   }
-  return addLog(updated, `${player.name} played ${card.name}.`)
+  return state
+}
+
+export function resolveTopOfStack(state: GameState): GameState {
+  if (state.effectStack.length === 0) return { ...state, chainWindow: null }
+  const [top, ...remaining] = state.effectStack
+  const resolved = applyStackEffect({ ...state, effectStack: remaining }, top)
+  if (remaining.length > 0) {
+    return addLog({ ...resolved, chainWindow: { passedByPlayer: {} } }, `${top.cardName} resolved. Chain continues (${remaining.length} effect${remaining.length === 1 ? '' : 's'} remaining).`)
+  }
+  return addLog({ ...resolved, chainWindow: null }, `${top.cardName} resolved.`)
+}
+
+export function passChainWindow(state: GameState, playerId: number): GameState {
+  if (!state.chainWindow) return state
+  const passed = { ...state.chainWindow.passedByPlayer, [playerId]: true }
+  if (state.turnOrder.every((id) => passed[id])) return resolveTopOfStack({ ...state, chainWindow: { passedByPlayer: passed } })
+  return { ...state, chainWindow: { passedByPlayer: passed } }
 }
 
 export function summonChampion(state: GameState): GameState {
@@ -537,7 +588,7 @@ export function summonChampion(state: GameState): GameState {
 export function handleDrop(state: GameState, payload: DragPayload, laneId?: string, unitId?: string): GameState {
   if (payload.type === 'champion') return laneId || unitId ? state : summonChampion(state)
   if (payload.type === 'card') {
-    const withSelection = { ...state, selectedCard: { player: state.turnPlayerId, handIndex: payload.handIndex }, selectedUnit: null }
+    const withSelection = { ...state, selectedCard: { player: payload.playerId, handIndex: payload.handIndex }, selectedUnit: null }
     if (unitId) return playCard(withSelection, undefined, unitId)
     return playCard(withSelection, laneId)
   }

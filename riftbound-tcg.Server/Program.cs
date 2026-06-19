@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using riftbound_tcg.Engine.RulesEngine;
+using RiftboundTcg.Server;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -98,6 +99,11 @@ builder.Services.AddSingleton<IRulesEngine, DefaultRulesEngine>();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+});
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
@@ -118,6 +124,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapGameApiV1();
 app.MapHub<MatchHub>("/hubs/matches");
+app.MapGameEndpoints();
 
 app.MapDefaultEndpoints();
 
