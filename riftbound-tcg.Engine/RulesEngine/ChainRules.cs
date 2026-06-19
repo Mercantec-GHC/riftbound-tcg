@@ -7,13 +7,16 @@ public static class ChainRules
 {
     // Returns a new chain window with this player marked as passed.
     // Returns null if all players in the turn order have now passed (stack should resolve).
-    public static ChainWindow? Pass(ChainWindow current, int playerId, IReadOnlyList<int> turnOrder)
-    {
-        var passed = new Dictionary<int, bool>(current.PassedByPlayer) { [playerId] = true };
-        if (turnOrder.All(id => passed.ContainsKey(id) && passed[id]))
-            return null; // All passed — caller should resolve top of stack
-        return new ChainWindow(passed);
-    }
+public static ChainWindow? Pass(ChainWindow current, int playerId, IReadOnlyList<int> turnOrder)
+{
+    if (!turnOrder.Contains(playerId))
+        return current;
+
+    var passed = new Dictionary<int, bool>(current.PassedByPlayer) { [playerId] = true };
+    if (turnOrder.All(id => passed.ContainsKey(id) && passed[id]))
+        return null; // All passed — caller should resolve top of stack
+    return new ChainWindow(passed);
+}
 
     // Opens a fresh chain window after a new card is added to the stack (resets all pass flags).
     public static ChainWindow Open() => new(new Dictionary<int, bool>());
