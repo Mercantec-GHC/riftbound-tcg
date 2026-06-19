@@ -1,3 +1,5 @@
+using riftbound_tcg.Core.Cards;
+
 namespace riftbound_tcg.Core.Effects;
 
 public sealed record StackItem(
@@ -5,7 +7,7 @@ public sealed record StackItem(
     string CardId,
     string CardName,
     int PlayerId,
-    Cards.Effect Effect,
+    CardEffectDefinition Effect,
     string? TargetUnitId,
     string? TargetLaneId);
 

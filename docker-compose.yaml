@@ -48,12 +48,12 @@ services:
 
   api:
     build:
-      context: ./riftbound-tcg.Server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./riftbound-tcg.Server/Dockerfile
     ports:
       - "8084:8080"
     environment:
-      - DATABASE_URL=postgres://app:secret@db:5432/app
+      - ConnectionStrings__riftbound=Host=db;Port=5432;Username=${POSTGRES__USER};Password=${POSTGRES__PASSWORD};Database=${POSTGRES__DB}
     depends_on:
       db:
         condition: service_healthy
@@ -80,8 +80,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    environment:
+      - API_UPSTREAM=http://api:8080
     ports:
       - "8080:8080"
+    depends_on:
+      - api
     networks:
       - backend
   

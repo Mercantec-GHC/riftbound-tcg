@@ -1,5 +1,6 @@
 using riftbound_tcg.Core.Cards;
 using riftbound_tcg.Core.Effects;
+using riftbound_tcg.Core.GameState;
 using riftbound_tcg.Engine.EffectResolver;
 using riftbound_tcg.Engine.RulesEngine;
 
@@ -9,7 +10,8 @@ public static class GameApi
 {
     public static IEndpointRouteBuilder MapGameEndpoints(this IEndpointRouteBuilder app)
     {
-        var api = app.MapGroup("/api/game");
+        var api = app.MapGroup("/api/game")
+            .WithTags("Game Rules");
 
         // Returns the spell subtype and whether the card has an on-play effect trigger.
         api.MapPost("/classify-card", (CardDefinition card) =>
@@ -42,7 +44,7 @@ public static class GameApi
         .WithSummary("Resolve the top item of the effect stack (LIFO). Returns updated players and battlefields.");
 
         // Records a player passing their chain window priority.
-        // Returns the updated chain window, or null if all players have passed (stack should resolve).
+        // Returns null for UpdatedChainWindow when all players have passed (stack should resolve).
         api.MapPost("/pass-chain-window", (PassChainWindowRequest req) =>
         {
             var updated = ChainRules.Pass(req.ChainWindow, req.PlayerId, req.TurnOrder);
@@ -67,8 +69,8 @@ public sealed record ValidateChainPlayRequest(
 
 public sealed record ResolveStackTopRequest(
     IReadOnlyList<StackItem> EffectStack,
-    IReadOnlyList<Core.GameState.PlayerState> Players,
-    IReadOnlyList<Core.GameState.BattlefieldState> Battlefields);
+    IReadOnlyList<PlayerState> Players,
+    IReadOnlyList<BattlefieldState> Battlefields);
 
 public sealed record PassChainWindowRequest(
     ChainWindow ChainWindow,

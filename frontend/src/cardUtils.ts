@@ -302,11 +302,15 @@ export function deckValidationMessages(deck: SavedDeck, cards: Card[]) {
   const legend = cards.find((card) => card.id === deck.legendId)
   const champion = cards.find((card) => card.id === deck.championId)
   const runeCards = deck.runeDeckIds.map((id) => cards.find((card) => card.id === id)).filter((card): card is Card => Boolean(card))
+  const mainDeckCards = deck.mainDeckIds.map((id) => cards.find((card) => card.id === id)).filter((card): card is Card => Boolean(card))
 
   if (!legend) messages.push('Choose a Legend.')
   if (!champion) messages.push('Choose a Champion.')
   if (legend && champion && !cardsShareTag(legend, champion)) messages.push('Champion tag must match the selected Legend tag.')
   if (deck.mainDeckIds.length > 40) messages.push('Main deck can contain at most 40 cards.')
+  if (mainDeckCards.some((card) => card.kind === 'legend' || card.kind === 'battlefield' || card.kind === 'rune' || card.kind === 'token')) {
+    messages.push('Main deck can contain units, spells, gear, and champions, but not legends, battlefields, runes, or tokens.')
+  }
   if (deck.battlefieldDeckIds.length < 1 || deck.battlefieldDeckIds.length > 3) messages.push('Battlefield deck must contain 1 to 3 cards.')
   if (deck.runeDeckIds.length < 12) messages.push('Rune deck must contain at least 12 cards.')
   legend?.domains.forEach((domain) => {

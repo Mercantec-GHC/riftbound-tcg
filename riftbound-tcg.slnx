@@ -1,7 +1,5 @@
 <Solution>
-  <Project Path="frontend/frontend.esproj">
-    <Build />
-  </Project>
+  <Folder Name="/frontend/" Path="/frontend/" />
   <Project Path="riftbound-tcg.AppHost/riftbound-tcg.AppHost.csproj" />
   <Project Path="riftbound-tcg.Core/riftbound-tcg.Core.csproj" />
   <Project Path="riftbound-tcg.DomainModels/riftbound-tcg.DomainModels.csproj" />

@@ -2,7 +2,7 @@ export type Domain = 'Fury' | 'Calm' | 'Mind' | 'Body' | 'Chaos' | 'Order'
 export type CardKind = 'unit' | 'spell' | 'gear' | 'champion' | 'legend' | 'battlefield' | 'token' | 'rune'
 export type EffectType = 'damage' | 'draw' | 'buff' | 'rally'
 export type SpellSubtype = 'action' | 'reaction'
-export type Page = 'home' | 'game' | 'cards' | 'decks' | 'deck-list'
+export type Page = 'home' | 'online' | 'cards' | 'decks' | 'deck-list' | 'account' | 'admin'
 
 export type Effect = {
   type: EffectType
@@ -21,6 +21,7 @@ export type StackItem = {
 
 export type Card = {
   id: string
+  catalogId?: string
   name: string
   kind: CardKind
   tags: string[]
@@ -70,6 +71,7 @@ export type Player = {
 
 export type Battlefield = {
   id: string
+  catalogId?: string
   name: string
   claim: number
   chosenBy: number

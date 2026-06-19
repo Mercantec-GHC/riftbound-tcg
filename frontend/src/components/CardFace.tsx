@@ -24,9 +24,9 @@ function CardArt({ card, disableHoverPreview }: { card: Card; disableHoverPrevie
   )
 }
 
-export function CardFace({ card, compact = false, disableHoverPreview = false }: { card: Card; compact?: boolean; disableHoverPreview?: boolean }) {
+export function CardFace({ card, compact = false, disableHoverPreview = false, artOnly = false }: { card: Card; compact?: boolean; disableHoverPreview?: boolean; artOnly?: boolean }) {
   const isFullCardImage = /^https?:\/\//i.test(card.image)
-  if (isFullCardImage) {
+  if (artOnly || isFullCardImage) {
     return <CardArt card={card} disableHoverPreview={disableHoverPreview} />
   }
 

@@ -60,7 +60,6 @@ public class SpellClassifierTests
     [Test]
     public void GetSpellSubtype_ReactionCaseSensitive_OnlyMatchesBracketedForm()
     {
-        // Text contains "reaction" but NOT "[Reaction]" — should still be Action
         var card = CardBuilder.Spell()
             .Text("This card has a reaction-like effect when played.")
             .Build();
@@ -93,9 +92,7 @@ public class SpellClassifierTests
     [Test]
     public void HasOnPlayEffect_WhenYouPlayMeCaseInsensitive_ReturnsTrue()
     {
-        var card = CardBuilder.Unit()
-            .Text("WHEN YOU PLAY ME, draw 2.")
-            .Build();
+        var card = CardBuilder.Unit().Text("WHEN YOU PLAY ME, draw 2.").Build();
 
         Assert.That(SpellClassifier.HasOnPlayEffect(card), Is.True);
     }
@@ -103,9 +100,7 @@ public class SpellClassifierTests
     [Test]
     public void HasOnPlayEffect_NoOnPlayTrigger_ReturnsFalse()
     {
-        var card = CardBuilder.Unit()
-            .Text("When I hold, draw 1.")
-            .Build();
+        var card = CardBuilder.Unit().Text("When I hold, draw 1.").Build();
 
         Assert.That(SpellClassifier.HasOnPlayEffect(card), Is.False);
     }
@@ -113,9 +108,7 @@ public class SpellClassifierTests
     [Test]
     public void HasOnPlayEffect_SpellCard_AlwaysReturnsFalse()
     {
-        var card = CardBuilder.Spell()
-            .Text("When you play me, draw 1.")
-            .Build();
+        var card = CardBuilder.Spell().Text("When you play me, draw 1.").Build();
 
         Assert.That(SpellClassifier.HasOnPlayEffect(card), Is.False);
     }
@@ -125,9 +118,7 @@ public class SpellClassifierTests
     [TestCase(CardKind.Token)]
     public void HasOnPlayEffect_ExcludedKinds_ReturnsFalse(CardKind kind)
     {
-        var card = new CardBuilder().Kind(kind)
-            .Text("When you play me, draw 1.")
-            .Build();
+        var card = new CardBuilder().Kind(kind).Text("When you play me, draw 1.").Build();
 
         Assert.That(SpellClassifier.HasOnPlayEffect(card), Is.False);
     }
@@ -137,9 +128,7 @@ public class SpellClassifierTests
     [Test]
     public void CanPlayDuringChainWindow_ReactionSpell_AnyPlayerCanPlay()
     {
-        var card = CardBuilder.Spell()
-            .Text("[Reaction] Counter a spell.")
-            .Build();
+        var card = CardBuilder.Spell().Text("[Reaction] Counter a spell.").Build();
 
         Assert.That(SpellClassifier.CanPlayDuringChainWindow(card, playerId: 1, turnPlayerId: 0), Is.True);
     }
@@ -147,9 +136,7 @@ public class SpellClassifierTests
     [Test]
     public void CanPlayDuringChainWindow_ActionSpell_OnlyTurnPlayerCanPlay()
     {
-        var card = CardBuilder.Spell()
-            .Text("[Action] Deal 3 to a unit.")
-            .Build();
+        var card = CardBuilder.Spell().Text("[Action] Deal 3 to a unit.").Build();
 
         Assert.That(SpellClassifier.CanPlayDuringChainWindow(card, playerId: 0, turnPlayerId: 0), Is.True);
         Assert.That(SpellClassifier.CanPlayDuringChainWindow(card, playerId: 1, turnPlayerId: 0), Is.False);
