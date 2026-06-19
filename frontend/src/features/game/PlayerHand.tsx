@@ -26,11 +26,11 @@ export function PlayerHand({
             draggable={!game.passShield && game.stage === 'playing' && game.turnPhase === 'main'}
             key={`${card.id}-${index}`}
             type="button"
-            onDragStart={(event) => dragData(event, { type: 'card', handIndex: index })}
+            onDragStart={(event) => dragData(event, { type: 'card', handIndex: index, playerId: activePlayer.id })}
             onClick={() =>
               setGame((state) => ({
                 ...state,
-                selectedCard: { player: state.turnPlayerId, handIndex: index },
+                selectedCard: { player: activePlayer.id, handIndex: index },
                 selectedUnit: null,
               }))
             }

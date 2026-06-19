@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using riftbound_tcg.Engine.RulesEngine;
-using riftbound_tcg.Server;
+using RiftboundTcg.Server;
 using System.Security.Cryptography;
 using System.Text;
 

@@ -588,7 +588,7 @@ export function summonChampion(state: GameState): GameState {
 export function handleDrop(state: GameState, payload: DragPayload, laneId?: string, unitId?: string): GameState {
   if (payload.type === 'champion') return laneId || unitId ? state : summonChampion(state)
   if (payload.type === 'card') {
-    const withSelection = { ...state, selectedCard: { player: state.turnPlayerId, handIndex: payload.handIndex }, selectedUnit: null }
+    const withSelection = { ...state, selectedCard: { player: payload.playerId, handIndex: payload.handIndex }, selectedUnit: null }
     if (unitId) return playCard(withSelection, undefined, unitId)
     return playCard(withSelection, laneId)
   }

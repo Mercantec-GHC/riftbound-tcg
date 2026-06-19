@@ -83,7 +83,7 @@ export type Battlefield = {
 }
 
 export type DragPayload =
-  | { type: 'card'; handIndex: number }
+  | { type: 'card'; handIndex: number; playerId: number }
   | { type: 'champion' }
   | { type: 'unit'; unitId: string }
 

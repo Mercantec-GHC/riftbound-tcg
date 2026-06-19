@@ -62,7 +62,7 @@ public static class StateBuilder
             ChampionSummoned: false,
             BattlefieldId: "field-0");
 
-    public static UnitState Unit(string uid, int owner, int might = 3, int damage = 0) =>
+    public static UnitState Unit(string uid, int owner, int damage = 0) =>
         new(
             Uid: uid,
             CardId: $"card-{uid}",

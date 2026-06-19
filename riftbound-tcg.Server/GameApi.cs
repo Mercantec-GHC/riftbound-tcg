@@ -4,7 +4,7 @@ using riftbound_tcg.Core.GameState;
 using riftbound_tcg.Engine.EffectResolver;
 using riftbound_tcg.Engine.RulesEngine;
 
-namespace riftbound_tcg.Server;
+namespace RiftboundTcg.Server;
 
 public static class GameApi
 {
