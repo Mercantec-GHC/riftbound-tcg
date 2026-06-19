@@ -53,7 +53,7 @@ services:
     ports:
       - "8084:8080"
     environment:
-      - DATABASE_URL=postgres://app:secret@db:5432/app
+      - ConnectionStrings__riftbound=Host=db;Port=5432;Username=${POSTGRES__USER};Password=${POSTGRES__PASSWORD};Database=${POSTGRES__DB}
     depends_on:
       db:
         condition: service_healthy
