@@ -16,14 +16,13 @@ export function AccountPage({
   onUpdateMe: (request: UpdateUserRequest) => Promise<ApiUserProfile>
 }) {
   const deckApi = useMemo(() => createDecksApi(apiClient), [apiClient])
-  const [displayName, setDisplayName] = useState(session?.user.displayName ?? '')
+  const [displayNameDraft, setDisplayNameDraft] = useState<{ userId: string, value: string } | null>(null)
   const [browseDecks, setBrowseDecks] = useState<ApiBrowseDeck[]>([])
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('Manage your profile and active online decks.')
-
-  useEffect(() => {
-    setDisplayName(session?.user.displayName ?? '')
-  }, [session?.user.displayName])
+  const displayName = displayNameDraft && displayNameDraft.userId === session?.user.id
+    ? displayNameDraft.value
+    : (session?.user.displayName ?? '')
 
   useEffect(() => {
     if (!session) return
@@ -40,8 +39,8 @@ export function AccountPage({
 
   async function saveProfile() {
     try {
-      const user = await onUpdateMe({ displayName: displayName.trim() || session?.user.displayName })
-      setDisplayName(user.displayName)
+      await onUpdateMe({ displayName: displayName.trim() || session?.user.displayName })
+      setDisplayNameDraft(null)
       setStatus('Profile updated.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Could not update profile.')
@@ -112,7 +111,7 @@ export function AccountPage({
           </label>
           <label>
             Display name
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+            <input value={displayName} onChange={(event) => setDisplayNameDraft({ userId: session.user.id, value: event.target.value })} />
           </label>
           <button type="button" onClick={saveProfile}>Save profile</button>
         </section>
