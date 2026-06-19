@@ -45,15 +45,6 @@ PostgreSQL
 - ASP.NET Core with C#
 - Redis (cache)
 
-### Development Admin
-
-The server seeds a local development admin account for card catalog imports:
-
-- Email: `admin@riftbound.local`
-- Password: `ChangeMe123!`
-
-Override these with `Admin:Email`, `Admin:Password`, and `Admin:DisplayName` in local configuration before using non-local environments.
-
 ### Database
 
 - PostgreSQL

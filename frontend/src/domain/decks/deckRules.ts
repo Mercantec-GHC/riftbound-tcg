@@ -8,7 +8,7 @@ export type SharedDeckFilters = {
 }
 
 export function isDeckBuilderMainDeckCard(card: Card) {
-  return card.kind !== 'legend' && (isMainDeckCard(card) || card.kind === 'champion')
+  return isMainDeckCard(card) || card.kind === 'champion'
 }
 
 export function isSharedDeck(value: unknown): value is SharedDeck {

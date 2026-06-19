@@ -1,11 +1,17 @@
+import type { Player, SetupState } from '../../models'
+
 export function HomePage({
+  activePlayer,
   cardCount,
   savedDeckCount,
+  setup,
   onNavigate,
 }: {
+  activePlayer: Player
   cardCount: number
   savedDeckCount: number
-  onNavigate: (page: 'online' | 'cards' | 'decks' | 'deck-list') => void
+  setup: SetupState
+  onNavigate: (page: 'game' | 'cards' | 'decks' | 'deck-list') => void
 }) {
   return (
     <section className="hero-panel frontpage">
@@ -13,11 +19,12 @@ export function HomePage({
         <p className="eyebrow">fan-made multiplayer tabletop prototype</p>
         <h1>Riftbound Baybeeeee</h1>
         <p>
-          Manage API-backed cards and decks, then enter online matchmaking with saved account data.
+          Play the hot-seat prototype, manage imported Riftbound cards, or browse the cached card library without
+          cramming everything onto one giant page.
         </p>
         <div className="button-row">
-          <button type="button" onClick={() => onNavigate('online')}>
-            Online battle
+          <button type="button" onClick={() => onNavigate('game')}>
+            Play game
           </button>
           <button type="button" onClick={() => onNavigate('cards')}>
             Open card viewer
@@ -32,11 +39,11 @@ export function HomePage({
       </div>
       <div className="home-stats">
         <article className="player">
-          <span>Mode</span>
-          <strong>API</strong>
+          <span>Players</span>
+          <strong>{setup.playerCount}</strong>
         </article>
         <article className="player">
-          <span>Cards</span>
+          <span>Cached cards</span>
           <strong>{cardCount}</strong>
         </article>
         <article className="player">
@@ -44,8 +51,8 @@ export function HomePage({
           <strong>{savedDeckCount}</strong>
         </article>
         <article className="player">
-          <span>Hot-seat</span>
-          <strong>Archived</strong>
+          <span>Active turn</span>
+          <strong>{activePlayer.name}</strong>
         </article>
       </div>
     </section>

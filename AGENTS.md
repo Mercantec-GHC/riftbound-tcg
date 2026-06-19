@@ -168,15 +168,13 @@ The backend should:
 - Reject illegal actions clearly.
 - Rebuild matches from snapshots and events when needed.
 
+Recommended active match persistence model:
 
-When changes have been made to the backend API and the api is actively running then to make the changes come through you must use the aspire resource command to rebuild the resource.
-The command is as follows:
-
-```bash
-aspire resource server rebuild
+```text
+In-memory active state
++ PostgreSQL append-only event log
++ periodic match snapshots
 ```
-
-
 
 ## PostgreSQL Guidelines
 
