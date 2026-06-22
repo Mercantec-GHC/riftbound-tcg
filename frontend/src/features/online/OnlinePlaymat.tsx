@@ -81,12 +81,43 @@ function OnlineBattlefieldLane({ cardsById, field }: { cardsById: Map<string, Ca
   )
 }
 
-function OnlineHandZone({ isViewer, player }: { isViewer: boolean; player: Player }) {
+function OnlineHandZone({
+  isViewer,
+  player,
+  mulliganSelection,
+}: {
+  isViewer: boolean
+  player: Player
+  mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
+}) {
   if (!isViewer) {
     return (
       <div className="hidden-hand" aria-label={`${player.name} hidden hand`}>
         <strong>{player.hand.length}</strong>
         <span>cards in hand</span>
+      </div>
+    )
+  }
+
+  if (mulliganSelection) {
+    return (
+      <div className="hand online-hand">
+        {player.hand.map((card, index) => {
+          const isSelected = mulliganSelection.selectedIndexes.includes(index)
+          return (
+            <button
+              type="button"
+              key={`${card.id}-${index}`}
+              className={`online-hand-card-button ${isSelected ? 'selected' : ''}`.trim()}
+              onClick={() => mulliganSelection.onToggle(index)}
+              aria-pressed={isSelected}
+              title={isSelected ? `Deselect ${card.name}` : `Select ${card.name} to mulligan`}
+            >
+              <ReadOnlyArtCard card={card} className="online-hand-card" />
+            </button>
+          )
+        })}
+        {player.hand.length === 0 && <span className="no-runes">No cards in hand</span>}
       </div>
     )
   }
@@ -116,7 +147,19 @@ function ReadOnlyRunePool({ player }: { player: Player }) {
   )
 }
 
-function OnlinePlayerMat({ isViewer, player, placement, victoryScore }: { isViewer: boolean; player: Player; placement: 'opponent' | 'viewer' | 'shared'; victoryScore: number }) {
+function OnlinePlayerMat({
+  isViewer,
+  player,
+  placement,
+  victoryScore,
+  mulliganSelection,
+}: {
+  isViewer: boolean
+  player: Player
+  placement: 'opponent' | 'viewer' | 'shared'
+  victoryScore: number
+  mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
+}) {
   return (
     <section className={`online-player-mat ${isViewer ? 'viewer-player-mat' : ''} ${placement}-player-mat`.trim()}>
       <PlayerVictoryTrack player={player} reverse={placement === 'opponent'} victoryScore={victoryScore} />
@@ -172,7 +215,7 @@ function OnlinePlayerMat({ isViewer, player, placement, victoryScore }: { isView
 
           <section className="mat-zone hand-zone">
             <span className="zone-label">Hand</span>
-            <OnlineHandZone isViewer={isViewer} player={player} />
+            <OnlineHandZone isViewer={isViewer} player={player} mulliganSelection={isViewer ? mulliganSelection : undefined} />
           </section>
         </div>
       </div>
@@ -206,7 +249,17 @@ function BattlefieldZone({ cardsById, game }: { cardsById: Map<string, Card>; ga
   )
 }
 
-export function OnlinePlaymat({ cards, game, viewerPlayerId }: { cards: Card[]; game: GameState; viewerPlayerId: number }) {
+export function OnlinePlaymat({
+  cards,
+  game,
+  viewerPlayerId,
+  mulliganSelection,
+}: {
+  cards: Card[]
+  game: GameState
+  viewerPlayerId: number
+  mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
+}) {
   const cardsById = new Map(cards.map((card) => [card.id, card]))
   const hydratedGame: GameState = {
     ...game,
@@ -223,7 +276,15 @@ export function OnlinePlaymat({ cards, game, viewerPlayerId }: { cards: Card[]; 
       <section className="online-shared-playmat duel-playmat">
         {opponent && <OnlinePlayerMat isViewer={false} placement="opponent" player={opponent} victoryScore={hydratedGame.victoryScore} />}
         <BattlefieldZone cardsById={cardsById} game={hydratedGame} />
-        {viewer && <OnlinePlayerMat isViewer placement="viewer" player={viewer} victoryScore={hydratedGame.victoryScore} />}
+        {viewer && (
+          <OnlinePlayerMat
+            isViewer
+            placement="viewer"
+            player={viewer}
+            victoryScore={hydratedGame.victoryScore}
+            mulliganSelection={mulliganSelection}
+          />
+        )}
       </section>
     )
   }
@@ -235,7 +296,14 @@ export function OnlinePlaymat({ cards, game, viewerPlayerId }: { cards: Card[]; 
 
       <section className="online-player-mats" aria-label="Player play spaces">
         {orderedPlayers.map((player) => (
-          <OnlinePlayerMat isViewer={player.id === viewerPlayerId} key={player.id} placement="shared" player={player} victoryScore={hydratedGame.victoryScore} />
+          <OnlinePlayerMat
+            isViewer={player.id === viewerPlayerId}
+            key={player.id}
+            placement="shared"
+            player={player}
+            victoryScore={hydratedGame.victoryScore}
+            mulliganSelection={player.id === viewerPlayerId ? mulliganSelection : undefined}
+          />
         ))}
       </section>
     </section>

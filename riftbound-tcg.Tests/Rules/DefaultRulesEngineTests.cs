@@ -52,7 +52,7 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void mulligan_progresses_to_next_player()
+    public void mulligan_stays_in_mulligan_stage_until_all_players_confirm()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
@@ -61,7 +61,7 @@ public class DefaultRulesEngineTests
 
         Assert.That(result.Accepted, Is.True);
         Assert.That(result.State.SequenceNumber, Is.EqualTo(1));
-        Assert.That(result.State.State["activePlayer"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(result.State.Stage, Is.EqualTo("mulligan"));
     }
 
     [Test]
@@ -140,14 +140,36 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void second_player_cannot_mulligan_before_first_player_confirms()
+    public void both_players_can_mulligan_independently_without_waiting_for_each_other()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
 
-        var actions = engine.GetLegalActions(state, 1);
+        var actionsForSecondPlayerBeforeFirstConfirms = engine.GetLegalActions(state, 1);
+        Assert.That(actionsForSecondPlayerBeforeFirstConfirms.Select(action => action.Type), Contains.Item("confirm-mulligan"));
 
-        Assert.That(actions.Select(action => action.Type), Has.None.EqualTo("confirm-mulligan"));
+        var afterSecondPlayerConfirms = engine.ApplyAction(
+            state,
+            new EngineGameAction(1, "confirm-mulligan", new Dictionary<string, object?>()),
+            0);
+
+        Assert.That(afterSecondPlayerConfirms.Accepted, Is.True);
+        Assert.That(afterSecondPlayerConfirms.State.Stage, Is.EqualTo("mulligan"));
+
+        var firstPlayerActionsAfter = engine.GetLegalActions(afterSecondPlayerConfirms.State, 0);
+        Assert.That(firstPlayerActionsAfter.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+    }
+
+    [Test]
+    public void player_cannot_confirm_mulligan_twice()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var firstConfirm = engine.ApplyAction(state, new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?>()), 0);
+        var actionsAfter = engine.GetLegalActions(firstConfirm.State, 0);
+
+        Assert.That(actionsAfter.Select(action => action.Type), Has.None.EqualTo("confirm-mulligan"));
     }
 
     [Test]

@@ -32,6 +32,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [match, setMatch] = useState<MatchSnapshot | null>(null)
   const [state, setState] = useState<GameState | null>(null)
   const [legalActions, setLegalActions] = useState<LegalAction[]>([])
+  const [mulliganHandIndexes, setMulliganHandIndexes] = useState<number[]>([])
   const [events, setEvents] = useState<MatchEvent[]>([])
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
   const [status, setStatus] = useState('Create or join a lobby, or use quick queue for 1v1.')
@@ -49,6 +50,8 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     ? selectedBattlefieldId
     : selectedDeck?.battlefieldDeckIds[0] ?? ''
   const playerId = match?.players.find((player) => player.userId === session?.user.id)?.playerId ?? 0
+  const isMulliganTurn =
+    state?.stage === 'mulligan' && !(state.mulliganConfirmedPlayerIds ?? []).includes(playerId)
   const currentLobbyPlayer = lobby?.players.find((player) => player.userId === session?.user.id) ?? null
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
@@ -140,8 +143,8 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       setState(nextState)
       setMatch((current) => current ? { ...current, state: nextState, sequenceNumber } : current)
     })
-    connection.on('match.legalActions', (_matchId: string, nextPlayerId: number, actions: LegalAction[]) => {
-      if (nextPlayerId === playerId) setLegalActions(actions)
+    connection.on('match.legalActions', (_matchId: string, _nextPlayerId: number, actions: LegalAction[]) => {
+      setLegalActions(actions)
     })
     connection.on('match.eventAppended', (_matchId: string, event: MatchEvent) => {
       setEvents((current) => [event, ...current].slice(0, 20))
@@ -304,10 +307,19 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       actionId: action.id,
       type: action.type,
       playerId: action.playerId,
-      payload: action.type === 'confirm-mulligan' ? { handIndexes: [] } : {},
+      payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : {},
       expectedSequenceNumber: match.sequenceNumber,
     })
+    setMulliganHandIndexes([])
     await connection.invoke('RequestLegalActions', match.id, action.playerId)
+  }
+
+  function toggleMulliganHandIndex(index: number) {
+    setMulliganHandIndexes((current) => {
+      if (current.includes(index)) return current.filter((item) => item !== index)
+      if (current.length >= 2) return current
+      return [...current, index]
+    })
   }
 
   function toggleAllowedMode(mode: GameMode) {
@@ -476,11 +488,21 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 </article>
               ))}
             </div>
-            <OnlinePlaymat cards={cards} game={state} viewerPlayerId={playerId} />
+            <OnlinePlaymat
+              cards={cards}
+              game={state}
+              viewerPlayerId={playerId}
+              mulliganSelection={
+                isMulliganTurn ? { selectedIndexes: mulliganHandIndexes, onToggle: toggleMulliganHandIndex } : undefined
+              }
+            />
           </section>
 
           <aside className="online-actions">
             <h3>Actions</h3>
+            {isMulliganTurn && (
+              <p>Select up to 2 cards in your hand to exchange ({mulliganHandIndexes.length}/2 selected).</p>
+            )}
             {legalActions.length === 0 && <p>No legal actions for your seat right now.</p>}
             {legalActions.map((action) => (
               <button key={action.id} type="button" onClick={() => void submitAction(action)}>

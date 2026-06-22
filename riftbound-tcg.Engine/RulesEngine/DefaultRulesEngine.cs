@@ -78,7 +78,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["hasPassedFocusByPlayer"] = new JsonObject(),
             ["scoredBattlefieldIdsThisTurn"] = new JsonObject(),
             ["firstTurnCompletedByPlayer"] = new JsonObject(),
-            ["mulliganPlayerIndex"] = 0,
+            ["mulliganConfirmedPlayerIds"] = new JsonArray(),
             ["activeShowdown"] = null,
             ["activeCombat"] = null,
             ["selectedCard"] = null,
@@ -101,8 +101,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var stage = state.State["stage"]?.GetValue<string>() ?? state.Stage;
         var turnPlayerId = state.State["turnPlayerId"]?.GetValue<int>() ?? 0;
-        var mulliganPlayerIndex = state.State["mulliganPlayerIndex"]?.GetValue<int>() ?? 0;
-        var mulliganPlayerId = state.State["turnOrder"]?.AsArray().ElementAtOrDefault(mulliganPlayerIndex)?.GetValue<int>() ?? -1;
+        var mulliganConfirmedPlayerIds = state.State["mulliganConfirmedPlayerIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
 
         if (stage == "game-over")
         {
@@ -111,7 +110,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var actions = new List<EngineLegalAction> { new("concede", "concede", "Concede", playerId) };
 
-        if (stage == "mulligan" && mulliganPlayerId == playerId)
+        if (stage == "mulligan" && !mulliganConfirmedPlayerIds.Contains(playerId))
         {
             actions.Add(new("confirm-mulligan", "confirm-mulligan", "Confirm mulligan", playerId));
         }
@@ -182,8 +181,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private static JsonObject ConfirmMulligan(JsonObject state, int playerId, IReadOnlyList<int> handIndexes)
     {
         var order = state["turnOrder"]!.Deserialize<int[]>(JsonOptions) ?? [];
-        var index = state["mulliganPlayerIndex"]?.GetValue<int>() ?? 0;
-        if (order.ElementAtOrDefault(index) != playerId)
+        var confirmed = state["mulliganConfirmedPlayerIds"]!.Deserialize<int[]>(JsonOptions) ?? [];
+        if (confirmed.Contains(playerId))
         {
             return state;
         }
@@ -216,16 +215,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return player;
         });
 
-        var nextIndex = index + 1;
-        if (nextIndex >= order.Length)
+        var nextConfirmed = confirmed.Append(playerId).ToArray();
+        state["mulliganConfirmedPlayerIds"] = ToArray(nextConfirmed);
+        if (order.All(nextConfirmed.Contains))
         {
             state["stage"] = "playing";
-            state["activePlayer"] = state["turnPlayerId"]?.GetValue<int>() ?? order[0];
-        }
-        else
-        {
-            state["mulliganPlayerIndex"] = nextIndex;
-            state["activePlayer"] = order[nextIndex];
+            state["activePlayer"] = state["turnPlayerId"]?.GetValue<int>() ?? order.ElementAtOrDefault(0);
         }
 
         return AddLog(state, $"{PlayerName(state, playerId)} confirmed mulligan.");
