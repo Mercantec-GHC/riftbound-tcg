@@ -61,7 +61,6 @@ function ManualTools({ game, setGame }: { game: GameState; setGame: Dispatch<Set
       <div className="button-row">
         <button type="button" onClick={() => setGame((state) => applyManualAction(state, { type: 'adjust-points', playerId: state.turnPlayerId, amount: 1 }))}>+1 point</button>
         <button type="button" onClick={() => setGame((state) => applyManualAction(state, { type: 'adjust-points', playerId: state.turnPlayerId, amount: -1 }))}>-1 point</button>
-        <button type="button" onClick={() => setGame((state) => applyManualAction(state, { type: 'draw', playerId: state.turnPlayerId, amount: 1 }))}>Draw 1</button>
         <button type="button" disabled={!selectedUnitId} onClick={() => selectedUnitId && setGame((state) => applyManualAction(state, { type: 'ready-unit', unitId: selectedUnitId }))}>Ready unit</button>
         <button type="button" disabled={!selectedUnitId} onClick={() => selectedUnitId && setGame((state) => applyManualAction(state, { type: 'exhaust-unit', unitId: selectedUnitId }))}>Exhaust unit</button>
         <button type="button" disabled={!selectedUnitId} onClick={() => selectedUnitId && setGame((state) => applyManualAction(state, { type: 'damage-unit', unitId: selectedUnitId, amount: 1 }))}>+1 damage</button>
