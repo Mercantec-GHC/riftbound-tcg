@@ -20,7 +20,6 @@ import { randomId } from '../../../shared/utils/randomId'
 
 export type ManualAction =
   | { type: 'adjust-points'; playerId: number; amount: number }
-  | { type: 'draw'; playerId: number; amount: number }
   | { type: 'ready-unit' | 'exhaust-unit' | 'kill-unit' | 'recall-unit'; unitId: string }
   | { type: 'damage-unit'; unitId: string; amount: number }
   | { type: 'set-controller'; battlefieldId: string; controllerId: number | null }
@@ -210,7 +209,7 @@ export function confirmMulligan(state: GameState, playerId: number, handIndexes:
   })
   const nextIndex = state.mulliganPlayerIndex + 1
   const done = nextIndex >= state.turnOrder.length
-  return addLog(
+  const next = addLog(
     {
       ...state,
       players: nextPlayers,
@@ -222,10 +221,11 @@ export function confirmMulligan(state: GameState, playerId: number, handIndexes:
     },
     `${state.players[playerId]?.name} mulliganed ${indexes.length} card${indexes.length === 1 ? '' : 's'}.`,
   )
+  return done ? autoAdvanceToDraw(next) : next
 }
 
 export function beginGameAfterMulligans(game: GameState) {
-  return { ...game, stage: 'playing', activePlayer: game.turnPlayerId, turnPhase: 'awaken', passShield: true }
+  return autoAdvanceToDraw({ ...game, stage: 'playing', activePlayer: game.turnPlayerId, turnPhase: 'awaken', passShield: true })
 }
 
 function updatePlayer(state: GameState, playerId: number, mapper: (player: Player) => Player): GameState {
@@ -310,6 +310,14 @@ function checkWinners(state: GameState) {
   return addLog({ ...state, stage: 'game-over', winner: leader.id }, `${leader.name} wins the match.`)
 }
 
+function autoAdvanceToDraw(state: GameState): GameState {
+  let updated = state
+  while (updated.stage === 'playing' && (updated.turnPhase === 'awaken' || updated.turnPhase === 'beginning' || updated.turnPhase === 'channel')) {
+    updated = advancePhase(updated)
+  }
+  return updated
+}
+
 export function advancePhase(state: GameState): GameState {
   if (state.stage !== 'playing') return state
   const playerId = state.turnPlayerId
@@ -348,7 +356,7 @@ export function endTurn(state: GameState): GameState {
   const orderIndex = state.turnOrder.indexOf(state.turnPlayerId)
   const nextPlayer = state.turnOrder[(orderIndex + 1) % state.turnOrder.length] ?? 0
   const nextTurn = nextPlayer === state.turnOrder[0] ? state.turnNumber + 1 : state.turnNumber
-  return addLog(
+  const next = addLog(
     {
       ...emptyRunePools(state),
       turnPhase: 'awaken',
@@ -366,6 +374,7 @@ export function endTurn(state: GameState): GameState {
     },
     `${state.players[nextPlayer].name} begins their turn.`,
   )
+  return autoAdvanceToDraw(next)
 }
 
 function canMoveToBattlefield(unit: Unit, field: Battlefield) {
@@ -599,7 +608,6 @@ export function handleDrop(state: GameState, payload: DragPayload, laneId?: stri
 
 export function applyManualAction(state: GameState, action: ManualAction): GameState {
   if (action.type === 'adjust-points') return checkWinners(addLog(updatePlayer(state, action.playerId, (player) => ({ ...player, points: Math.max(0, player.points + action.amount) })), `Adjusted points by ${action.amount}.`))
-  if (action.type === 'draw') return addLog(updatePlayer(state, action.playerId, (player) => draw(player, action.amount)), `${state.players[action.playerId]?.name} manually drew ${action.amount}.`)
   if (action.type === 'ready-unit') return addLog(mapUnit(state, action.unitId, (unit) => ({ ...unit, exhausted: false })), 'Manual ready applied.')
   if (action.type === 'exhaust-unit') return addLog(mapUnit(state, action.unitId, (unit) => ({ ...unit, exhausted: true })), 'Manual exhaust applied.')
   if (action.type === 'damage-unit') return addLog(mapUnit(state, action.unitId, (unit) => ({ ...unit, damage: Math.max(0, unit.damage + action.amount) })), `Manual damage adjusted by ${action.amount}.`)
