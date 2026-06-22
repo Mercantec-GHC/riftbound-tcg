@@ -161,9 +161,99 @@ function OnlinePlayerMat({
   victoryScore: number
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
 }) {
+  const handZone = (
+    <section className="online-hand-zone" aria-label={`${player.name} hand`}>
+      <OnlineHandZone isViewer={isViewer} player={player} mulliganSelection={isViewer ? mulliganSelection : undefined} />
+    </section>
+  )
+
+  const championZone = (
+    <section className="mat-zone champion-zone fixed-card-zone">
+      <span className="zone-label">Champion</span>
+      {player.champion ? <ReadOnlyArtCard card={player.champion} className="online-zone-card" /> : <div className="empty-slot">No champion</div>}
+    </section>
+  )
+
+  const legendZone = (
+    <section className="mat-zone legend-zone fixed-card-zone">
+      <span className="zone-label">Legend</span>
+      {player.legend ? <ReadOnlyArtCard card={player.legend} className="online-zone-card" /> : <div className="empty-slot">No legend</div>}
+    </section>
+  )
+
+  const baseZone = (
+    <section className="mat-zone base-zone flexible-card-zone">
+      <span className="zone-label">Base</span>
+      <div className="unit-row">
+        {player.base.map((unit) => (
+          <ReadOnlyUnit key={unit.uid} unit={unit} />
+        ))}
+        {player.base.length === 0 && <span className="zone-empty-text">No units</span>}
+      </div>
+    </section>
+  )
+
+  const mainDeckZone = (
+    <section className="mat-zone main-deck-zone fixed-card-zone">
+      <span className="zone-label">Main Deck</span>
+      <DeckStack count={player.deck.length} kind="main" />
+    </section>
+  )
+
+  const runeDeckZone = (
+    <section className="mat-zone rune-deck-zone fixed-card-zone">
+      <span className="zone-label">Rune Deck</span>
+      <DeckStack count={player.runeDeck.length} kind="rune" />
+    </section>
+  )
+
+  const runesZone = (
+    <section className="mat-zone runes-zone flexible-card-zone">
+      <span className="zone-label">Runes</span>
+      <ReadOnlyRunePool player={player} />
+    </section>
+  )
+
+  const trashZone = (
+    <section className="mat-zone trash-zone fixed-card-zone">
+      <span className="zone-label">Trash</span>
+      <DeckStack count={player.trash.length} kind="trash" />
+    </section>
+  )
+
+  const matRows = isViewer ? (
+    <>
+      <div className="online-player-zone-row online-player-primary-row">
+        {championZone}
+        {legendZone}
+        {baseZone}
+        {mainDeckZone}
+      </div>
+      <div className="online-player-zone-row online-player-secondary-row">
+        {runeDeckZone}
+        {runesZone}
+        {trashZone}
+      </div>
+    </>
+  ) : (
+    <>
+      <div className="online-player-zone-row online-player-secondary-row">
+        {trashZone}
+        {runesZone}
+        {runeDeckZone}
+      </div>
+      <div className="online-player-zone-row online-player-primary-row">
+        {mainDeckZone}
+        {baseZone}
+        {legendZone}
+        {championZone}
+      </div>
+    </>
+  )
+
   return (
     <section className={`online-player-mat ${isViewer ? 'viewer-player-mat' : ''} ${placement}-player-mat`.trim()}>
-      <PlayerVictoryTrack player={player} reverse={placement === 'opponent'} victoryScore={victoryScore} />
+      <PlayerVictoryTrack player={player} reverse={!isViewer} victoryScore={victoryScore} />
       <div className="online-player-mat-body">
         <header className="online-player-mat-header">
           <div>
@@ -173,51 +263,10 @@ function OnlinePlayerMat({
           <strong>{player.points} pts</strong>
         </header>
 
-        <div className="online-player-zones">
-          <section className="mat-zone champion-zone">
-            <span className="zone-label">Champion</span>
-            {player.champion ? <ReadOnlyArtCard card={player.champion} className="online-zone-card" /> : <div className="empty-slot">No champion</div>}
-          </section>
-
-          <section className="mat-zone legend-zone">
-            <span className="zone-label">Legend</span>
-            {player.legend ? <ReadOnlyArtCard card={player.legend} className="online-zone-card" /> : <div className="empty-slot">No legend</div>}
-          </section>
-
-          <section className="mat-zone base-zone">
-            <span className="zone-label">Base</span>
-            <div className="unit-row">
-              {player.base.map((unit) => (
-                <ReadOnlyUnit key={unit.uid} unit={unit} />
-              ))}
-              {player.base.length === 0 && <span className="zone-empty-text">No units</span>}
-            </div>
-          </section>
-
-          <section className="mat-zone main-deck-zone">
-            <span className="zone-label">Main Deck</span>
-            <DeckStack count={player.deck.length} kind="main" />
-          </section>
-
-          <section className="mat-zone rune-deck-zone">
-            <span className="zone-label">Rune Deck</span>
-            <DeckStack count={player.runeDeck.length} kind="rune" />
-          </section>
-
-          <section className="mat-zone runes-zone">
-            <span className="zone-label">Runes / Rune Pool</span>
-            <ReadOnlyRunePool player={player} />
-          </section>
-
-          <section className="mat-zone trash-zone">
-            <span className="zone-label">Trash</span>
-            <DeckStack count={player.trash.length} kind="trash" />
-          </section>
-
-          <section className="mat-zone hand-zone">
-            <span className="zone-label">Hand</span>
-            <OnlineHandZone isViewer={isViewer} player={player} mulliganSelection={isViewer ? mulliganSelection : undefined} />
-          </section>
+        <div className={`online-player-zones ${isViewer ? 'viewer-player-zones' : 'opponent-player-zones'}`}>
+          {!isViewer && handZone}
+          {matRows}
+          {isViewer && handZone}
         </div>
       </div>
     </section>
