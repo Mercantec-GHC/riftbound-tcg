@@ -1,5 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from 'react'
 import { CardFace } from '../../components/CardFace'
+import { DeckStack } from '../../components/DeckStack'
 import { RunePool } from '../../components/RunePool'
 import { advancePhase, applyManualAction, confirmMulligan, handleDrop, openNextStagedConflict, passFocus, resolveCombat, resolveShowdown } from '../../gameRules'
 import type { Card, GameDeckAssignment, GameState, Player, SavedDeck, SetupState, UserProfile } from '../../models'
@@ -226,10 +227,10 @@ export function GamePage({
               </div>
             </section>
 
-            <section className="mat-zone main-deck-zone"><span className="zone-label">Main Deck</span><div className="deck-stack">{activePlayer.deck.length}</div></section>
-            <section className="mat-zone rune-deck-zone"><span className="zone-label">Rune Deck</span><div className="deck-stack rune-stack">{activePlayer.runeDeck.length}</div></section>
+            <section className="mat-zone main-deck-zone"><span className="zone-label">Main Deck</span><DeckStack count={activePlayer.deck.length} kind="main" /></section>
+            <section className="mat-zone rune-deck-zone"><span className="zone-label">Rune Deck</span><DeckStack count={activePlayer.runeDeck.length} kind="rune" /></section>
             <section className="mat-zone runes-zone"><span className="zone-label">Runes / Rune Pool</span><RunePool player={activePlayer} /></section>
-            <section className="mat-zone trash-zone"><span className="zone-label">Trash</span><div className="deck-stack trash-stack">{activePlayer.trash.length}</div></section>
+            <section className="mat-zone trash-zone"><span className="zone-label">Trash</span><DeckStack count={activePlayer.trash.length} kind="trash" /></section>
 
             <PlayerHand activePlayer={activePlayer} game={game} restart={restart} setGame={setGame} />
           </section>
