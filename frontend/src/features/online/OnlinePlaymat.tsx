@@ -263,7 +263,7 @@ function OnlinePlayerMat({
           <strong>{player.points} pts</strong>
         </header>
 
-        <div className="online-player-zones">
+        <div className={`online-player-zones ${isViewer ? 'viewer-player-zones' : 'opponent-player-zones'}`}>
           {!isViewer && handZone}
           {matRows}
           {isViewer && handZone}

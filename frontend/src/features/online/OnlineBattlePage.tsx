@@ -1,5 +1,6 @@
 import { HubConnectionBuilder, HubConnectionState, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import './OnlineBattlePage.css'
 import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../shared/api'
 import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../shared/api'
 import { gameModes, type Card, type GameMode, type GameState, type SavedDeck } from '../../shared/models'
@@ -379,14 +380,14 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
             </label>
             <div className="lobby-mode-grid">
               {allModes.map((mode) => (
-                <label className="admin-check" key={mode}>
+                <label className="online-check" key={mode}>
                   <input checked={allowedModes.includes(mode)} type="checkbox" onChange={() => toggleAllowedMode(mode)} />
                   {gameModes[mode].label}
                 </label>
               ))}
             </div>
             {isAdmin && (
-              <label className="admin-check">
+              <label className="online-check">
                 <input checked={includeReadyDummy} type="checkbox" onChange={(event) => setIncludeReadyDummy(event.target.checked)} />
                 Add ready dummy player
               </label>
@@ -397,7 +398,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
             <div className="lobby-list">
               {lobbies.length === 0 && <p>No open lobbies.</p>}
               {lobbies.map((item) => (
-                <button className={lobby?.id === item.id ? 'admin-list-item active' : 'admin-list-item'} key={item.id} type="button" onClick={() => void joinLobby(item.id)}>
+                <button className={lobby?.id === item.id ? 'online-list-item active' : 'online-list-item'} key={item.id} type="button" onClick={() => void joinLobby(item.id)}>
                   <strong>{item.name}</strong>
                   <small>{gameModes[item.selectedMode].label} · {item.players.length}/{item.requiredPlayerCount}</small>
                   <span>{item.status}</span>
