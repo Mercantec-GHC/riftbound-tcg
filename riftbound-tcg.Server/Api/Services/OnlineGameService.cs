@@ -1499,7 +1499,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
 
     private static CardDto NormalizeCard(CardDto card)
     {
-        var kind = NormalizeKind(card.Kind, card.Supertype);
+        var kind = NormalizeKind(card.Kind, card.Supertype, card.CardType);
         var domain = NormalizeDomain(card.Domain);
         var domains = card.Domains.Count > 0 ? card.Domains.Select(NormalizeDomain).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : [domain];
         var tags = card.Tags.Where(tag => !string.IsNullOrWhiteSpace(tag)).Select(tag => tag.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -1550,26 +1550,25 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             new CardEffectDto("rally", 0));
     }
 
-    private static string NormalizeKind(string? kind, string? supertype = null)
+    private static string NormalizeKind(string? kind, string? supertype = null, string? cardType = null)
     {
         var normalizedKind = (kind ?? string.Empty).Trim().ToLowerInvariant();
         var normalizedSupertype = (supertype ?? string.Empty).Trim().ToLowerInvariant();
+        var normalizedCardType = (cardType ?? string.Empty).Trim().ToLowerInvariant();
         if (normalizedSupertype.Contains("token")) return "token";
-        if (normalizedSupertype.Contains("champion")) return "champion";
-        if (normalizedSupertype.Contains("legend")) return "legend";
-        if (normalizedKind.Contains("rune")) return "rune";
-        if (normalizedKind.Contains("battlefield")) return "battlefield";
-        if (normalizedKind.Contains("champion")) return "champion";
-        if (normalizedKind.Contains("legend")) return "legend";
-        if (normalizedKind.Contains("spell")) return "spell";
-        if (normalizedKind.Contains("gear") || normalizedKind.Contains("equipment") || normalizedKind.Contains("attachment")) return "gear";
-        if (normalizedKind.Contains("token")) return "token";
+        if (normalizedKind.Contains("token") || normalizedCardType.Contains("token")) return "token";
+        if (normalizedKind.Contains("rune") || normalizedCardType.Contains("rune")) return "rune";
+        if (normalizedKind.Contains("battlefield") || normalizedCardType.Contains("battlefield")) return "battlefield";
+        if (normalizedKind.Contains("legend") || normalizedCardType.Contains("legend") || normalizedSupertype.Contains("legend")) return "legend";
+        if (normalizedKind.Contains("champion") || normalizedCardType.Contains("champion") || normalizedSupertype.Contains("champion")) return "champion";
+        if (normalizedKind.Contains("spell") || normalizedCardType.Contains("spell")) return "spell";
+        if (normalizedKind.Contains("gear") || normalizedKind.Contains("equipment") || normalizedKind.Contains("attachment") || normalizedCardType.Contains("gear") || normalizedCardType.Contains("equipment") || normalizedCardType.Contains("attachment")) return "gear";
         return "unit";
     }
 
     private static string EffectiveKind(CardEntity card)
     {
-        return NormalizeKind(card.Kind, card.Supertype);
+        return NormalizeKind(card.Kind, card.Supertype, card.CardType);
     }
 
     private static string[] InferTagsFromName(string name)

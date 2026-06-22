@@ -1,4 +1,4 @@
-import { isMainDeckCard } from '../../cardUtils'
+import { isLegendClassification, isMainDeckCard } from '../../cardUtils'
 import type { Card, SavedDeck, SharedDeck } from '../../models'
 
 export type SharedDeckFilters = {
@@ -8,7 +8,7 @@ export type SharedDeckFilters = {
 }
 
 export function isDeckBuilderMainDeckCard(card: Card) {
-  return card.kind !== 'legend' && (isMainDeckCard(card) || card.kind === 'champion')
+  return !isLegendClassification(card) && (isMainDeckCard(card) || card.kind === 'champion')
 }
 
 export function isSharedDeck(value: unknown): value is SharedDeck {

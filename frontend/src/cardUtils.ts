@@ -47,8 +47,17 @@ export function cloneCard(card: Card): Card {
   }
 }
 
+export function isLegendClassification(card: Card) {
+  return [card.kind, card.cardType, card.supertype ?? '']
+    .some((value) => value.toLowerCase().includes('legend'))
+}
+
 export function isMainDeckCard(card: Card) {
-  return card.kind !== 'champion' && card.kind !== 'legend' && card.kind !== 'battlefield' && card.kind !== 'token' && card.kind !== 'rune'
+  return card.kind !== 'champion'
+    && !isLegendClassification(card)
+    && card.kind !== 'battlefield'
+    && card.kind !== 'token'
+    && card.kind !== 'rune'
 }
 
 export function battlefieldOptionsFromCards(cards: Card[]) {
@@ -160,8 +169,8 @@ function kindFromRaw(card: RiftCodexCard): CardKind {
   if (supertype.includes('token')) return 'token'
   if (type.includes('rune')) return 'rune'
   if (type.includes('battlefield')) return 'battlefield'
+  if (type.includes('legend') || supertype.includes('legend')) return 'legend'
   if (type.includes('champion') || supertype.includes('champion')) return 'champion'
-  if (type.includes('legend')) return 'legend'
   if (type.includes('spell')) return 'spell'
   if (type.includes('gear') || type.includes('equipment') || type.includes('attachment')) return 'gear'
   return 'unit'
@@ -308,7 +317,7 @@ export function deckValidationMessages(deck: SavedDeck, cards: Card[]) {
   if (!champion) messages.push('Choose a Champion.')
   if (legend && champion && !cardsShareTag(legend, champion)) messages.push('Champion tag must match the selected Legend tag.')
   if (deck.mainDeckIds.length > 40) messages.push('Main deck can contain at most 40 cards.')
-  if (mainDeckCards.some((card) => card.kind === 'legend' || card.kind === 'battlefield' || card.kind === 'rune' || card.kind === 'token')) {
+  if (mainDeckCards.some((card) => !isMainDeckCard(card) && !(card.kind === 'champion' && !isLegendClassification(card)))) {
     messages.push('Main deck can contain units, spells, gear, and champions, but not legends, battlefields, runes, or tokens.')
   }
   if (deck.battlefieldDeckIds.length < 1 || deck.battlefieldDeckIds.length > 3) messages.push('Battlefield deck must contain 1 to 3 cards.')

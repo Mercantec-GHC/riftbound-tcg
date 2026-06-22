@@ -106,3 +106,4 @@ nunit-*.xml
 
 
 dozzle/users.*
+/.playwright-cli
