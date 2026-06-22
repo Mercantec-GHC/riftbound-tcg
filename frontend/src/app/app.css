@@ -1570,23 +1570,42 @@ textarea {
 .online-player-zones {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-rows: auto minmax(132px, auto) auto;
-  grid-template-areas:
-    "champion legend deck trash"
-    "base base runes runeDeck"
-    "hand hand hand hand";
-}
-
-.opponent-player-mat .online-player-zones {
-  grid-template-areas:
-    "hand hand hand hand"
-    "deck trash runes runeDeck"
-    "base base champion legend";
+  min-width: 0;
 }
 
 .online-player-zones .mat-zone {
   min-height: 104px;
+}
+
+.online-player-zone-row {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.online-player-zone-row > .mat-zone {
+  box-sizing: border-box;
+  grid-area: auto;
+}
+
+.online-player-primary-row {
+  grid-template-columns: 144px 144px minmax(180px, 1fr) 144px;
+}
+
+.online-player-secondary-row {
+  grid-template-columns: 144px minmax(180px, 1fr) 144px;
+}
+
+.fixed-card-zone {
+  align-content: center;
+  display: grid;
+  justify-items: center;
+  min-width: 144px;
+}
+
+.flexible-card-zone {
+  min-width: 0;
+  overflow: visible;
 }
 
 .online-art-card {
@@ -1621,8 +1640,7 @@ textarea {
 }
 
 .online-player-zones .base-zone,
-.online-player-zones .runes-zone,
-.online-player-zones .hand-zone {
+.online-player-zones .runes-zone {
   min-width: 0;
 }
 
@@ -1656,14 +1674,16 @@ textarea {
 
 .online-hand {
   align-items: start;
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  margin-bottom: 0;
   max-height: none;
   overflow: visible;
 }
 
 .online-hand-card {
+  flex: 0 0 96px;
   max-width: 128px;
 }
 
@@ -1672,6 +1692,7 @@ textarea {
   border: 2px solid transparent;
   border-radius: 10px;
   cursor: pointer;
+  flex: 0 0 100px;
   padding: 0;
 }
 
@@ -1719,6 +1740,16 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  overflow-x: auto;
+}
+
+.online-player-zones .rune-pool {
+  overflow-x: auto;
+}
+
+.online-hand-zone {
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .hidden-hand {
@@ -1815,18 +1846,17 @@ textarea {
       "players";
   }
 
-  .online-player-zones {
+  .online-player-zone-row {
     grid-template-columns: 1fr;
-    grid-template-rows: auto;
-    grid-template-areas:
-      "champion"
-      "legend"
-      "base"
-      "deck"
-      "runeDeck"
-      "runes"
-      "trash"
-      "hand";
+  }
+
+  .fixed-card-zone {
+    min-width: 0;
+  }
+
+  .online-hand {
+    flex-wrap: nowrap;
+    overflow-x: auto;
   }
 
   .online-battlefields-row {
