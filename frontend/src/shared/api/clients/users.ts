@@ -1,6 +1,6 @@
-import type { ApiClient } from './http'
-import { unwrapData } from './http'
-import type { ApiResult, ApiUserProfile, CreateUserRequest, UpdateUserRequest } from './types'
+import type { ApiClient } from '../http'
+import { unwrapData } from '../http'
+import type { ApiResult, ApiUserProfile, CreateUserRequest, UpdateUserRequest } from '../types'
 
 export function createUsersApi(client: ApiClient) {
   return {

@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createDecksApi, type ApiClient, type AuthSession } from '../../api'
+import { createDecksApi, type ApiClient, type AuthSession } from '../../shared/api'
 import {
   blankDeck,
   cardTags,
   cardsShareTag,
   deckValidationMessages,
   normalizeDeck,
-} from '../../cardUtils'
-import { filterAndSortCards, type DeckSort } from '../../domain/cards/cardFilters'
-import { isDeckBuilderMainDeckCard } from '../../domain/decks/deckRules'
-import { schemaVersion, type Card, type Domain, type SavedDeck } from '../../models'
+} from '../../shared/domain/decks/deckUtils'
+import { filterAndSortCards, type DeckSort } from '../../shared/domain/cards/cardFilters'
+import { isDeckBuilderMainDeckCard } from '../../shared/domain/decks/deckRules'
+import { schemaVersion, type Card, type Domain, type SavedDeck } from '../../shared/models'
 import type { DeckTab } from './deckBuilderTypes'
 
 function importableDeckPayload(payload: unknown) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createApiClient, createAuthApi } from '../../api'
-import type { AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest } from '../../api'
+import { createApiClient, createAuthApi } from '../../shared/api'
+import type { AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest } from '../../shared/api'
 
 const refreshTokenKey = 'riftbound-refresh-token-v1'
 

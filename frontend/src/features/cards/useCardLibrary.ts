@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createCardsApi, type ApiClient } from '../../api'
-import { blankCard, type Card } from '../../models'
+import { createCardsApi, type ApiClient } from '../../shared/api'
+import { blankCard, type Card } from '../../shared/models'
 
 const noopCardsChanged = () => undefined
 

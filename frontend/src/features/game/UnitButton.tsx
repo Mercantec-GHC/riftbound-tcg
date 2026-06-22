@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react'
-import { CardFace } from '../../components/CardFace'
-import { handleDrop } from '../../gameRules'
-import type { GameState, Unit } from '../../models'
+import { CardFace } from '../../shared/ui/CardFace'
+import { handleDrop } from './rules/gameRules'
+import type { GameState, Unit } from '../../shared/models'
 import { readDragData, useDragData } from '../../shared/dragDrop'
 
 export function UnitButton({ game, setGame, unit }: { game: GameState; setGame: Dispatch<SetStateAction<GameState>>; unit: Unit }) {

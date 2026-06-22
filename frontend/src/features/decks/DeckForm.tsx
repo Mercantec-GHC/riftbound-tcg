@@ -1,4 +1,4 @@
-import type { Card, SavedDeck } from '../../models'
+import type { Card, SavedDeck } from '../../shared/models'
 
 export function DeckForm({
   deckDraft,

@@ -1,4 +1,3 @@
-import { totalRuneCount } from '../gameRules'
 import type { Player } from '../models'
 import { CardFace } from './CardFace'
 
@@ -15,7 +14,7 @@ export function RunePool({ player }: { player: Player }) {
           <CardFace card={rune} compact />
         </button>
       ))}
-      {totalRuneCount(player) === 0 && <span className="no-runes">No runes</span>}
+      {player.runes.ready.length + player.runes.exhausted.length === 0 && <span className="no-runes">No runes</span>}
     </div>
   )
 }

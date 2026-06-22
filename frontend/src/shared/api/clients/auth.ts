@@ -1,6 +1,6 @@
-import type { ApiClient } from './http'
-import { unwrapData } from './http'
-import type { ApiResult, AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest, ApiUserProfile } from './types'
+import type { ApiClient } from '../http'
+import { unwrapData } from '../http'
+import type { ApiResult, AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest, ApiUserProfile } from '../types'
 
 export function createAuthApi(client: ApiClient) {
   return {

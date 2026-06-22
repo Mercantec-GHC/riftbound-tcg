@@ -1,5 +1,5 @@
-import { CardFace } from '../../components/CardFace'
-import type { Card } from '../../models'
+import { CardFace } from '../../shared/ui/CardFace'
+import type { Card } from '../../shared/models'
 
 export function CardViewerPage({
   cacheStatus,

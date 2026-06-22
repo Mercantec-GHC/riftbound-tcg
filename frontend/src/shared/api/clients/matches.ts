@@ -1,5 +1,5 @@
-import type { ApiClient } from './http'
-import { queryString, unwrapData } from './http'
+import type { ApiClient } from '../http'
+import { queryString, unwrapData } from '../http'
 import type {
   ApiResult,
   CreateMatchRequest,
@@ -10,7 +10,7 @@ import type {
   MatchSummary,
   SubmitActionRequest,
   SubmitActionResponse,
-} from './types'
+} from '../types'
 
 export type MatchListQuery = ListQuery & {
   userId?: string

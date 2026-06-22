@@ -1,6 +1,6 @@
-import { RunePool } from '../../components/RunePool'
-import { readyRuneCount, totalRuneCount } from '../../gameRules'
-import type { GameState } from '../../models'
+import { RunePool } from '../../shared/ui/RunePool'
+import { readyRuneCount, totalRuneCount } from './rules/gameRules'
+import type { GameState } from '../../shared/models'
 
 export function GameHero({ game }: { game: GameState }) {
   return (

@@ -1,6 +1,6 @@
-import type { ApiClient } from './http'
-import { unwrapData } from './http'
-import type { ApiResult, CreateLobbyRequest, Lobby, UpdateLobbyLoadoutRequest, UpdateLobbySettingsRequest } from './types'
+import type { ApiClient } from '../http'
+import { unwrapData } from '../http'
+import type { ApiResult, CreateLobbyRequest, Lobby, UpdateLobbyLoadoutRequest, UpdateLobbySettingsRequest } from '../types'
 
 export function createLobbiesApi(client: ApiClient) {
   return {

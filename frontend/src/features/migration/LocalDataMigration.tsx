@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { createDecksApi, type ApiClient, type AuthSession } from '../../api'
-import { isSavedDeck, normalizeDeck } from '../../cardUtils'
-import { customCardsKey, savedDecksKey, type SavedDeck } from '../../models'
+import { createDecksApi, type ApiClient, type AuthSession } from '../../shared/api'
+import { isSavedDeck, normalizeDeck } from '../../shared/domain/decks/deckUtils'
+import { customCardsKey, savedDecksKey, type SavedDeck } from '../../shared/models'
 
 const migrationCompleteKey = 'riftbound-api-migration-complete-v1'
 

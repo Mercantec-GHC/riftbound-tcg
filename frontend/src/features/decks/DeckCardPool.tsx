@@ -1,7 +1,7 @@
-import { CardFace } from '../../components/CardFace'
-import type { DeckSort } from '../../domain/cards/cardFilters'
-import { cardsShareTag } from '../../cardUtils'
-import { domains, type Card, type Domain, type SavedDeck } from '../../models'
+import { CardFace } from '../../shared/ui/CardFace'
+import type { DeckSort } from '../../shared/domain/cards/cardFilters'
+import { cardsShareTag } from '../../shared/domain/decks/deckUtils'
+import { domains, type Card, type Domain, type SavedDeck } from '../../shared/models'
 import type { DeckTab } from './deckBuilderTypes'
 
 export function DeckCardPool({

@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react'
-import { orderedPlayerIds, selectedBattlefieldIdsForSetup, validateSetup } from '../../gameRules'
-import { userCanAccessDeck } from '../../domain/decks/deckRules'
-import { gameModes, type Card, type GameDeckAssignment, type GameMode, type SavedDeck, type SetupState, type UserProfile } from '../../models'
+import { orderedPlayerIds, selectedBattlefieldIdsForSetup, validateSetup } from './rules/gameRules'
+import { userCanAccessDeck } from '../../shared/domain/decks/deckRules'
+import { gameModes, type Card, type GameDeckAssignment, type GameMode, type SavedDeck, type SetupState, type UserProfile } from '../../shared/models'
 
 type BattlefieldOption = {
   id: string

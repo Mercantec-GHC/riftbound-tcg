@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { AuthSession, LoginRequest, RegisterRequest } from '../../api'
+import type { AuthSession, LoginRequest, RegisterRequest } from '../../shared/api'
 
 type AuthPanelProps = {
   session: AuthSession | null

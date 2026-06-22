@@ -1,14 +1,14 @@
 export { ApiError, createApiClient, queryString, unwrapData } from './http'
 export type { ApiClient, ApiClientOptions } from './http'
-export { createAdminApi } from './admin'
-export { createCardsApi } from './cards'
-export { createAuthApi } from './auth'
-export { createDecksApi } from './decks'
-export { createLobbiesApi } from './lobbies'
-export { createMatchmakingApi } from './matchmaking'
-export { createMatchesApi } from './matches'
-export { createRealtimeUrl } from './realtime'
-export { createUsersApi } from './users'
+export { createAdminApi } from './clients/admin'
+export { createCardsApi } from './clients/cards'
+export { createAuthApi } from './clients/auth'
+export { createDecksApi } from './clients/decks'
+export { createLobbiesApi } from './clients/lobbies'
+export { createMatchmakingApi } from './clients/matchmaking'
+export { createMatchesApi } from './clients/matches'
+export { createRealtimeUrl } from './clients/realtime'
+export { createUsersApi } from './clients/users'
 export type {
   ApiCard,
   ApiBrowseDeck,
@@ -59,4 +59,4 @@ export type {
   RealtimeConnectionOptions,
   RealtimeMessage,
   RealtimeServerMessage,
-} from './realtime'
+} from './clients/realtime'

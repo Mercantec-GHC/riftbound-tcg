@@ -1,5 +1,5 @@
-import { formatDeckLine } from '../../cardUtils'
-import type { Card, SavedDeck } from '../../models'
+import { formatDeckLine } from '../../shared/domain/decks/deckUtils'
+import type { Card, SavedDeck } from '../../shared/models'
 
 type SelectedDeckSection = {
   title: string

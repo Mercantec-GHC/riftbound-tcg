@@ -1,4 +1,4 @@
-import type { SharedDeck } from '../../models'
+import type { SharedDeck } from '../../shared/models'
 
 export function DeckListPage({
   decks,

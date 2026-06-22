@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ApiError, createAdminApi, createCardsApi, type ApiAdminDeck, type ApiClient, type ApiUserProfile, type RiftCodexImportResult } from '../../api'
-import { blankCard, domains, type Card, type CardKind, type Domain, type EffectType } from '../../models'
+import { ApiError, createAdminApi, createCardsApi, type ApiAdminDeck, type ApiClient, type ApiUserProfile, type RiftCodexImportResult } from '../../shared/api'
+import { blankCard, domains, type Card, type CardKind, type Domain, type EffectType } from '../../shared/models'
 
 type AdminTab = 'users' | 'cards' | 'decks' | 'import'
 

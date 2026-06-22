@@ -1,4 +1,4 @@
-import type { Page } from '../models'
+import type { Page } from '../shared/models'
 
 const pages: { page: Page; label: string }[] = [
   { page: 'home', label: 'Frontpage' },

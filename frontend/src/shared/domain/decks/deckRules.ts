@@ -1,4 +1,4 @@
-import { isLegendClassification, isMainDeckCard } from '../../cardUtils'
+import { isLegendClassification, isMainDeckCard } from '../cards/cardUtils'
 import type { Card, SavedDeck, SharedDeck } from '../../models'
 
 export type SharedDeckFilters = {

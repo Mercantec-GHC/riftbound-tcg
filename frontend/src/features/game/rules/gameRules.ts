@@ -1,4 +1,4 @@
-import { battlefieldOptionsFromCards, cardHasOnPlayEffect, cloneCard, getSpellSubtype, makeDeck, makeRuneDeck } from './cardUtils'
+import { battlefieldOptionsFromCards, cardHasOnPlayEffect, cloneCard, getSpellSubtype, makeDeck, makeRuneDeck } from '../../../shared/domain/cards/cardUtils'
 import {
   defaultSetup,
   gameModes,
@@ -15,8 +15,8 @@ import {
   type SetupState,
   type StackItem,
   type Unit,
-} from './models'
-import { randomId } from './utils/randomId'
+} from '../../../shared/models'
+import { randomId } from '../../../shared/utils/randomId'
 
 export type ManualAction =
   | { type: 'adjust-points'; playerId: number; amount: number }

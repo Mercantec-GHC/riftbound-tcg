@@ -4,8 +4,8 @@ import {
   userProfilesKey,
   type UserProfile,
   type UserStats,
-} from '../../models'
-import { randomId } from '../../utils/randomId'
+} from '../../shared/models'
+import { randomId } from '../../shared/utils/randomId'
 
 const defaultUserId = 'local-user'
 

@@ -1,4 +1,4 @@
-import type { SavedDeck } from '../../models'
+import type { SavedDeck } from '../../shared/models'
 
 export function SavedDecksPanel({
   decks,

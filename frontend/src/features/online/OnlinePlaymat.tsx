@@ -1,6 +1,6 @@
-import { CardFace } from '../../components/CardFace'
-import { DeckStack } from '../../components/DeckStack'
-import type { Battlefield, Card, GameState, Player, Unit } from '../../models'
+import { CardFace } from '../../shared/ui/CardFace'
+import { DeckStack } from '../../shared/ui/DeckStack'
+import type { Battlefield, Card, GameState, Player, Unit } from '../../shared/models'
 
 function hydrateCard<T extends Card>(card: T, cardsById: Map<string, Card>): T {
   if (!card.catalogId) return card

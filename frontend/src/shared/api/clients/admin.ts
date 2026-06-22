@@ -1,6 +1,6 @@
-import type { Card } from '../models'
-import type { ApiClient } from './http'
-import { unwrapData } from './http'
+import type { Card } from '../../models'
+import type { ApiClient } from '../http'
+import { unwrapData } from '../http'
 import type {
   AdminUpdateDeckRequest,
   AdminUpdateUserRequest,
@@ -9,7 +9,7 @@ import type {
   ApiUserProfile,
   CardUpsertResult,
   RiftCodexImportResult,
-} from './types'
+} from '../types'
 
 export function createAdminApi(client: ApiClient) {
   return {

@@ -1,6 +1,6 @@
-import type { ApiClient } from './http'
-import { queryString, unwrapData } from './http'
-import type { ApiBrowseDeck, ApiDeck, ApiResult, ApiSharedDeck, CreateDeckRequest, DeckListQuery, UpdateDeckRequest } from './types'
+import type { ApiClient } from '../http'
+import { queryString, unwrapData } from '../http'
+import type { ApiBrowseDeck, ApiDeck, ApiResult, ApiSharedDeck, CreateDeckRequest, DeckListQuery, UpdateDeckRequest } from '../types'
 
 export function createDecksApi(client: ApiClient) {
   return {

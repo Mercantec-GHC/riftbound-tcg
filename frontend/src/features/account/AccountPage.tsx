@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createDecksApi, type ApiBrowseDeck, type ApiClient, type ApiUserProfile, type AuthSession, type UpdateUserRequest } from '../../api'
-import type { SavedDeck } from '../../models'
+import { createDecksApi, type ApiBrowseDeck, type ApiClient, type ApiUserProfile, type AuthSession, type UpdateUserRequest } from '../../shared/api'
+import type { SavedDeck } from '../../shared/models'
 
 export function AccountPage({
   activeDecks,

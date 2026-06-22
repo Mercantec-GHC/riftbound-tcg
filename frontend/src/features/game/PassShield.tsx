@@ -1,4 +1,4 @@
-import type { Player } from '../../models'
+import type { Player } from '../../shared/models'
 
 export function PassShield({ activePlayer, onReady }: { activePlayer: Player; onReady: () => void }) {
   return (

@@ -1,8 +1,8 @@
 import { HubConnectionBuilder, HubConnectionState, LogLevel, type HubConnection } from '@microsoft/signalr'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../api'
-import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../api'
-import { gameModes, type Card, type GameMode, type GameState, type SavedDeck } from '../../models'
+import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../shared/api'
+import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../shared/api'
+import { gameModes, type Card, type GameMode, type GameState, type SavedDeck } from '../../shared/models'
 import { OnlinePlaymat } from './OnlinePlaymat'
 
 type OnlineBattlePageProps = {

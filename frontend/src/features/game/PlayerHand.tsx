@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
-import { CardFace } from '../../components/CardFace'
-import type { GameState, Player } from '../../models'
+import { CardFace } from '../../shared/ui/CardFace'
+import type { GameState, Player } from '../../shared/models'
 import { useDragData } from '../../shared/dragDrop'
 
 export function PlayerHand({

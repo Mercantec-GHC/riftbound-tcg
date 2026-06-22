@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { UserProfile } from '../../models'
+import type { UserProfile } from '../../shared/models'
 
 export function ProfileSwitcher({
   activeUser,

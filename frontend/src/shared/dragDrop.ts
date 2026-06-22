@@ -1,5 +1,5 @@
-import type { DragPayload } from '../models'
-import { useCardHoverPreview } from '../components/cardHoverPreviewContext'
+import type { DragPayload } from './models'
+import { useCardHoverPreview } from './ui/cardHoverPreviewContext'
 
 export function dragData(event: React.DragEvent, payload: DragPayload) {
   event.dataTransfer.setData('application/json', JSON.stringify(payload))

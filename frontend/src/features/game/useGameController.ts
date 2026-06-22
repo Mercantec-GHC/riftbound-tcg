@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createGameFromSetup, orderedPlayerIds } from '../../gameRules'
-import { defaultSetup, gameModes, type Card, type GameDeckAssignment, type GameState, type SavedDeck, type SetupState, type UserProfile } from '../../models'
+import { createGameFromSetup, orderedPlayerIds } from './rules/gameRules'
+import { defaultSetup, gameModes, type Card, type GameDeckAssignment, type GameState, type SavedDeck, type SetupState, type UserProfile } from '../../shared/models'
 
 function setupForMode(setup: SetupState, mode = setup.mode): SetupState {
   const config = gameModes[mode]

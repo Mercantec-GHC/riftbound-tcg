@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
-import { handleDrop, totalMight } from '../../gameRules'
-import type { Battlefield, GameState } from '../../models'
+import { handleDrop, totalMight } from './rules/gameRules'
+import type { Battlefield, GameState } from '../../shared/models'
 import { readDragData } from '../../shared/dragDrop'
 import { UnitButton } from './UnitButton'
 

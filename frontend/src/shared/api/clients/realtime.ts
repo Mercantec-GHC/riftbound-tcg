@@ -1,5 +1,5 @@
-import type { GameState } from '../models'
-import type { ApiErrorPayload, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket, SubmitActionRequest } from './types'
+import type { GameState } from '../../models'
+import type { ApiErrorPayload, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket, SubmitActionRequest } from '../types'
 
 export type RealtimeClientMessage =
   | { type: 'match.join'; matchId: string; userId: string }

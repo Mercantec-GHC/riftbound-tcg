@@ -1,6 +1,6 @@
-import type { ApiClient } from './http'
-import { unwrapData } from './http'
-import type { ApiResult, JoinMatchmakingRequest, MatchmakingTicket } from './types'
+import type { ApiClient } from '../http'
+import { unwrapData } from '../http'
+import type { ApiResult, JoinMatchmakingRequest, MatchmakingTicket } from '../types'
 
 export function createMatchmakingApi(client: ApiClient) {
   return {
