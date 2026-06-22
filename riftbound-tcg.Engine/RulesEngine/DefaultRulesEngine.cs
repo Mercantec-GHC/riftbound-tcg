@@ -118,7 +118,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         if (stage == "playing" && turnPlayerId == playerId)
         {
             actions.Add(new("advance-phase", "advance-phase", "Advance phase", playerId));
-            actions.Add(new("draw", "draw", "Draw 1", playerId));
+            actions.Add(new("end-turn", "end-turn", "End turn", playerId));
             actions.Add(new("score-point", "score-point", "Score point", playerId));
         }
 
@@ -152,9 +152,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             case "advance-phase":
                 nextState = AdvancePhase(nextState);
                 break;
-            case "draw":
-                nextState = UpdatePlayer(nextState, action.PlayerId, player => Draw(player, 1));
-                nextState = AddLog(nextState, $"{PlayerName(nextState, action.PlayerId)} drew 1.");
+            case "end-turn":
+                nextState = EndCurrentTurn(nextState, action.PlayerId);
                 break;
             case "score-point":
                 nextState = UpdatePlayer(nextState, action.PlayerId, player =>
@@ -223,7 +222,34 @@ public sealed class DefaultRulesEngine : IRulesEngine
             state["activePlayer"] = state["turnPlayerId"]?.GetValue<int>() ?? order.ElementAtOrDefault(0);
         }
 
-        return AddLog(state, $"{PlayerName(state, playerId)} confirmed mulligan.");
+        state = AddLog(state, $"{PlayerName(state, playerId)} confirmed mulligan.");
+        return order.All(nextConfirmed.Contains) ? AutoAdvanceToDraw(state) : state;
+    }
+
+    private static JsonObject AutoAdvanceToDraw(JsonObject state)
+    {
+        while (state["stage"]?.GetValue<string>() == "playing")
+        {
+            var phase = state["turnPhase"]?.GetValue<string>() ?? "awaken";
+            if (phase != "awaken" && phase != "beginning" && phase != "channel")
+            {
+                break;
+            }
+
+            state = AdvancePhase(state);
+        }
+
+        return state;
+    }
+
+    private static JsonObject EndCurrentTurn(JsonObject state, int playerId)
+    {
+        while (state["stage"]?.GetValue<string>() == "playing" && (state["turnPlayerId"]?.GetValue<int>() ?? -1) == playerId)
+        {
+            state = AdvancePhase(state);
+        }
+
+        return state;
     }
 
     private static JsonObject AdvancePhase(JsonObject state)
@@ -237,11 +263,20 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var playerId = state["turnPlayerId"]?.GetValue<int>() ?? 0;
         if (currentPhase == "channel")
         {
+            var firstTurnCompleted = state["firstTurnCompletedByPlayer"]?[playerId.ToString()]?.GetValue<bool>() ?? false;
+            var order = state["turnOrder"]!.Deserialize<int[]>(JsonOptions) ?? [];
+            var firstPlayerId = state["firstPlayerId"]?.GetValue<int>() ?? order.ElementAtOrDefault(0);
+            var lastPlayer = order.Length > 0 ? order[^1] : playerId;
+            var mode = state["mode"]?.GetValue<string>() ?? "";
+            var isSecondPlayer = mode == "duel-1v1" ? playerId != firstPlayerId : playerId == lastPlayer;
+            var extra = !firstTurnCompleted && isSecondPlayer ? 1 : 0;
+            var amount = 2 + extra;
+
             state = UpdatePlayer(state, playerId, player =>
             {
                 var runeDeck = player["runeDeck"]!.AsArray();
                 var ready = player["runes"]!["ready"]!.AsArray();
-                for (var i = 0; i < 2 && runeDeck.Count > 0; i++)
+                for (var i = 0; i < amount && runeDeck.Count > 0; i++)
                 {
                     ready.Add(runeDeck[0]?.DeepClone());
                     runeDeck.RemoveAt(0);
@@ -275,6 +310,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var current = state["turnPlayerId"]?.GetValue<int>() ?? order[0];
         var currentIndex = Array.IndexOf(order, current);
         var next = order[(currentIndex + 1) % order.Length];
+        state["firstTurnCompletedByPlayer"]![current.ToString()] = true;
         state["turnPlayerId"] = next;
         state["activePlayer"] = next;
         state["turnPhase"] = "awaken";
@@ -283,7 +319,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             state["turnNumber"] = (state["turnNumber"]?.GetValue<int>() ?? 1) + 1;
         }
 
-        return AddLog(state, $"{PlayerName(state, next)} begins their turn.");
+        state = AddLog(state, $"{PlayerName(state, next)} begins their turn.");
+        return AutoAdvanceToDraw(state);
     }
 
     private static JsonObject CheckWinners(JsonObject state)

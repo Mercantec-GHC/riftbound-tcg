@@ -38,6 +38,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
   const [status, setStatus] = useState('Create or join a lobby, or use quick queue for 1v1.')
   const connectionRef = useRef<HubConnection | null>(null)
+  const playerIdRef = useRef(0)
 
   const selectedDeckId = deckId || decks[0]?.id || ''
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null
@@ -57,6 +58,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
+
+  useEffect(() => {
+    playerIdRef.current = playerId
+  }, [playerId])
 
   useEffect(() => {
     if (!session) return
@@ -140,9 +145,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       setMatch(nextMatch)
       setState(nextMatch.state)
     })
-    connection.on('match.state', (_matchId: string, nextState: GameState, sequenceNumber: number) => {
+    connection.on('match.state', (matchId: string, nextState: GameState, sequenceNumber: number) => {
       setState(nextState)
       setMatch((current) => current ? { ...current, state: nextState, sequenceNumber } : current)
+      void connection.invoke('RequestLegalActions', matchId, playerIdRef.current)
     })
     connection.on('match.legalActions', (_matchId: string, _nextPlayerId: number, actions: LegalAction[]) => {
       setLegalActions(actions)
