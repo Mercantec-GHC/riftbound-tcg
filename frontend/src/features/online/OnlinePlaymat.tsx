@@ -1,4 +1,5 @@
 import { CardFace } from '../../components/CardFace'
+import { DeckStack } from '../../components/DeckStack'
 import type { Battlefield, Card, GameState, Player, Unit } from '../../models'
 
 function hydrateCard<T extends Card>(card: T, cardsById: Map<string, Card>): T {
@@ -152,12 +153,12 @@ function OnlinePlayerMat({ isViewer, player, placement, victoryScore }: { isView
 
           <section className="mat-zone main-deck-zone">
             <span className="zone-label">Main Deck</span>
-            <div className="deck-stack">{player.deck.length}</div>
+            <DeckStack count={player.deck.length} kind="main" />
           </section>
 
           <section className="mat-zone rune-deck-zone">
             <span className="zone-label">Rune Deck</span>
-            <div className="deck-stack rune-stack">{player.runeDeck.length}</div>
+            <DeckStack count={player.runeDeck.length} kind="rune" />
           </section>
 
           <section className="mat-zone runes-zone">
@@ -167,7 +168,7 @@ function OnlinePlayerMat({ isViewer, player, placement, victoryScore }: { isView
 
           <section className="mat-zone trash-zone">
             <span className="zone-label">Trash</span>
-            <div className="deck-stack trash-stack">{player.trash.length}</div>
+            <DeckStack count={player.trash.length} kind="trash" />
           </section>
 
           <section className="mat-zone hand-zone">

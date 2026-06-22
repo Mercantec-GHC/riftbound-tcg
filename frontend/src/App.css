@@ -702,8 +702,7 @@ button:disabled {
   grid-area: hand;
 }
 
-.empty-slot,
-.deck-stack {
+.empty-slot {
   align-items: center;
   border: 1px dashed rgba(255, 255, 255, 0.32);
   border-radius: 8px;
@@ -825,9 +824,23 @@ button:disabled {
 }
 
 .deck-stack {
+  align-items: center;
+  aspect-ratio: 2.5 / 3.5;
   background: linear-gradient(145deg, #25273a, #0b0d16);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  box-shadow:
+    2px 2px 0 rgba(255, 255, 255, 0.1),
+    5px 5px 0 rgba(0, 0, 0, 0.42);
   color: #ffdc8a;
+  display: flex;
   font-size: 2rem;
+  font-weight: 900;
+  justify-content: center;
+  margin: 0 auto;
+  min-height: 0;
+  text-align: center;
+  width: min(86px, 100%);
 }
 
 .rune-stack {
@@ -836,6 +849,14 @@ button:disabled {
 
 .trash-stack {
   background: linear-gradient(145deg, #3b1825, #0b0d16);
+}
+
+.empty-deck-stack {
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.32);
+  box-shadow: none;
+  color: #c8bddb;
+  font-size: 0.9rem;
 }
 
 .battlefields {
