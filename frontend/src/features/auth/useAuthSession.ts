@@ -59,8 +59,23 @@ export function useAuthSession() {
     return user
   }
 
+  async function uploadAvatar(image: File) {
+    const user = await authApi.uploadAvatar(image)
+    setSession((current) => current ? { ...current, user } : current)
+    setStatus('Profile image updated.')
+    return user
+  }
+
+  async function deleteAvatar() {
+    const user = await authApi.deleteAvatar()
+    setSession((current) => current ? { ...current, user } : current)
+    setStatus('Profile image removed.')
+    return user
+  }
+
   return {
     apiClient,
+    deleteAvatar,
     login,
     logout,
     refresh,
@@ -68,5 +83,6 @@ export function useAuthSession() {
     session,
     status,
     updateMe,
+    uploadAvatar,
   }
 }

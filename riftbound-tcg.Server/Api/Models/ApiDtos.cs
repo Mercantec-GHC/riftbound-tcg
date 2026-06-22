@@ -149,6 +149,7 @@ public sealed record UserDto(
     string Id,
     string Email,
     string DisplayName,
+    string? AvatarImageHash,
     DateTimeOffset CreatedAt,
     UserStatsDto Stats,
     bool IsAdmin,

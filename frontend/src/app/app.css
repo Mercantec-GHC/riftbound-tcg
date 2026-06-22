@@ -86,11 +86,10 @@
 }
 
 .auth-panel {
-  align-items: end;
-  display: grid;
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  grid-template-columns: minmax(150px, 1fr) minmax(130px, 0.8fr) auto auto;
-  max-width: 760px;
 }
 
 .auth-panel.signed-in {
@@ -98,12 +97,93 @@
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
-  grid-template-columns: auto auto auto;
   padding: 8px;
+}
+
+.auth-panel.signed-out {
+  justify-content: flex-end;
 }
 
 .auth-panel small {
   color: #c8bddb;
+}
+
+.user-avatar {
+  align-items: center;
+  background: linear-gradient(135deg, #ff7a45, #ffcc66);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  color: #24110a;
+  display: inline-flex;
+  flex: 0 0 34px;
+  font-weight: 900;
+  height: 34px;
+  justify-content: center;
+  overflow: hidden;
+  width: 34px;
+}
+
+.user-avatar.large {
+  flex-basis: 86px;
+  font-size: 2rem;
+  height: 86px;
+  width: 86px;
+}
+
+.user-avatar img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.auth-page {
+  display: grid;
+  justify-items: center;
+  padding: 36px 0;
+}
+
+.auth-card {
+  background: rgba(8, 12, 24, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  max-width: 460px;
+  padding: 24px;
+  width: min(100%, 460px);
+}
+
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.form-error {
+  color: #ff9b8d;
+  font-weight: 800;
+}
+
+.profile-image-editor {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.file-button {
+  align-items: center;
+  background: linear-gradient(135deg, #ff7a45, #ffcc66);
+  border-radius: 999px;
+  color: #24110a;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 800;
+  padding: 10px 14px;
+}
+
+.file-button input {
+  display: none;
 }
 
 .migration-panel {
@@ -1384,7 +1464,6 @@ textarea {
 
   .auth-panel,
   .auth-panel.signed-in {
-    grid-template-columns: 1fr;
     max-width: none;
     width: 100%;
   }

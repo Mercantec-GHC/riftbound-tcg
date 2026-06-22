@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createDecksApi, type ApiBrowseDeck, type ApiClient, type ApiUserProfile, type AuthSession, type UpdateUserRequest } from '../../shared/api'
 import type { SavedDeck } from '../../shared/models'
+import { UserAvatar } from '../../shared/ui/UserAvatar'
 
 export function AccountPage({
   activeDecks,
   apiClient,
   session,
   onDecksChanged,
+  onDeleteAvatar,
   onUpdateMe,
+  onUploadAvatar,
 }: {
   activeDecks: SavedDeck[]
   apiClient: ApiClient
   session: AuthSession | null
   onDecksChanged: () => Promise<void>
+  onDeleteAvatar: () => Promise<ApiUserProfile>
   onUpdateMe: (request: UpdateUserRequest) => Promise<ApiUserProfile>
+  onUploadAvatar: (image: File) => Promise<ApiUserProfile>
 }) {
   const deckApi = useMemo(() => createDecksApi(apiClient), [apiClient])
   const [displayNameDraft, setDisplayNameDraft] = useState<{ userId: string, value: string } | null>(null)
@@ -44,6 +49,25 @@ export function AccountPage({
       setStatus('Profile updated.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Could not update profile.')
+    }
+  }
+
+  async function uploadAvatar(file: File | undefined) {
+    if (!file) return
+    try {
+      await onUploadAvatar(file)
+      setStatus('Profile image updated.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not update profile image.')
+    }
+  }
+
+  async function removeAvatar() {
+    try {
+      await onDeleteAvatar()
+      setStatus('Profile image removed.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not remove profile image.')
     }
   }
 
@@ -105,6 +129,22 @@ export function AccountPage({
       <div className="admin-grid">
         <section className="admin-panel">
           <h3>Profile</h3>
+          <div className="profile-image-editor">
+            <UserAvatar user={session.user} size="large" />
+            <div className="button-row">
+              <label className="file-button">
+                Upload image
+                <input
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(event) => void uploadAvatar(event.target.files?.[0])}
+                  type="file"
+                />
+              </label>
+              <button type="button" className="secondary-button" onClick={() => void removeAvatar()} disabled={!session.user.avatarImageHash}>
+                Remove image
+              </button>
+            </div>
+          </div>
           <label>
             Email
             <input value={session.user.email} readOnly />

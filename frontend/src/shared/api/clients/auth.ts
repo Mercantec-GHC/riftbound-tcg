@@ -42,5 +42,20 @@ export function createAuthApi(client: ApiClient) {
         body: JSON.stringify(request),
       }))
     },
+
+    async uploadAvatar(image: File): Promise<ApiUserProfile> {
+      const body = new FormData()
+      body.set('image', image)
+      return unwrapData(await client.request<ApiResult<ApiUserProfile>>('/me/avatar', {
+        method: 'POST',
+        body,
+      }))
+    },
+
+    async deleteAvatar(): Promise<ApiUserProfile> {
+      return unwrapData(await client.request<ApiResult<ApiUserProfile>>('/me/avatar', {
+        method: 'DELETE',
+      }))
+    },
   }
 }
