@@ -1043,7 +1043,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         var nextSequence = result.Accepted ? Math.Max(result.State.SequenceNumber, lastEventSequence + 1) : lastEventSequence + 1;
         var now = DateTimeOffset.UtcNow;
         var actionPayload = Serialize(request.Payload ?? new Dictionary<string, object?>());
-        var resultPayload = Serialize(new { result.ResultMessage, result.Status });
+        var resultPayload = BuildResultPayload(result);
 
         var entity = new MatchEventEntity
         {
@@ -1815,6 +1815,20 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             JsonNode.Parse(matchEvent.ActionPayloadJson) ?? new JsonObject(),
             JsonNode.Parse(matchEvent.ResultPayloadJson) ?? new JsonObject(),
             matchEvent.CreatedAt);
+    }
+
+    private static string BuildResultPayload(EngineActionResult result)
+    {
+        var payload = JsonSerializer.SerializeToNode(new { result.ResultMessage, result.Status }, JsonOptions)!.AsObject();
+        if (result.ResultPayload is not null)
+        {
+            foreach (var item in result.ResultPayload)
+            {
+                payload[item.Key] = item.Value?.DeepClone();
+            }
+        }
+
+        return payload.ToJsonString(JsonOptions);
     }
 
     private static MatchmakingTicketDto ToDto(MatchmakingTicketEntity ticket)

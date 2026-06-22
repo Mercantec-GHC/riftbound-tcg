@@ -63,4 +63,5 @@ public sealed record EngineActionResult(
     string Status,
     string ResultMessage,
     EngineMatchState State,
-    IReadOnlyList<EngineLegalAction> LegalActions);
+    IReadOnlyList<EngineLegalAction> LegalActions,
+    JsonObject? ResultPayload = null);
