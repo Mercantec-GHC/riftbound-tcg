@@ -1646,6 +1646,19 @@ textarea {
   max-width: 128px;
 }
 
+.online-hand-card-button {
+  background: none;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.online-hand-card-button.selected {
+  border-color: #f2c94c;
+  box-shadow: 0 0 0 2px rgba(242, 201, 76, 0.5);
+}
+
 .online-battlefields-row {
   align-items: center;
   display: grid;

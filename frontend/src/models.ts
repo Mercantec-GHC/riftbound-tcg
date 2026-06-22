@@ -109,6 +109,7 @@ export type GameState = {
   scoredBattlefieldIdsThisTurn: Record<number, string[]>
   firstTurnCompletedByPlayer: Record<number, boolean>
   mulliganPlayerIndex: number
+  mulliganConfirmedPlayerIds?: number[]
   activeShowdown: { battlefieldId: string; kind: 'non-combat' | 'combat' } | null
   activeCombat: { battlefieldId: string; attackerId: number; defenderId: number } | null
   selectedCard: { player: number; handIndex: number } | null

@@ -52,7 +52,7 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void mulligan_progresses_to_next_player()
+    public void mulligan_stays_in_mulligan_stage_until_all_players_confirm()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
@@ -61,7 +61,134 @@ public class DefaultRulesEngineTests
 
         Assert.That(result.Accepted, Is.True);
         Assert.That(result.State.SequenceNumber, Is.EqualTo(1));
-        Assert.That(result.State.State["activePlayer"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(result.State.Stage, Is.EqualTo("mulligan"));
+    }
+
+    [Test]
+    public void mulligan_with_two_indexes_returns_selected_cards_to_deck_and_redraws()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), DecksWithLargerLibrary(), 123);
+
+        var player = state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var originalHand = player["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+        var originalDeckSize = player["deck"]!.AsArray().Count;
+        var keptCardId = originalHand[2];
+        var mulliganedCardIds = new[] { originalHand[0], originalHand[1] };
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 1 } }),
+            0);
+
+        Assert.That(result.Accepted, Is.True);
+
+        var resultPlayer = result.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var newHandIds = resultPlayer["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+        var newDeckIds = resultPlayer["deck"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        Assert.That(newHandIds, Has.Length.EqualTo(4));
+        Assert.That(newDeckIds, Has.Length.EqualTo(originalDeckSize));
+        Assert.That(newHandIds, Does.Contain(keptCardId));
+        Assert.That(newHandIds, Has.None.EqualTo(mulliganedCardIds[0]));
+        Assert.That(newHandIds, Has.None.EqualTo(mulliganedCardIds[1]));
+        Assert.That(newDeckIds, Does.Contain(mulliganedCardIds[0]));
+        Assert.That(newDeckIds, Does.Contain(mulliganedCardIds[1]));
+    }
+
+    [Test]
+    public void mulligan_with_no_indexes_keeps_same_hand()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var player = state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var originalHandIds = player["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = Array.Empty<int>() }),
+            0);
+
+        var resultPlayer = result.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var newHandIds = resultPlayer["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        Assert.That(newHandIds, Is.EqualTo(originalHandIds));
+    }
+
+    [Test]
+    public void mulligan_ignores_out_of_range_and_duplicate_indexes()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var player = state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var originalHandIds = player["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 0, 99 } }),
+            0);
+
+        Assert.That(result.Accepted, Is.True);
+
+        var resultPlayer = result.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var newHandIds = resultPlayer["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        Assert.That(newHandIds, Has.Length.EqualTo(4));
+        Assert.That(newHandIds, Has.None.EqualTo(originalHandIds[0]));
+    }
+
+    [Test]
+    public void both_players_can_mulligan_independently_without_waiting_for_each_other()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var actionsForSecondPlayerBeforeFirstConfirms = engine.GetLegalActions(state, 1);
+        Assert.That(actionsForSecondPlayerBeforeFirstConfirms.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+
+        var afterSecondPlayerConfirms = engine.ApplyAction(
+            state,
+            new EngineGameAction(1, "confirm-mulligan", new Dictionary<string, object?>()),
+            0);
+
+        Assert.That(afterSecondPlayerConfirms.Accepted, Is.True);
+        Assert.That(afterSecondPlayerConfirms.State.Stage, Is.EqualTo("mulligan"));
+
+        var firstPlayerActionsAfter = engine.GetLegalActions(afterSecondPlayerConfirms.State, 0);
+        Assert.That(firstPlayerActionsAfter.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+    }
+
+    [Test]
+    public void player_cannot_confirm_mulligan_twice()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var firstConfirm = engine.ApplyAction(state, new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?>()), 0);
+        var actionsAfter = engine.GetLegalActions(firstConfirm.State, 0);
+
+        Assert.That(actionsAfter.Select(action => action.Type), Has.None.EqualTo("confirm-mulligan"));
+    }
+
+    [Test]
+    public void stage_becomes_playing_after_all_players_confirm_mulligan()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var afterFirst = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 1 } }),
+            0);
+        var afterSecond = engine.ApplyAction(
+            afterFirst.State,
+            new EngineGameAction(1, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0 } }),
+            1);
+
+        Assert.That(afterSecond.Accepted, Is.True);
+        Assert.That(afterSecond.State.Stage, Is.EqualTo("playing"));
     }
 
     [Test]
@@ -96,6 +223,15 @@ public class DefaultRulesEngineTests
         [
             new EnginePlayerDeck("deck-a", "legend-a", "champion-a", ["skybridge"], ["rune-a", "rune-a", "rune-a"], ["unit-a", "unit-b", "unit-c", "unit-d", "unit-e"]),
             new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["emberfield"], ["rune-b", "rune-b", "rune-b"], ["unit-f", "unit-g", "unit-h", "unit-i", "unit-j"])
+        ];
+    }
+
+    private static IReadOnlyList<EnginePlayerDeck> DecksWithLargerLibrary()
+    {
+        return
+        [
+            new EnginePlayerDeck("deck-a", "legend-a", "champion-a", ["skybridge"], ["rune-a", "rune-a", "rune-a"], Enumerable.Range(0, 12).Select(i => $"unit-a{i}").ToArray()),
+            new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["emberfield"], ["rune-b", "rune-b", "rune-b"], Enumerable.Range(0, 12).Select(i => $"unit-b{i}").ToArray())
         ];
     }
 }
