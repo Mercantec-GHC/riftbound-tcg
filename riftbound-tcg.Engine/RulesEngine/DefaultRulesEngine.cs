@@ -121,7 +121,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             actions.Add(new("advance-phase", "advance-phase", "Advance phase", playerId));
             actions.Add(new("end-turn", "end-turn", "End turn", playerId));
-            actions.Add(new("score-point", "score-point", "Score battlefield", playerId, ScorePointPayloadSchema()));
 
             if (turnPhase == "main")
             {
@@ -174,13 +173,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 break;
             case "end-turn":
                 nextState = EndCurrentTurn(nextState, action.PlayerId);
-                break;
-            case "score-point":
-                var battlefieldId = ReadString(action.Payload, "battlefieldId") ?? FirstBattlefieldId(nextState);
-                var source = ScoreSourceFrom(ReadString(action.Payload, "source"));
-                nextState = source == ScoreSource.Hold
-                    ? ScoreBattlefield(nextState, new ScoreRequest(action.PlayerId, battlefieldId, ScoreSource.Hold))
-                    : ConquerBattlefield(nextState, action.PlayerId, battlefieldId);
                 break;
             case "play-unit":
                 var playUnitResult = PlayUnit(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"));
@@ -451,6 +443,27 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "already-scored-this-turn"));
         }
 
+        var scoredNow = alreadyScored.Append(request.BattlefieldId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var scored = state["scoredBattlefieldIdsThisTurn"]!.AsObject();
+        scored[request.PlayerId.ToString()] = ToArray(scoredNow);
+
+        if (request.Source == ScoreSource.Conquer)
+        {
+            var victoryScore = ScoreRules.VictoryScore(state);
+            var currentPoints = ReadPlayerPoints(state, request.PlayerId);
+            var allBattlefieldIds = state["battlefields"]!.AsArray()
+                .Select(node => node!["id"]?.GetValue<string>() ?? string.Empty)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .ToArray();
+            var hasScoredEveryBattlefield = allBattlefieldIds.All(id => scoredNow.Contains(id, StringComparer.OrdinalIgnoreCase));
+            if (currentPoints >= victoryScore - 1 && !hasScoredEveryBattlefield)
+            {
+                state = UpdatePlayer(state, request.PlayerId, player => Draw(player, 1));
+                state = AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "drew-instead"));
+                return AddLog(state, $"{PlayerName(state, request.PlayerId)} conquered {battlefield["name"]?.GetValue<string>() ?? request.BattlefieldId} and drew instead of gaining the final point.");
+            }
+        }
+
         var awardedPoints = ScoreRules.AwardedPoints(state, request);
         if (awardedPoints <= 0)
         {
@@ -462,9 +475,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
             player["points"] = Math.Max(0, (player["points"]?.GetValue<int>() ?? 0) + awardedPoints);
             return player;
         });
-
-        var scored = state["scoredBattlefieldIdsThisTurn"]!.AsObject();
-        scored[request.PlayerId.ToString()] = ToArray(alreadyScored.Append(request.BattlefieldId).Distinct(StringComparer.OrdinalIgnoreCase));
 
         var outcome = new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, awardedPoints, null);
         state = AppendScoreOutcome(state, outcome);
