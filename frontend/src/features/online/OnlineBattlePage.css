@@ -543,6 +543,34 @@
   width: fit-content;
 }
 
+.online-battlefield-controller-badge {
+  align-items: center;
+  background: #ff8427;
+  border: 3px solid rgba(10, 12, 18, 0.9);
+  border-radius: 999px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.34);
+  color: #0b0c10;
+  display: grid;
+  font-size: 1.25rem;
+  font-weight: 900;
+  height: 54px;
+  justify-items: center;
+  left: 0;
+  overflow: hidden;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 54px;
+  z-index: 2;
+}
+
+.online-battlefield-controller-badge img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
 .online-battlefield-art {
   aspect-ratio: 3.5 / 2.5;
   max-width: none;
@@ -686,6 +714,11 @@
   .online-battlefield-art,
   .online-battlefield-fallback {
     width: min(320px, calc(100vw - 64px));
+  }
+
+  .online-battlefield-controller-badge {
+    height: 46px;
+    width: 46px;
   }
 
   .online-player-mat .online-victory-track {

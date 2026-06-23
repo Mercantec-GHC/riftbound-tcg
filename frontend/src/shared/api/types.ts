@@ -111,6 +111,7 @@ export type MatchPlayer = {
   playerId: number
   userId: ApiId
   displayName: string
+  avatarImageHash?: string | null
   deckId: ApiId | null
   teamId: number | null
 }

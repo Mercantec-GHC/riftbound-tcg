@@ -209,6 +209,7 @@ public sealed record MatchPlayerDto(
     int PlayerId,
     string UserId,
     string DisplayName,
+    string? AvatarImageHash,
     string? DeckId,
     int? TeamId);
 
