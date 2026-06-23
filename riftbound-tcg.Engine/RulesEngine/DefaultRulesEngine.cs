@@ -130,6 +130,17 @@ public sealed class DefaultRulesEngine : IRulesEngine
             }
         }
 
+        var activeCombat = state.State["activeCombat"] as JsonObject;
+        if (stage == "playing" && activeCombat is not null)
+        {
+            var attackerPlayerId = activeCombat["attackerPlayerId"]?.GetValue<int>();
+            var defenderPlayerId = activeCombat["defenderPlayerId"]?.GetValue<int>();
+            if (playerId == attackerPlayerId || playerId == defenderPlayerId)
+            {
+                actions.Add(new("resolve-combat", "resolve-combat", "Resolve combat", playerId));
+            }
+        }
+
         return actions;
     }
 
@@ -188,6 +199,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 }
 
                 nextState = moveUnitResult;
+                break;
+            case "resolve-combat":
+                var combatResult = ResolveCombat(nextState, action.PlayerId, action.Payload);
+                if (combatResult is null)
+                {
+                    return Reject(state, "Invalid resolve-combat action: combat must involve exactly two players and assign legal lethal damage.");
+                }
+
+                nextState = combatResult;
                 break;
             case "concede":
                 var winner = state.Players.First(player => player.PlayerId != action.PlayerId).PlayerId;
@@ -541,6 +561,255 @@ public sealed class DefaultRulesEngine : IRulesEngine
         battlefield["units"]!.AsArray().Add(moved);
 
         return AddLog(state, $"{PlayerName(state, playerId)} moved {unit["name"]?.GetValue<string>() ?? "a unit"} to {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+    }
+
+    private static JsonObject? ResolveCombat(JsonObject state, int playerId, IReadOnlyDictionary<string, object?>? payload)
+    {
+        var activeCombat = state["activeCombat"] as JsonObject;
+        if (activeCombat is null)
+        {
+            return null;
+        }
+
+        var battlefieldId = ReadString(payload, "battlefieldId");
+        var combatBattlefieldId = activeCombat["battlefieldId"]?.GetValue<string>();
+        var attackerPlayerId = activeCombat["attackerPlayerId"]?.GetValue<int>();
+        var defenderPlayerId = activeCombat["defenderPlayerId"]?.GetValue<int>();
+        if (string.IsNullOrWhiteSpace(battlefieldId) ||
+            battlefieldId != combatBattlefieldId ||
+            attackerPlayerId is null ||
+            defenderPlayerId is null ||
+            playerId != attackerPlayerId.Value && playerId != defenderPlayerId.Value)
+        {
+            return null;
+        }
+
+        var battlefield = state["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .FirstOrDefault(candidate => candidate["id"]?.GetValue<string>() == battlefieldId);
+        if (battlefield is null)
+        {
+            return null;
+        }
+
+        var units = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
+        var unitOwners = units.Select(unit => unit["ownerId"]?.GetValue<int>())
+            .Where(owner => owner is not null)
+            .Select(owner => owner!.Value)
+            .Distinct()
+            .ToArray();
+        if (unitOwners.Length != 2 ||
+            !unitOwners.Contains(attackerPlayerId.Value) ||
+            !unitOwners.Contains(defenderPlayerId.Value))
+        {
+            return null;
+        }
+
+        var attackers = units.Where(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value).ToArray();
+        var defenders = units.Where(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value).ToArray();
+        if (attackers.Length == 0 || defenders.Length == 0)
+        {
+            return null;
+        }
+
+        var attackerAssignments = ReadDamageAssignments(payload, "attackerAssignments");
+        var defenderAssignments = ReadDamageAssignments(payload, "defenderAssignments");
+        if (attackerAssignments is null ||
+            defenderAssignments is null ||
+            !ValidateDamageAssignments(attackers, defenders, attackerAssignments) ||
+            !ValidateDamageAssignments(defenders, attackers, defenderAssignments))
+        {
+            return null;
+        }
+
+        foreach (var unit in defenders)
+        {
+            var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+            unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + attackerAssignments.GetValueOrDefault(uid);
+        }
+
+        foreach (var unit in attackers)
+        {
+            var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+            unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + defenderAssignments.GetValueOrDefault(uid);
+        }
+
+        KillLethalBattlefieldUnits(state, battlefield);
+
+        var remainingUnits = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
+        foreach (var unit in remainingUnits)
+        {
+            unit["damage"] = 0;
+            unit["attacker"] = false;
+            unit["defender"] = false;
+        }
+
+        var attackerHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value);
+        var defenderHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value);
+
+        battlefield["stagedCombat"] = false;
+        battlefield["stagedShowdown"] = false;
+        battlefield["contestedByPlayerId"] = null;
+        state["activeCombat"] = null;
+        state["activeShowdown"] = null;
+        state["focusPlayerId"] = null;
+        state["priorityPlayerId"] = null;
+
+        if (attackerHasUnits && defenderHasUnits)
+        {
+            battlefield["stagedCombat"] = true;
+            battlefield["contestedByPlayerId"] = attackerPlayerId.Value;
+            battlefield["controllerId"] = null;
+            return AddLog(state, $"Combat at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"} had no result.");
+        }
+
+        if (attackerHasUnits)
+        {
+            battlefield["controllerId"] = attackerPlayerId.Value;
+        }
+        else if (defenderHasUnits)
+        {
+            battlefield["controllerId"] = defenderPlayerId.Value;
+        }
+        else
+        {
+            battlefield["controllerId"] = null;
+        }
+
+        return AddLog(state, $"Combat at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"} resolved.");
+    }
+
+    private static bool ValidateDamageAssignments(IReadOnlyList<JsonObject> assigningUnits, IReadOnlyList<JsonObject> opposingUnits, IReadOnlyDictionary<string, int> assignments)
+    {
+        if (assignments.Values.Any(amount => amount < 0))
+        {
+            return false;
+        }
+
+        var opposingById = opposingUnits
+            .Select(unit => new { Unit = unit, Uid = unit["uid"]?.GetValue<string>() })
+            .Where(item => !string.IsNullOrWhiteSpace(item.Uid))
+            .ToDictionary(item => item.Uid!, item => item.Unit, StringComparer.Ordinal);
+        if (assignments.Keys.Any(uid => !opposingById.ContainsKey(uid)))
+        {
+            return false;
+        }
+
+        var requiredTotal = assigningUnits.Sum(CurrentCombatMight);
+        if (assignments.Values.Sum() != requiredTotal)
+        {
+            return false;
+        }
+
+        var positiveAssignments = assignments.Where(pair => pair.Value > 0).ToArray();
+        var nonLethalPositiveCount = 0;
+        var allOpposingUnitsAssignedLethal = opposingUnits.All(unit =>
+        {
+            var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+            return assignments.GetValueOrDefault(uid) >= LethalDamage(unit);
+        });
+
+        foreach (var (uid, amount) in positiveAssignments)
+        {
+            var lethal = LethalDamage(opposingById[uid]);
+            if (amount < lethal)
+            {
+                nonLethalPositiveCount += 1;
+                continue;
+            }
+
+            if (amount > lethal && !allOpposingUnitsAssignedLethal)
+            {
+                return false;
+            }
+        }
+
+        return nonLethalPositiveCount <= 1;
+    }
+
+    private static Dictionary<string, int>? ReadDamageAssignments(IReadOnlyDictionary<string, object?>? payload, string key)
+    {
+        if (payload is null || !payload.TryGetValue(key, out var value) || value is null)
+        {
+            return null;
+        }
+
+        if (value is JsonElement element && element.ValueKind == JsonValueKind.Object)
+        {
+            return element.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.TryGetInt32(out var amount) ? amount : -1, StringComparer.Ordinal);
+        }
+
+        if (value is JsonObject jsonObject)
+        {
+            return jsonObject.ToDictionary(pair => pair.Key, pair => pair.Value?.GetValue<int>() ?? -1, StringComparer.Ordinal);
+        }
+
+        if (value is IReadOnlyDictionary<string, int> intDictionary)
+        {
+            return new Dictionary<string, int>(intDictionary, StringComparer.Ordinal);
+        }
+
+        if (value is IReadOnlyDictionary<string, object?> objectDictionary)
+        {
+            var result = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (uid, amount) in objectDictionary)
+            {
+                result[uid] = amount switch
+                {
+                    int intValue => intValue,
+                    JsonElement amountElement when amountElement.TryGetInt32(out var intValue) => intValue,
+                    _ => -1
+                };
+            }
+
+            return result;
+        }
+
+        return null;
+    }
+
+    private static void KillLethalBattlefieldUnits(JsonObject state, JsonObject battlefield)
+    {
+        var units = battlefield["units"]!.AsArray();
+        for (var i = units.Count - 1; i >= 0; i--)
+        {
+            var unit = units[i]!.AsObject();
+            if ((unit["damage"]?.GetValue<int>() ?? 0) < LethalDamage(unit))
+            {
+                continue;
+            }
+
+            var killed = Clone(unit);
+            killed.Remove("uid");
+            killed.Remove("ownerId");
+            killed.Remove("exhausted");
+            killed.Remove("damage");
+            killed.Remove("attachedMight");
+            killed.Remove("attacker");
+            killed.Remove("defender");
+            var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+            state = UpdatePlayer(state, ownerId, player =>
+            {
+                player["trash"]!.AsArray().Add(killed);
+                return player;
+            });
+            units.RemoveAt(i);
+        }
+    }
+
+    private static int CurrentMight(JsonObject unit)
+    {
+        return (unit["might"]?.GetValue<int>() ?? 0) + (unit["attachedMight"]?.GetValue<int>() ?? 0);
+    }
+
+    private static int CurrentCombatMight(JsonObject unit)
+    {
+        return Math.Max(0, CurrentMight(unit));
+    }
+
+    private static int LethalDamage(JsonObject unit)
+    {
+        return Math.Max(1, CurrentMight(unit));
     }
 
     private static int? ReadInt(IReadOnlyDictionary<string, object?>? payload, string key)
