@@ -1,10 +1,11 @@
 using System.Text.Json.Nodes;
+using riftbound_tcg.Core.Cards;
 
 namespace riftbound_tcg.Engine.RulesEngine;
 
 public interface IRulesEngine
 {
-    EngineMatchState CreateInitialState(EngineMatchConfig config, IReadOnlyList<EnginePlayerDeck> playerDecks, int seed);
+    EngineMatchState CreateInitialState(EngineMatchConfig config, IReadOnlyList<EnginePlayerDeck> playerDecks, int seed, IReadOnlyDictionary<string, CardDefinition>? catalog = null);
 
     IReadOnlyList<EngineLegalAction> GetLegalActions(EngineMatchState state, int playerId);
 

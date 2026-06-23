@@ -328,6 +328,17 @@
   max-width: 92px;
 }
 
+.online-unit-card.exhausted {
+  filter: grayscale(0.65) brightness(0.65);
+  transform: rotate(90deg) scale(0.88);
+}
+
+.online-unit-card-wrap.movable {
+  cursor: grab;
+  outline: 2px solid rgba(120, 220, 140, 0.5);
+  border-radius: 10px;
+}
+
 .online-card-badges {
   display: flex;
   flex-wrap: wrap;
@@ -371,6 +382,25 @@
 .online-hand-card-button.selected {
   border-color: #f2c94c;
   box-shadow: 0 0 0 2px rgba(242, 201, 76, 0.5);
+}
+
+.online-hand-card-button.playable {
+  cursor: grab;
+}
+
+.online-hand-card-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.drop-zone {
+  border-radius: 10px;
+  outline: 2px dashed transparent;
+  transition: outline-color 120ms ease;
+}
+
+.drop-zone:hover {
+  outline-color: rgba(120, 220, 140, 0.65);
 }
 
 .online-battlefields-row {
