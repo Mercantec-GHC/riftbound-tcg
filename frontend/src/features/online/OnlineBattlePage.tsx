@@ -743,6 +743,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
             <OnlinePlaymat
               cards={cards}
               game={state}
+              matchPlayers={match?.players ?? []}
               viewerPlayerId={playerId}
               canPlayUnit={legalActions.some((action) => action.type === 'play-unit' && action.playerId === playerId)}
               onPlayUnit={playUnit}
