@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './OnlineBattlePage.css'
 import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../shared/api'
 import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../shared/api'
-import { gameModes, type Card, type GameMode, type GameState, type SavedDeck } from '../../shared/models'
+import { gameModes, type Card, type GameMode, type GameState, type SavedDeck, type Unit } from '../../shared/models'
 import { OnlinePlaymat } from './OnlinePlaymat'
 
 type OnlineBattlePageProps = {
@@ -14,6 +14,213 @@ type OnlineBattlePageProps = {
 }
 
 const allModes = Object.keys(gameModes) as GameMode[]
+
+type CombatAssignments = Record<string, number>
+
+type ResolveCombatPayload = {
+  battlefieldId: string
+  assignments: CombatAssignments
+}
+
+function unitOwnerId(unit: Unit): number {
+  return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
+}
+
+function currentMight(unit: Unit): number {
+  return (unit.might ?? 0) + (unit.attachedMight ?? 0)
+}
+
+function combatMight(unit: Unit): number {
+  return Math.max(0, currentMight(unit))
+}
+
+function lethalDamage(unit: Unit): number {
+  return Math.max(1, currentMight(unit))
+}
+
+function totalCombatMight(units: Unit[]): number {
+  return units.reduce((total, unit) => total + combatMight(unit), 0)
+}
+
+function createEmptyAssignments(units: Unit[]): CombatAssignments {
+  return Object.fromEntries(units.map((unit) => [unit.uid, 0]))
+}
+
+function createDefaultAssignments(assigningUnits: Unit[], targetUnits: Unit[]): CombatAssignments {
+  const assignments = createEmptyAssignments(targetUnits)
+  let remaining = totalCombatMight(assigningUnits)
+  for (const unit of targetUnits) {
+    if (remaining <= 0) break
+    const assigned = Math.min(lethalDamage(unit), remaining)
+    assignments[unit.uid] = assigned
+    remaining -= assigned
+  }
+
+  if (remaining > 0 && targetUnits.length > 0) {
+    const lastTarget = targetUnits[targetUnits.length - 1]
+    assignments[lastTarget.uid] = (assignments[lastTarget.uid] ?? 0) + remaining
+  }
+
+  return assignments
+}
+
+function validateAssignments(assigningUnits: Unit[], targetUnits: Unit[], assignments: CombatAssignments, label: string): string[] {
+  const messages: string[] = []
+  const requiredTotal = totalCombatMight(assigningUnits)
+  const assignedTotal = Object.values(assignments).reduce((total, amount) => total + amount, 0)
+  if (assignedTotal !== requiredTotal) {
+    messages.push(`${label} must assign exactly ${requiredTotal} damage.`)
+  }
+
+  if (Object.values(assignments).some((amount) => amount < 0 || !Number.isInteger(amount))) {
+    messages.push(`${label} assignments must be whole numbers of 0 or more.`)
+  }
+
+  const targetIds = new Set(targetUnits.map((unit) => unit.uid))
+  if (Object.keys(assignments).some((uid) => !targetIds.has(uid))) {
+    messages.push(`${label} can only assign damage to opposing units.`)
+  }
+
+  const positiveAssignments = Object.entries(assignments).filter(([, amount]) => amount > 0)
+  const nonLethalPositiveCount = positiveAssignments.filter(([uid, amount]) => {
+    const unit = targetUnits.find((candidate) => candidate.uid === uid)
+    return unit ? amount < lethalDamage(unit) : false
+  }).length
+  if (nonLethalPositiveCount > 1) {
+    messages.push(`${label} must assign lethal damage before spreading damage to another unit.`)
+  }
+
+  const allTargetsLethal = targetUnits.every((unit) => (assignments[unit.uid] ?? 0) >= lethalDamage(unit))
+  const overAssignedEarly = positiveAssignments.some(([uid, amount]) => {
+    const unit = targetUnits.find((candidate) => candidate.uid === uid)
+    return unit ? amount > lethalDamage(unit) && !allTargetsLethal : false
+  })
+  if (overAssignedEarly) {
+    messages.push(`${label} cannot assign more than lethal damage until every opposing unit has lethal assigned.`)
+  }
+
+  return messages
+}
+
+function combatPanelKey(game: GameState): string {
+  const combat = game.activeCombat
+  const battlefield = combat ? game.battlefields.find((field) => field.id === combat.battlefieldId) : null
+  return `${combat?.battlefieldId ?? 'none'}:${battlefield?.units.map((unit) => unit.uid).join(',') ?? ''}`
+}
+
+function CombatAssignmentInputs({
+  assignments,
+  label,
+  onChange,
+  targetUnits,
+}: {
+  assignments: CombatAssignments
+  label: string
+  onChange: (next: CombatAssignments) => void
+  targetUnits: Unit[]
+}) {
+  return (
+    <div className="combat-assignment-group">
+      <h4>{label}</h4>
+      {targetUnits.map((unit) => (
+        <label className="combat-assignment-row" key={unit.uid}>
+          <span>
+            <strong>{unit.name}</strong>
+            <small>{currentMight(unit)} might · {unit.damage} damage</small>
+          </span>
+          <input
+            min={0}
+            step={1}
+            type="number"
+            value={assignments[unit.uid] ?? 0}
+            onChange={(event) => onChange({ ...assignments, [unit.uid]: Math.max(0, Math.floor(Number(event.target.value) || 0)) })}
+          />
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function CombatShowdownModal({
+  game,
+  onClose,
+  onResolveCombat,
+  viewerPlayerId,
+}: {
+  game: GameState
+  onClose: () => void
+  onResolveCombat: (payload: ResolveCombatPayload) => Promise<void>
+  viewerPlayerId: number
+}) {
+  const combat = game.activeCombat
+  const battlefield = combat ? game.battlefields.find((field) => field.id === combat.battlefieldId) : null
+  const attackers = battlefield?.units.filter((unit) => unitOwnerId(unit) === combat?.attackerPlayerId) ?? []
+  const defenders = battlefield?.units.filter((unit) => unitOwnerId(unit) === combat?.defenderPlayerId) ?? []
+  const attackerName = game.players.find((player) => player.id === combat?.attackerPlayerId)?.name ?? 'Attacker'
+  const defenderName = game.players.find((player) => player.id === combat?.defenderPlayerId)?.name ?? 'Defender'
+  const isAttacker = viewerPlayerId === combat?.attackerPlayerId
+  const assigningUnits = isAttacker ? attackers : defenders
+  const targetUnits = isAttacker ? defenders : attackers
+  const assigningName = isAttacker ? attackerName : defenderName
+  const targetLabel = isAttacker ? 'defenders' : 'attackers'
+  const [assignments, setAssignments] = useState<CombatAssignments>(() => createDefaultAssignments(assigningUnits, targetUnits))
+
+  if (!combat || !battlefield) return null
+
+  const validationMessages = validateAssignments(assigningUnits, targetUnits, assignments, assigningName)
+  const canSubmit = validationMessages.length === 0 && assigningUnits.length > 0 && targetUnits.length > 0
+
+  return (
+    <div className="combat-modal-backdrop" role="presentation">
+      <section aria-modal="true" className="combat-showdown-modal" role="dialog">
+        <header>
+          <div>
+            <span>Combat showdown</span>
+            <h3>{battlefield.name}</h3>
+          </div>
+          <button aria-label="Close combat assignment" className="combat-modal-close" type="button" onClick={onClose}>X</button>
+        </header>
+
+        <p className="combat-status-line">
+          {attackerName} attacks with {totalCombatMight(attackers)} might. {defenderName} defends with {totalCombatMight(defenders)} might.
+        </p>
+
+        <div className="combat-modal-toolbar">
+          <strong>{assigningName}: assign {totalCombatMight(assigningUnits)} damage to {targetLabel}</strong>
+          <button type="button" onClick={() => setAssignments(createDefaultAssignments(assigningUnits, targetUnits))}>Auto assign</button>
+        </div>
+
+        <CombatAssignmentInputs
+          assignments={assignments}
+          label={`${assigningName} assigns damage`}
+          onChange={setAssignments}
+          targetUnits={targetUnits}
+        />
+
+        {validationMessages.length > 0 && (
+          <div className="combat-validation" role="status">
+            {validationMessages.map((message) => <p key={message}>{message}</p>)}
+          </div>
+        )}
+
+        <footer>
+          <button type="button" onClick={onClose}>Cancel</button>
+          <button
+            className="combat-submit"
+            disabled={!canSubmit}
+            type="button"
+            onClick={() => void onResolveCombat({
+              battlefieldId: combat.battlefieldId,
+              assignments,
+            })}
+          >
+            Submit assignment
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
 
 export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBattlePageProps) {
   const cardsApi = useMemo(() => createCardsApi(apiClient), [apiClient])
@@ -34,6 +241,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [state, setState] = useState<GameState | null>(null)
   const [legalActions, setLegalActions] = useState<LegalAction[]>([])
   const [mulliganHandIndexes, setMulliganHandIndexes] = useState<number[]>([])
+  const [combatModalOpen, setCombatModalOpen] = useState(false)
   const [events, setEvents] = useState<MatchEvent[]>([])
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
   const [status, setStatus] = useState('Create or join a lobby, or use quick queue for 1v1.')
@@ -58,6 +266,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
+  const canResolveCombat = Boolean(state?.activeCombat && legalActions.some((action) => action.type === 'resolve-combat' && action.playerId === playerId))
 
   useEffect(() => {
     playerIdRef.current = playerId
@@ -352,6 +561,11 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
   }
 
+  async function resolveCombat(payload: ResolveCombatPayload) {
+    await submitTypedAction('resolve-combat', payload as unknown as Record<string, unknown>, 'Unable to resolve combat.')
+    setCombatModalOpen(false)
+  }
+
   function toggleMulliganHandIndex(index: number) {
     setMulliganHandIndexes((current) => {
       if (current.includes(index)) return current.filter((item) => item !== index)
@@ -545,8 +759,22 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
             {isMulliganTurn && (
               <p>Select up to 2 cards in your hand to exchange ({mulliganHandIndexes.length}/2 selected).</p>
             )}
+            {state.activeCombat && (
+              canResolveCombat
+                ? <button type="button" onClick={() => setCombatModalOpen(true)}>Assign combat damage</button>
+                : <p>Waiting for combat damage assignments.</p>
+            )}
+            {state.activeCombat && canResolveCombat && combatModalOpen && (
+              <CombatShowdownModal
+                key={combatPanelKey(state)}
+                game={state}
+                onClose={() => setCombatModalOpen(false)}
+                onResolveCombat={resolveCombat}
+                viewerPlayerId={playerId}
+              />
+            )}
             {legalActions.length === 0 && <p>No legal actions for your seat right now.</p>}
-            {legalActions.map((action) => (
+            {legalActions.filter((action) => !(canResolveCombat && action.type === 'resolve-combat')).map((action) => (
               <button key={action.id} type="button" onClick={() => void submitAction(action)}>
                 {action.label}
               </button>

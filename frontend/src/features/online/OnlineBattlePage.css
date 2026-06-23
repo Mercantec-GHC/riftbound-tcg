@@ -144,6 +144,126 @@
   gap: 10px;
 }
 
+.combat-modal-backdrop {
+  align-items: center;
+  background: rgba(3, 6, 14, 0.74);
+  display: grid;
+  inset: 0;
+  justify-items: center;
+  padding: 18px;
+  position: fixed;
+  z-index: 20;
+}
+
+.combat-showdown-modal {
+  background: #111827;
+  border: 1px solid rgba(255, 220, 138, 0.34);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  color: #f7efe2;
+  display: grid;
+  gap: 14px;
+  max-height: min(720px, calc(100vh - 36px));
+  max-width: 720px;
+  overflow: auto;
+  padding: 18px;
+  width: min(720px, calc(100vw - 36px));
+}
+
+.combat-showdown-modal header,
+.combat-showdown-modal footer,
+.combat-modal-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.combat-showdown-modal header span {
+  color: #ffdc8a;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.combat-showdown-modal h3,
+.combat-showdown-modal h4 {
+  margin: 0;
+}
+
+.combat-modal-close {
+  min-width: 40px;
+  padding: 8px 10px;
+}
+
+.combat-modal-toolbar {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.combat-status-line {
+  color: #f7efe2;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.combat-assignment-grid,
+.combat-assignment-group {
+  display: grid;
+  gap: 10px;
+}
+
+.combat-assignment-row {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  padding: 8px;
+}
+
+.combat-assignment-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.combat-assignment-row strong,
+.combat-assignment-row small {
+  overflow-wrap: anywhere;
+}
+
+.combat-assignment-row small {
+  color: #c8bddb;
+}
+
+.combat-assignment-row input {
+  min-width: 0;
+  padding: 6px;
+  text-align: center;
+}
+
+.combat-validation {
+  background: rgba(214, 48, 49, 0.16);
+  border: 1px solid rgba(214, 48, 49, 0.34);
+  border-radius: 8px;
+  color: #ffd3d3;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.combat-validation p {
+  margin: 0;
+}
+
+.combat-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .online-shared-playmat {
   background: linear-gradient(90deg, rgba(20, 20, 24, 0.96), rgba(42, 36, 28, 0.94));
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -418,10 +538,31 @@
   width: fit-content;
 }
 
+.online-battlefield-art-wrap {
+  position: relative;
+  width: fit-content;
+}
+
 .online-battlefield-art {
   aspect-ratio: 3.5 / 2.5;
   max-width: none;
   width: 360px;
+}
+
+.online-showdown-banner {
+  background: rgba(214, 48, 49, 0.92);
+  border-radius: 999px;
+  box-shadow: 0 0 14px rgba(214, 48, 49, 0.6);
+  color: #fff;
+  font-weight: 700;
+  left: 50%;
+  letter-spacing: 0.05em;
+  padding: 4px 16px;
+  position: absolute;
+  text-transform: uppercase;
+  top: -14px;
+  transform: translateX(-50%);
+  z-index: 1;
 }
 
 .online-battlefield-art .horizontal-card-art img,
@@ -435,6 +576,25 @@
   aspect-ratio: 3.5 / 2.5;
   text-align: center;
   width: 360px;
+}
+
+.online-battlefield-units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  min-height: 40px;
+  width: 100%;
+}
+
+.online-battlefield-units-opponent {
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.18);
+  padding-bottom: 6px;
+}
+
+.online-battlefield-units-viewer {
+  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+  padding-top: 6px;
 }
 
 .online-player-zones .unit-row {
