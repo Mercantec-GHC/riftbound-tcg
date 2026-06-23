@@ -1,23 +1,35 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createDecksApi, type ApiBrowseDeck, type ApiClient, type ApiUserProfile, type AuthSession, type UpdateUserRequest } from '../../shared/api'
+import { createDecksApi, type ApiBrowseDeck, type ApiClient, type ApiUserProfile, type AuthSession, type ChangePasswordRequest, type UpdateUserRequest } from '../../shared/api'
 import type { SavedDeck } from '../../shared/models'
+import { UserAvatar } from '../../shared/ui/UserAvatar'
 
 export function AccountPage({
   activeDecks,
   apiClient,
   session,
   onDecksChanged,
+  onDeleteAvatar,
+  onChangePassword,
   onUpdateMe,
+  onUploadAvatar,
 }: {
   activeDecks: SavedDeck[]
   apiClient: ApiClient
   session: AuthSession | null
   onDecksChanged: () => Promise<void>
+  onDeleteAvatar: () => Promise<ApiUserProfile>
+  onChangePassword: (request: Omit<ChangePasswordRequest, 'currentRefreshToken'>) => Promise<void>
   onUpdateMe: (request: UpdateUserRequest) => Promise<ApiUserProfile>
+  onUploadAvatar: (image: File) => Promise<ApiUserProfile>
 }) {
   const deckApi = useMemo(() => createDecksApi(apiClient), [apiClient])
   const [displayNameDraft, setDisplayNameDraft] = useState<{ userId: string, value: string } | null>(null)
   const [browseDecks, setBrowseDecks] = useState<ApiBrowseDeck[]>([])
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordBusy, setPasswordBusy] = useState(false)
+  const [passwordStatus, setPasswordStatus] = useState('')
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('Manage your profile and active online decks.')
   const displayName = displayNameDraft && displayNameDraft.userId === session?.user.id
@@ -44,6 +56,46 @@ export function AccountPage({
       setStatus('Profile updated.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Could not update profile.')
+    }
+  }
+
+  async function uploadAvatar(file: File | undefined) {
+    if (!file) return
+    try {
+      await onUploadAvatar(file)
+      setStatus('Profile image updated.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not update profile image.')
+    }
+  }
+
+  async function removeAvatar() {
+    try {
+      await onDeleteAvatar()
+      setStatus('Profile image removed.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not remove profile image.')
+    }
+  }
+
+  async function changePassword() {
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus('New passwords must match.')
+      return
+    }
+
+    setPasswordBusy(true)
+    setPasswordStatus('')
+    try {
+      await onChangePassword({ currentPassword, newPassword })
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      setPasswordStatus('Password updated.')
+    } catch (error) {
+      setPasswordStatus(error instanceof Error ? error.message : 'Could not update password.')
+    } finally {
+      setPasswordBusy(false)
     }
   }
 
@@ -105,6 +157,22 @@ export function AccountPage({
       <div className="admin-grid">
         <section className="admin-panel">
           <h3>Profile</h3>
+          <div className="profile-image-editor">
+            <UserAvatar user={session.user} size="large" />
+            <div className="button-row">
+              <label className="file-button">
+                Upload image
+                <input
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={(event) => void uploadAvatar(event.target.files?.[0])}
+                  type="file"
+                />
+              </label>
+              <button type="button" className="secondary-button" onClick={() => void removeAvatar()} disabled={!session.user.avatarImageHash}>
+                Remove image
+              </button>
+            </div>
+          </div>
           <label>
             Email
             <input value={session.user.email} readOnly />
@@ -125,6 +193,28 @@ export function AccountPage({
             <span>Points scored <strong>{stats.pointsScored}</strong></span>
             <span>Last played <strong>{stats.lastPlayedAt ? new Date(stats.lastPlayedAt).toLocaleString() : 'Never'}</strong></span>
           </div>
+        </section>
+      </div>
+
+      <div className="admin-grid">
+        <section className="admin-panel">
+          <h3>Change password</h3>
+          <label>
+            Current password
+            <input value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" type="password" />
+          </label>
+          <label>
+            New password
+            <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" type="password" />
+          </label>
+          <label>
+            Confirm new password
+            <input value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" type="password" />
+          </label>
+          <button type="button" onClick={() => void changePassword()} disabled={passwordBusy || !currentPassword || !newPassword || !confirmPassword}>
+            Update password
+          </button>
+          {passwordStatus && <small className={passwordStatus === 'Password updated.' ? '' : 'form-error'}>{passwordStatus}</small>}
         </section>
       </div>
 

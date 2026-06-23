@@ -9,6 +9,7 @@ export type UserStats = {
 export type UserProfile = {
   id: string
   displayName: string
+  avatarImageHash?: string | null
   createdAt: string
   stats: UserStats
 }

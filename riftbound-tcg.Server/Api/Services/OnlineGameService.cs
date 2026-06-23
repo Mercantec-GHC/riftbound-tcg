@@ -1887,6 +1887,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamptz NOT NULL DEFAULT now();
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "DisabledAt" timestamptz NULL;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "LastLoginAt" timestamptz NULL;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS "AvatarImageHash" text NULL;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "GamesPlayed" integer NOT NULL DEFAULT 0;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "Wins" integer NOT NULL DEFAULT 0;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS "Losses" integer NOT NULL DEFAULT 0;
@@ -1926,6 +1927,13 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
                 "TokenHash" text NOT NULL,
                 "ExpiresAt" timestamptz NOT NULL,
                 "RevokedAt" timestamptz NULL,
+                "CreatedAt" timestamptz NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS profile_images (
+                "Hash" text PRIMARY KEY,
+                "ContentType" text NOT NULL,
+                "Bytes" bytea NOT NULL,
+                "Length" integer NOT NULL,
                 "CreatedAt" timestamptz NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_users_NormalizedEmail" ON users("NormalizedEmail");

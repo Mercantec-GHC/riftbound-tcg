@@ -1,6 +1,6 @@
 import type { ApiClient } from '../http'
 import { unwrapData } from '../http'
-import type { ApiResult, AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest, ApiUserProfile } from '../types'
+import type { ApiResult, AuthSession, ChangePasswordRequest, LoginRequest, RegisterRequest, UpdateUserRequest, ApiUserProfile } from '../types'
 
 export function createAuthApi(client: ApiClient) {
   return {
@@ -40,6 +40,28 @@ export function createAuthApi(client: ApiClient) {
       return unwrapData(await client.request<ApiResult<ApiUserProfile>>('/me', {
         method: 'PATCH',
         body: JSON.stringify(request),
+      }))
+    },
+
+    async changePassword(request: ChangePasswordRequest): Promise<void> {
+      await client.request<void>('/me/password', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
+    },
+
+    async uploadAvatar(image: File): Promise<ApiUserProfile> {
+      const body = new FormData()
+      body.set('image', image)
+      return unwrapData(await client.request<ApiResult<ApiUserProfile>>('/me/avatar', {
+        method: 'POST',
+        body,
+      }))
+    },
+
+    async deleteAvatar(): Promise<ApiUserProfile> {
+      return unwrapData(await client.request<ApiResult<ApiUserProfile>>('/me/avatar', {
+        method: 'DELETE',
       }))
     },
   }

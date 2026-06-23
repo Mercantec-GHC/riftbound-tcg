@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS users (
     "CreatedAt" timestamptz NOT NULL,
     "UpdatedAt" timestamptz NOT NULL,
     "LastLoginAt" timestamptz NULL,
+    "AvatarImageHash" text NULL,
     "GamesPlayed" integer NOT NULL DEFAULT 0,
     "Wins" integer NOT NULL DEFAULT 0,
     "Losses" integer NOT NULL DEFAULT 0,
@@ -63,6 +64,14 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 
 CREATE INDEX IF NOT EXISTS "IX_refresh_tokens_UserId" ON refresh_tokens("UserId");
 CREATE UNIQUE INDEX IF NOT EXISTS "IX_refresh_tokens_TokenHash" ON refresh_tokens("TokenHash");
+
+CREATE TABLE IF NOT EXISTS profile_images (
+    "Hash" text PRIMARY KEY,
+    "ContentType" text NOT NULL,
+    "Bytes" bytea NOT NULL,
+    "Length" integer NOT NULL,
+    "CreatedAt" timestamptz NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS decks (
     "Id" text PRIMARY KEY,

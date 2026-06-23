@@ -149,6 +149,7 @@ public sealed record UserDto(
     string Id,
     string Email,
     string DisplayName,
+    string? AvatarImageHash,
     DateTimeOffset CreatedAt,
     UserStatsDto Stats,
     bool IsAdmin,
@@ -192,6 +193,11 @@ public sealed record RefreshTokenRequest(
 
 public sealed record LogoutRequest(
     string RefreshToken);
+
+public sealed record ChangePasswordRequest(
+    string CurrentPassword,
+    string NewPassword,
+    string? CurrentRefreshToken);
 
 public sealed record AuthSessionDto(
     string AccessToken,

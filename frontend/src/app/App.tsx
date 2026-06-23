@@ -3,6 +3,8 @@ import './app.css'
 import { AccountPage } from '../features/account/AccountPage'
 import { AdminPage } from '../features/admin/AdminPage'
 import { AuthPanel } from '../features/auth/AuthPanel'
+import { LoginPage } from '../features/auth/LoginPage'
+import { RegisterPage } from '../features/auth/RegisterPage'
 import { useAuthSession } from '../features/auth/useAuthSession'
 import { CardViewerPage } from '../features/cards/CardViewerPage'
 import { useCardLibrary } from '../features/cards/useCardLibrary'
@@ -42,9 +44,8 @@ function App() {
           <AuthPanel
             session={auth.session}
             status={auth.status}
-            onLogin={auth.login}
             onLogout={auth.logout}
-            onRegister={auth.register}
+            onNavigate={setPage}
           />
         </header>
         <LocalDataMigration apiClient={auth.apiClient} session={auth.session} onImported={() => window.location.reload()} />
@@ -54,6 +55,20 @@ function App() {
           cardCount={cardLibrary.customCards.length}
           savedDeckCount={deckBuilder.savedDecks.length}
           onNavigate={setPage}
+        />
+      )}
+
+      {page === 'login' && (
+        <LoginPage
+          onLogin={auth.login}
+          onNavigate={setPage}
+        />
+      )}
+
+      {page === 'register' && (
+        <RegisterPage
+          onNavigate={setPage}
+          onRegister={auth.register}
         />
       )}
 
@@ -104,8 +119,11 @@ function App() {
           activeDecks={deckBuilder.activeDecks}
           apiClient={auth.apiClient}
           session={auth.session}
+          onChangePassword={auth.changePassword}
           onDecksChanged={deckBuilder.refreshDecks}
+          onDeleteAvatar={auth.deleteAvatar}
           onUpdateMe={auth.updateMe}
+          onUploadAvatar={auth.uploadAvatar}
         />
       )}
 
