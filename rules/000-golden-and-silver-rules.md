@@ -1,0 +1,41 @@
+# Golden and Silver Rules
+
+Source: Riftbound Core Rules.pdf, last updated 2026-03-30.
+
+These notes preserve the numbered rule structure from the source PDF while normalizing spacing and PDF extraction artifacts.
+
+## 000. Golden and Silver Rules
+
+### 001. Golden Rule
+
+**002.** Card text supersedes rules text. Whenever a card fundamentally contradicts the rules, the card's indication is what is true.
+
+### 050. Silver Rule
+
+**051.** Card text uses different terminology than rules. Card text should be interpreted according to these rules, not as though it were text within these rules.
+
+**052.** Card, when written in card effects, is shorthand for "Main Deck card." Runes, legends, and battlefields are not considered cards when executing the abilities and effects of game objects. They are considered cards for the purposes of these rules.
+
+**053.** Cards refer to themselves in the first person.
+
+**053.1.** * Units and legends say "I," "me," etc.
+
+**053.2.** * Gear and spells say "this."
+
+**053.3.** * Battlefields say "here."
+
+**053.4.** * Cards may refer to themselves by their name for clarity. This is shorthand for the above terms.
+
+**054.** "Can't beats Can"
+
+**054.1.** Cards that forbid actions or effects, as a broad method of determination, supersede cards that allow or permit that same action or effect.
+
+**055.** When executing card text, do as much as you can, ignoring impossible instructions.
+
+**055.1.** If all of a card's instructions are impossible, it is still played and resolved, but nothing happens.
+
+**056.** Cards a player owns may never be placed into a non-Board zone belonging to another player.
+
+**056.1.** Non-Board zones corresponding to a player include Main Deck, Rune Deck, Trash, Hand, Chosen Champion zone, and Banishment.
+
+**056.2.** If a card would enter such a zone, it goes to its owner's corresponding zone instead.
