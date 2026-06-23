@@ -550,7 +550,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var battlefield = state["battlefields"]!.AsArray()
             .Select(node => node!.AsObject())
             .FirstOrDefault(candidate => candidate["id"]?.GetValue<string>() == battlefieldId);
-        if (battlefield is null || battlefield["controllerId"]?.GetValue<int>() != playerId)
+        if (battlefield is null)
         {
             return null;
         }
@@ -560,7 +560,42 @@ public sealed class DefaultRulesEngine : IRulesEngine
         moved["exhausted"] = true;
         battlefield["units"]!.AsArray().Add(moved);
 
-        return AddLog(state, $"{PlayerName(state, playerId)} moved {unit["name"]?.GetValue<string>() ?? "a unit"} to {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+        state = AddLog(state, $"{PlayerName(state, playerId)} moved {unit["name"]?.GetValue<string>() ?? "a unit"} to {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+
+        var owners = battlefield["units"]!.AsArray()
+            .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
+            .Where(owner => owner is not null)
+            .Select(owner => owner!.Value)
+            .Distinct()
+            .ToArray();
+
+        if (owners.Length == 2)
+        {
+            var defenderPlayerId = owners.First(owner => owner != playerId);
+            battlefield["controllerId"] = null;
+            battlefield["stagedCombat"] = true;
+            battlefield["stagedShowdown"] = true;
+            battlefield["contestedByPlayerId"] = playerId;
+            state["activeShowdown"] = new JsonObject
+            {
+                ["battlefieldId"] = battlefieldId,
+                ["kind"] = "combat"
+            };
+            state["activeCombat"] = new JsonObject
+            {
+                ["battlefieldId"] = battlefieldId,
+                ["attackerPlayerId"] = playerId,
+                ["defenderPlayerId"] = defenderPlayerId
+            };
+            return AddLog(state, $"{PlayerName(state, playerId)} challenges {PlayerName(state, defenderPlayerId)} to a showdown at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}!");
+        }
+
+        if (owners.Length == 1)
+        {
+            battlefield["controllerId"] = playerId;
+        }
+
+        return state;
     }
 
     private static JsonObject? ResolveCombat(JsonObject state, int playerId, IReadOnlyDictionary<string, object?>? payload)

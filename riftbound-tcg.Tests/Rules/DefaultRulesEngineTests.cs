@@ -415,7 +415,7 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void a_unit_cannot_move_to_a_battlefield_the_player_does_not_control()
+    public void moving_into_an_undefended_enemy_controlled_battlefield_flips_control_uncontested()
     {
         var engine = new DefaultRulesEngine();
         var state = ReachMainPhase(engine);
@@ -436,8 +436,132 @@ public class DefaultRulesEngineTests
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["battlefieldId"] = battlefieldId }),
             afterPlay.State.SequenceNumber);
 
-        Assert.That(result.Accepted, Is.False);
-        Assert.That(result.State.SequenceNumber, Is.EqualTo(afterPlay.State.SequenceNumber));
+        Assert.That(result.Accepted, Is.True);
+
+        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void moving_a_unit_to_an_uncontrolled_battlefield_grants_uncontested_control()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(afterPlay.Accepted, Is.True);
+
+        var playedPlayer = afterPlay.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        playedPlayer["base"]!.AsArray().Single()!["exhausted"] = false;
+        var unitId = playedPlayer["base"]!.AsArray().Single()!["uid"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            afterPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["battlefieldId"] = battlefieldId }),
+            afterPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+
+        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void moving_a_unit_onto_an_opponent_occupied_battlefield_starts_a_contest()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(afterFirstPlay.Accepted, Is.True);
+        var playerZero = afterFirstPlay.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        playerZero["base"]!.AsArray().Single()!["exhausted"] = false;
+        var unitZeroId = playerZero["base"]!.AsArray().Single()!["uid"]!.GetValue<string>();
+
+        var afterMoveZero = engine.ApplyAction(
+            afterFirstPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitZeroId, ["battlefieldId"] = battlefieldId }),
+            afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterMoveZero.Accepted, Is.True);
+
+        var current = afterMoveZero.State;
+        while (current.State["turnPlayerId"]!.GetValue<int>() != 1 || current.State["turnPhase"]?.GetValue<string>() != "main")
+        {
+            var turnPlayerId = current.State["turnPlayerId"]!.GetValue<int>();
+            var advanced = engine.ApplyAction(current, new EngineGameAction(turnPlayerId, "advance-phase", new Dictionary<string, object?>()), current.SequenceNumber);
+            Assert.That(advanced.Accepted, Is.True);
+            current = advanced.State;
+        }
+
+        var afterSecondPlay = engine.ApplyAction(current, new EngineGameAction(1, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), current.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+        var playerOne = afterSecondPlay.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 1)!.AsObject();
+        playerOne["base"]!.AsArray().Single()!["exhausted"] = false;
+        var unitOneId = playerOne["base"]!.AsArray().Single()!["uid"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(1, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitOneId, ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+
+        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        Assert.That(resultBattlefield["units"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(resultBattlefield["controllerId"], Is.Null);
+
+        var activeCombat = result.State.State["activeCombat"]!.AsObject();
+        Assert.That(activeCombat["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefieldId));
+        Assert.That(activeCombat["attackerPlayerId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(activeCombat["defenderPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+
+        var activeShowdown = result.State.State["activeShowdown"]!.AsObject();
+        Assert.That(activeShowdown["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefieldId));
+        Assert.That(activeShowdown["kind"]!.GetValue<string>(), Is.EqualTo("combat"));
+        Assert.That(resultBattlefield["stagedShowdown"]!.GetValue<bool>(), Is.True);
+
+        var resolveActions = engine.GetLegalActions(result.State, 0);
+        Assert.That(resolveActions.Select(action => action.Type), Contains.Item("resolve-combat"));
+    }
+
+    [Test]
+    public void a_player_can_stack_multiple_of_their_own_units_on_the_same_battlefield()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(afterFirstPlay.Accepted, Is.True);
+        var afterSecondPlay = engine.ApplyAction(afterFirstPlay.State, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+
+        var player = afterSecondPlay.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var unitIds = player["base"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()).ToArray();
+        Assert.That(unitIds, Has.Length.EqualTo(2));
+        foreach (var unitId in unitIds)
+        {
+            player["base"]!.AsArray().First(unit => unit!["uid"]!.GetValue<string>() == unitId)!["exhausted"] = false;
+        }
+
+        var afterFirstMove = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitIds[0], ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+        Assert.That(afterFirstMove.Accepted, Is.True);
+
+        var result = engine.ApplyAction(
+            afterFirstMove.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitIds[1], ["battlefieldId"] = battlefieldId }),
+            afterFirstMove.State.SequenceNumber);
+        Assert.That(result.Accepted, Is.True);
+
+        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        Assert.That(resultBattlefield["units"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
     }
 
     private static EngineMatchState ReachMainPhase(DefaultRulesEngine engine)
