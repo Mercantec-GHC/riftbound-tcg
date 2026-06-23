@@ -440,14 +440,10 @@ public class DefaultRulesEngineTests
         var played = engine.ApplyAction(state, new EngineGameAction(1, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
         Assert.That(played.Accepted, Is.True);
 
-        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
-        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
-
-        Assert.That(afterSecondPass.Accepted, Is.True);
-        var player = FindPlayer(afterSecondPass.State, 1);
+        var player = FindPlayer(played.State, 1);
         Assert.That(player["baseGear"]!.AsArray(), Has.Count.EqualTo(1));
         Assert.That(player["baseGear"]!.AsArray()[0]!["name"]!.GetValue<string>(), Is.EqualTo("Gold Token"));
-        Assert.That(afterSecondPass.State.State["chainWindow"], Is.Null);
+        Assert.That(played.State.State["chainWindow"], Is.Null);
     }
 
     [Test]
@@ -513,6 +509,59 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void chain_window_tracks_priority_and_rejects_non_priority_passes()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("draw-one", "Draw One", "spell", "[Action] Draw 1.", "draw", 1, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var chainWindow = played.State.State["chainWindow"]!.AsObject();
+        Assert.That(chainWindow["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(chainWindow["startedByPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+
+        var wrongPass = engine.ApplyAction(played.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        Assert.That(wrongPass.Accepted, Is.False);
+    }
+
+    [Test]
+    public void cleanup_after_spell_damage_kills_lethal_units()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("bolt", "Bolt", "spell", "[Action] Deal 2.", "damage", 2, cost: 0));
+
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "target-card",
+            ["catalogId"] = "target-card",
+            ["uid"] = "target-unit",
+            ["name"] = "Target Unit",
+            ["kind"] = "unit",
+            ["ownerId"] = 1,
+            ["cost"] = 1,
+            ["might"] = 2,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["exhausted"] = true,
+            ["attacker"] = false,
+            ["defender"] = false
+        });
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "target-unit" }), state.SequenceNumber);
+        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        var resolved = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+
+        Assert.That(resolved.Accepted, Is.True);
+        var resultBattlefield = resolved.State.State["battlefields"]![0]!.AsObject();
+        Assert.That(resultBattlefield["units"]!.AsArray(), Is.Empty);
+        Assert.That(FindPlayer(resolved.State, 1)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public void action_spell_is_legal_for_focus_player_during_showdown_open_state()
     {
         var engine = new DefaultRulesEngine();
@@ -564,7 +613,8 @@ public class DefaultRulesEngineTests
 
         Assert.That(result.Accepted, Is.True);
 
-        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        var closed = PassAllFocus(engine, result.State);
+        var resultBattlefield = closed.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
         Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
     }
 
@@ -590,7 +640,8 @@ public class DefaultRulesEngineTests
 
         Assert.That(result.Accepted, Is.True);
 
-        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        var closed = PassAllFocus(engine, result.State);
+        var resultBattlefield = closed.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
         Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
     }
 
@@ -614,8 +665,9 @@ public class DefaultRulesEngineTests
             afterPlay.State.SequenceNumber);
 
         Assert.That(result.Accepted, Is.True);
-        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(0));
-        Assert.That(ScoredBattlefields(result.State, 0), Is.Empty);
+        var closed = PassAllFocus(engine, result.State);
+        Assert.That(PlayerPoints(closed, 0), Is.EqualTo(1));
+        Assert.That(ScoredBattlefields(closed, 0), Does.Contain(battlefieldId));
     }
 
     [Test]
@@ -641,14 +693,15 @@ public class DefaultRulesEngineTests
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = units[0]!["uid"]!.GetValue<string>(), ["battlefieldId"] = battlefieldId }),
             afterSecondPlay.State.SequenceNumber);
         Assert.That(firstMove.Accepted, Is.True);
+        var afterShowdown = PassAllFocus(engine, firstMove.State);
 
         var secondMove = engine.ApplyAction(
-            firstMove.State,
+            afterShowdown,
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = units[1]!["uid"]!.GetValue<string>(), ["battlefieldId"] = battlefieldId }),
-            firstMove.State.SequenceNumber);
+            afterShowdown.SequenceNumber);
 
         Assert.That(secondMove.Accepted, Is.True);
-        Assert.That(PlayerPoints(secondMove.State, 0), Is.EqualTo(0));
+        Assert.That(PlayerPoints(secondMove.State, 0), Is.EqualTo(1));
     }
 
     [Test]
@@ -721,7 +774,7 @@ public class DefaultRulesEngineTests
             afterFirstPlay.State.SequenceNumber);
         Assert.That(afterMoveZero.Accepted, Is.True);
 
-        var current = afterMoveZero.State;
+        var current = PassAllFocus(engine, afterMoveZero.State);
         while (current.State["turnPlayerId"]!.GetValue<int>() != 1 || current.State["turnPhase"]?.GetValue<string>() != "main")
         {
             var turnPlayerId = current.State["turnPlayerId"]!.GetValue<int>();
@@ -755,9 +808,12 @@ public class DefaultRulesEngineTests
         var activeShowdown = result.State.State["activeShowdown"]!.AsObject();
         Assert.That(activeShowdown["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefieldId));
         Assert.That(activeShowdown["kind"]!.GetValue<string>(), Is.EqualTo("combat"));
-        Assert.That(resultBattlefield["stagedShowdown"]!.GetValue<bool>(), Is.True);
+        Assert.That(resultBattlefield["stagedShowdown"]?.GetValue<bool>() ?? false, Is.False);
 
-        var resolveActions = engine.GetLegalActions(result.State, 0);
+        var focusActions = engine.GetLegalActions(result.State, 1);
+        Assert.That(focusActions.Select(action => action.Type), Contains.Item("pass-focus"));
+        var afterCombatShowdown = PassAllFocus(engine, result.State);
+        var resolveActions = engine.GetLegalActions(afterCombatShowdown, 0);
         Assert.That(resolveActions.Select(action => action.Type), Contains.Item("resolve-combat"));
     }
 
@@ -786,11 +842,12 @@ public class DefaultRulesEngineTests
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitIds[0], ["battlefieldId"] = battlefieldId }),
             afterSecondPlay.State.SequenceNumber);
         Assert.That(afterFirstMove.Accepted, Is.True);
+        var afterShowdown = PassAllFocus(engine, afterFirstMove.State);
 
         var result = engine.ApplyAction(
-            afterFirstMove.State,
+            afterShowdown,
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitIds[1], ["battlefieldId"] = battlefieldId }),
-            afterFirstMove.State.SequenceNumber);
+            afterShowdown.SequenceNumber);
         Assert.That(result.Accepted, Is.True);
 
         var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
@@ -811,6 +868,21 @@ public class DefaultRulesEngineTests
             var turnPlayerId = current.State["turnPlayerId"]!.GetValue<int>();
             var advanced = engine.ApplyAction(current, new EngineGameAction(turnPlayerId, "advance-phase", new Dictionary<string, object?>()), current.SequenceNumber);
             current = advanced.State;
+        }
+
+        return current;
+    }
+
+    private static EngineMatchState PassAllFocus(DefaultRulesEngine engine, EngineMatchState state)
+    {
+        var current = state;
+        var guard = 0;
+        while (current.State["activeShowdown"] is not null && current.State["activeCombat"]?["damageStep"]?.GetValue<bool>() != true && guard++ < 8)
+        {
+            var focusPlayerId = current.State["focusPlayerId"]?.GetValue<int>() ?? current.State["activePlayer"]?.GetValue<int>() ?? 0;
+            var result = engine.ApplyAction(current, new EngineGameAction(focusPlayerId, "pass-focus", new Dictionary<string, object?>()), current.SequenceNumber);
+            Assert.That(result.Accepted, Is.True);
+            current = result.State;
         }
 
         return current;

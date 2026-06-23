@@ -129,7 +129,8 @@
 }
 
 .online-players .player,
-.online-battlefields article {
+.online-battlefields article,
+.online-window-panel article {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
@@ -138,10 +139,42 @@
   padding: 14px;
 }
 
+.online-window-panel {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.online-window-panel span,
+.online-stack strong {
+  color: #ffdc8a;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.online-window-panel strong {
+  overflow-wrap: anywhere;
+}
+
 .online-actions,
 .online-log {
   display: grid;
   gap: 10px;
+}
+
+.online-stack {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.online-stack p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .combat-modal-backdrop {
