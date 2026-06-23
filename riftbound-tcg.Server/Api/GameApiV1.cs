@@ -97,6 +97,77 @@ public static class GameApiV1
                 : TypedResults.NotFound();
         }).RequireAuthorization();
 
+        api.MapPost("/me/password", async Task<Results<NoContent, UnauthorizedHttpResult, BadRequest<ApiResult<ApiErrorPayload>>>> (ClaimsPrincipal user, ChangePasswordRequest request, AuthService service, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            try
+            {
+                await service.ChangePasswordAsync(userId, request, cancellationToken);
+                return TypedResults.NoContent();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("auth.password_invalid", ex.Message)));
+            }
+        }).RequireAuthorization();
+
+        api.MapPost("/me/avatar", async Task<Results<Ok<ApiResult<UserDto>>, UnauthorizedHttpResult, NotFound, BadRequest<ApiResult<ApiErrorPayload>>>> (HttpRequest request, ClaimsPrincipal user, AuthService service, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            if (!request.HasFormContentType)
+            {
+                return TypedResults.BadRequest(Envelope(Error("avatar.invalid", "Avatar upload must be multipart form data.")));
+            }
+
+            var form = await request.ReadFormAsync(cancellationToken);
+            var image = form.Files.GetFile("image");
+            if (image is null)
+            {
+                return TypedResults.BadRequest(Envelope(Error("avatar.invalid", "Avatar image is required.")));
+            }
+
+            try
+            {
+                return await service.UploadAvatarAsync(userId, image, cancellationToken) is { } profile
+                    ? TypedResults.Ok(Envelope(profile))
+                    : TypedResults.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("avatar.invalid", ex.Message)));
+            }
+        }).RequireAuthorization();
+
+        api.MapDelete("/me/avatar", async Task<Results<Ok<ApiResult<UserDto>>, UnauthorizedHttpResult, NotFound>> (ClaimsPrincipal user, AuthService service, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            return await service.ClearAvatarAsync(userId, cancellationToken) is { } profile
+                ? TypedResults.Ok(Envelope(profile))
+                : TypedResults.NotFound();
+        }).RequireAuthorization();
+
+        api.MapGet("/profile-images/{hash}", async Task<Results<FileContentHttpResult, NotFound>> (string hash, AuthService service, CancellationToken cancellationToken) =>
+        {
+            return await service.GetProfileImageAsync(hash, cancellationToken) is { } image
+                ? TypedResults.File(image.Bytes, image.ContentType)
+                : TypedResults.NotFound();
+        });
+
         api.MapGet("/me/stats", async Task<Results<Ok<ApiResult<UserStatsDto>>, UnauthorizedHttpResult, NotFound>> (ClaimsPrincipal user, AuthService service, CancellationToken cancellationToken) =>
         {
             var userId = AuthService.GetUserId(user);

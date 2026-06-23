@@ -24,6 +24,7 @@ export type {
   ApiAdminDeck,
   CardListQuery,
   CardUpsertResult,
+  ChangePasswordRequest,
   CreateDeckRequest,
   CreateLobbyRequest,
   CreateMatchRequest,

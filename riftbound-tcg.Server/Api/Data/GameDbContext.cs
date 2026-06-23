@@ -16,6 +16,7 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
     public DbSet<LobbyPlayerEntity> LobbyPlayers => Set<LobbyPlayerEntity>();
     public DbSet<UserActiveDeckEntity> UserActiveDecks => Set<UserActiveDeckEntity>();
     public DbSet<RefreshTokenEntity> RefreshTokens => Set<RefreshTokenEntity>();
+    public DbSet<ProfileImageEntity> ProfileImages => Set<ProfileImageEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -34,6 +35,12 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
             entity.ToTable("users");
             entity.HasKey(user => user.Id);
             entity.HasIndex(user => user.NormalizedEmail).IsUnique();
+        });
+
+        modelBuilder.Entity<ProfileImageEntity>(entity =>
+        {
+            entity.ToTable("profile_images");
+            entity.HasKey(image => image.Hash);
         });
 
         modelBuilder.Entity<DeckEntity>(entity =>
@@ -157,11 +164,21 @@ public sealed class UserEntity
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? DisabledAt { get; set; }
     public DateTimeOffset? LastLoginAt { get; set; }
+    public string? AvatarImageHash { get; set; }
     public int GamesPlayed { get; set; }
     public int Wins { get; set; }
     public int Losses { get; set; }
     public int PointsScored { get; set; }
     public DateTimeOffset? LastPlayedAt { get; set; }
+}
+
+public sealed class ProfileImageEntity
+{
+    public string Hash { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public byte[] Bytes { get; set; } = [];
+    public int Length { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 public sealed class DeckEntity

@@ -60,6 +60,12 @@ export type LoginRequest = {
   password: string
 }
 
+export type ChangePasswordRequest = {
+  currentPassword: string
+  newPassword: string
+  currentRefreshToken?: string | null
+}
+
 export type AuthSession = {
   accessToken: string
   refreshToken: string
@@ -105,6 +111,7 @@ export type MatchPlayer = {
   playerId: number
   userId: ApiId
   displayName: string
+  avatarImageHash?: string | null
   deckId: ApiId | null
   teamId: number | null
 }

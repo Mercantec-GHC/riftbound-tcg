@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createApiClient, createAuthApi } from '../../shared/api'
-import type { AuthSession, LoginRequest, RegisterRequest, UpdateUserRequest } from '../../shared/api'
+import type { AuthSession, ChangePasswordRequest, LoginRequest, RegisterRequest, UpdateUserRequest } from '../../shared/api'
 
 const refreshTokenKey = 'riftbound-refresh-token-v1'
 
@@ -59,8 +59,32 @@ export function useAuthSession() {
     return user
   }
 
+  async function changePassword(request: Omit<ChangePasswordRequest, 'currentRefreshToken'>) {
+    await authApi.changePassword({
+      ...request,
+      currentRefreshToken: localStorage.getItem(refreshTokenKey),
+    })
+    setStatus('Password updated.')
+  }
+
+  async function uploadAvatar(image: File) {
+    const user = await authApi.uploadAvatar(image)
+    setSession((current) => current ? { ...current, user } : current)
+    setStatus('Profile image updated.')
+    return user
+  }
+
+  async function deleteAvatar() {
+    const user = await authApi.deleteAvatar()
+    setSession((current) => current ? { ...current, user } : current)
+    setStatus('Profile image removed.')
+    return user
+  }
+
   return {
     apiClient,
+    changePassword,
+    deleteAvatar,
     login,
     logout,
     refresh,
@@ -68,5 +92,6 @@ export function useAuthSession() {
     session,
     status,
     updateMe,
+    uploadAvatar,
   }
 }

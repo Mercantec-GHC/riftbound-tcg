@@ -53,8 +53,9 @@ export function createApiClient({
     async request<T>(path: string, init: RequestInit = {}) {
       const token = await getAccessToken?.()
       const headers = new Headers(init.headers)
+      const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData
       if (!headers.has('Accept')) headers.set('Accept', 'application/json')
-      if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+      if (init.body && !isFormData && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
       if (token) headers.set('Authorization', `Bearer ${token}`)
 
       const response = await fetcher(joinUrl(baseUrl, path), { ...init, headers })
