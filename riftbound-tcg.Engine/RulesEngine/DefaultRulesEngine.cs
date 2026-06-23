@@ -121,10 +121,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             actions.Add(new("advance-phase", "advance-phase", "Advance phase", playerId));
             actions.Add(new("end-turn", "end-turn", "End turn", playerId));
-<<<<<<< HEAD
-=======
             actions.Add(new("score-point", "score-point", "Score battlefield", playerId, ScorePointPayloadSchema()));
->>>>>>> origin/main
 
             if (turnPhase == "main")
             {
@@ -178,8 +175,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
             case "end-turn":
                 nextState = EndCurrentTurn(nextState, action.PlayerId);
                 break;
-<<<<<<< HEAD
-=======
             case "score-point":
                 var battlefieldId = ReadString(action.Payload, "battlefieldId") ?? FirstBattlefieldId(nextState);
                 var source = ScoreSourceFrom(ReadString(action.Payload, "source"));
@@ -187,7 +182,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     ? ScoreBattlefield(nextState, new ScoreRequest(action.PlayerId, battlefieldId, ScoreSource.Hold))
                     : ConquerBattlefield(nextState, action.PlayerId, battlefieldId);
                 break;
->>>>>>> origin/main
             case "play-unit":
                 var playUnitResult = PlayUnit(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"));
                 if (playUnitResult is null)
@@ -372,17 +366,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         else if (currentPhase == "beginning")
         {
-<<<<<<< HEAD
-            var heldBattlefields = state["battlefields"]!.AsArray()
-                .Select(node => node!.AsObject())
-                .Where(battlefield => battlefield["controllerId"]?.GetValue<int>() == playerId)
-                .Select(battlefield => battlefield["id"]?.GetValue<string>() ?? string.Empty)
-                .Where(id => !string.IsNullOrWhiteSpace(id))
-                .ToArray();
-            foreach (var battlefieldId in heldBattlefields)
-            {
-                state = ScoreBattlefield(state, playerId, battlefieldId, "hold");
-=======
             foreach (var battlefieldId in ControlledBattlefieldIds(state, playerId))
             {
                 state = ScoreBattlefield(state, new ScoreRequest(playerId, battlefieldId, ScoreSource.Hold));
@@ -391,7 +374,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
             if (state["stage"]?.GetValue<string>() == "game-over")
             {
                 return state;
->>>>>>> origin/main
             }
         }
         else if (currentPhase == "draw")
@@ -877,12 +859,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
         if (attackerHasUnits)
         {
             battlefield["controllerId"] = attackerPlayerId.Value;
-            state = ScoreBattlefield(state, attackerPlayerId.Value, battlefieldId, "conquer");
+            state = ScoreBattlefield(state, new ScoreRequest(attackerPlayerId.Value, battlefieldId, ScoreSource.Conquer));
         }
         else if (defenderHasUnits)
         {
             battlefield["controllerId"] = defenderPlayerId.Value;
-            state = ScoreBattlefield(state, defenderPlayerId.Value, battlefieldId, "conquer");
+            state = ScoreBattlefield(state, new ScoreRequest(defenderPlayerId.Value, battlefieldId, ScoreSource.Conquer));
         }
         else
         {
@@ -890,56 +872,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return AddLog(state, $"Combat at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"} resolved.");
-    }
-
-    private static JsonObject ScoreBattlefield(JsonObject state, int playerId, string battlefieldId, string method)
-    {
-        var scoredByPlayer = state["scoredBattlefieldIdsThisTurn"] as JsonObject ?? new JsonObject();
-        state["scoredBattlefieldIdsThisTurn"] = scoredByPlayer;
-        var key = playerId.ToString();
-        var scored = scoredByPlayer[key]?.Deserialize<string[]>(JsonOptions) ?? [];
-        if (scored.Contains(battlefieldId, StringComparer.Ordinal))
-        {
-            return state;
-        }
-
-        var battlefield = state["battlefields"]!.AsArray()
-            .Select(node => node!.AsObject())
-            .FirstOrDefault(candidate => candidate["id"]?.GetValue<string>() == battlefieldId);
-        if (battlefield is null)
-        {
-            return state;
-        }
-
-        var scoredNow = scored.Append(battlefieldId).Distinct(StringComparer.Ordinal).ToArray();
-        scoredByPlayer[key] = ToArray(scoredNow);
-
-        var victoryScore = state["victoryScore"]?.GetValue<int>() ?? 8;
-        var currentPoints = ReadPlayerPoints(state, playerId);
-        var allBattlefieldIds = state["battlefields"]!.AsArray()
-            .Select(node => node!["id"]?.GetValue<string>() ?? string.Empty)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .ToArray();
-        var hasScoredEveryBattlefield = allBattlefieldIds.All(id => scoredNow.Contains(id, StringComparer.Ordinal));
-        var shouldDrawInstead = method == "conquer" && currentPoints >= victoryScore - 1 && !hasScoredEveryBattlefield;
-
-        if (shouldDrawInstead)
-        {
-            state = UpdatePlayer(state, playerId, player => Draw(player, 1));
-        }
-        else
-        {
-            state = UpdatePlayer(state, playerId, player =>
-            {
-                player["points"] = currentPoints + 1;
-                return player;
-            });
-        }
-
-        var verb = method == "hold" ? "held" : "conquered";
-        var result = shouldDrawInstead ? " and drew instead of gaining the final point." : " for 1 point.";
-        state = AddLog(state, $"{PlayerName(state, playerId)} {verb} {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}{result}");
-        return shouldDrawInstead ? state : CheckWinners(state);
     }
 
     private static bool ValidateDamageAssignments(IReadOnlyList<JsonObject> assigningUnits, IReadOnlyList<JsonObject> opposingUnits, IReadOnlyDictionary<string, int> assignments)

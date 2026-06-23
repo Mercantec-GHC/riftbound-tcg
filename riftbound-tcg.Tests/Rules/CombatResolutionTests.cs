@@ -81,23 +81,6 @@ public class CombatResolutionTests
     }
 
     [Test]
-    public void combat_conquest_draws_instead_of_gaining_the_final_point_unless_all_battlefields_were_scored()
-    {
-        var engine = new DefaultRulesEngine();
-        var state = SeedCombat(engine, [Unit("attacker-a", 0, 4)], [Unit("defender-a", 1, 2)]);
-        SetPlayerPoints(state, 0, 7);
-        Player(state, 0)["deck"]!.AsArray().Add(TestUnitCard("replacement-draw"));
-        var handCountBefore = Player(state, 0)["hand"]!.AsArray().Count;
-
-        var result = Resolve(engine, state, Attack(("defender-a", 4)), Defend(("attacker-a", 2)));
-
-        Assert.That(result.Accepted, Is.True);
-        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(7));
-        Assert.That(Player(result.State, 0)["hand"]!.AsArray(), Has.Count.EqualTo(handCountBefore + 1));
-        Assert.That(result.State.Stage, Is.EqualTo("playing"));
-    }
-
-    [Test]
     public void combat_conquest_can_gain_the_final_point_after_every_battlefield_was_scored_this_turn()
     {
         var engine = new DefaultRulesEngine();

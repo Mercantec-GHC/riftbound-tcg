@@ -566,17 +566,6 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void score_point_is_not_a_legal_player_action()
-    {
-        var engine = new DefaultRulesEngine();
-        var state = ReachMainPhase(engine);
-
-        var actions = engine.GetLegalActions(state, 0).Select(action => action.Type);
-
-        Assert.That(actions, Has.None.EqualTo("score-point"));
-    }
-
-    [Test]
     public void moving_a_unit_onto_an_opponent_occupied_battlefield_starts_a_contest()
     {
         var engine = new DefaultRulesEngine();
