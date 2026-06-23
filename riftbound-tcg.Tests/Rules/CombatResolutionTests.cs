@@ -45,6 +45,7 @@ public class CombatResolutionTests
         Assert.That(battlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
         Assert.That(UnitIds(battlefield), Is.EqualTo(new[] { "attacker-a" }));
         Assert.That(Player(result.State, 1)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(1));
     }
 
     [Test]
@@ -60,6 +61,7 @@ public class CombatResolutionTests
         Assert.That(battlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(1));
         Assert.That(UnitIds(battlefield), Is.EqualTo(new[] { "defender-a" }));
         Assert.That(Player(result.State, 0)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(PlayerPoints(result.State, 1), Is.EqualTo(1));
     }
 
     [Test]
@@ -74,6 +76,44 @@ public class CombatResolutionTests
         var battlefield = Battlefield(result.State);
         Assert.That(battlefield["controllerId"], Is.Null);
         Assert.That(battlefield["units"]!.AsArray(), Is.Empty);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(0));
+        Assert.That(PlayerPoints(result.State, 1), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void combat_conquest_draws_instead_of_gaining_the_final_point_unless_all_battlefields_were_scored()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = SeedCombat(engine, [Unit("attacker-a", 0, 4)], [Unit("defender-a", 1, 2)]);
+        SetPlayerPoints(state, 0, 7);
+        Player(state, 0)["deck"]!.AsArray().Add(TestUnitCard("replacement-draw"));
+        var handCountBefore = Player(state, 0)["hand"]!.AsArray().Count;
+
+        var result = Resolve(engine, state, Attack(("defender-a", 4)), Defend(("attacker-a", 2)));
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(7));
+        Assert.That(Player(result.State, 0)["hand"]!.AsArray(), Has.Count.EqualTo(handCountBefore + 1));
+        Assert.That(result.State.Stage, Is.EqualTo("playing"));
+    }
+
+    [Test]
+    public void combat_conquest_can_gain_the_final_point_after_every_battlefield_was_scored_this_turn()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = SeedCombat(engine, [Unit("attacker-a", 0, 4)], [Unit("defender-a", 1, 2)]);
+        SetPlayerPoints(state, 0, 7);
+        var otherBattlefieldIds = state.State["battlefields"]!.AsArray()
+            .Select(field => field!["id"]!.GetValue<string>())
+            .Where(id => id != "field-a")
+            .ToArray();
+        state.State["scoredBattlefieldIdsThisTurn"] = new JsonObject { ["0"] = new JsonArray(otherBattlefieldIds.Select(id => JsonValue.Create(id)).ToArray()) };
+
+        var result = Resolve(engine, state, Attack(("defender-a", 4)), Defend(("attacker-a", 2)));
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(8));
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
     }
 
     [Test]
@@ -390,6 +430,25 @@ public class CombatResolutionTests
 
     private static JsonObject Player(EngineMatchState state, int playerId) =>
         state.State["players"]!.AsArray().First(player => player!["id"]!.GetValue<int>() == playerId)!.AsObject();
+
+    private static int PlayerPoints(EngineMatchState state, int playerId) =>
+        Player(state, playerId)["points"]!.GetValue<int>();
+
+    private static void SetPlayerPoints(EngineMatchState state, int playerId, int points) =>
+        Player(state, playerId)["points"] = points;
+
+    private static JsonObject TestUnitCard(string id) =>
+        new()
+        {
+            ["id"] = id,
+            ["catalogId"] = id,
+            ["name"] = id,
+            ["kind"] = "unit",
+            ["cost"] = 1,
+            ["might"] = 1,
+            ["attachedMight"] = 0,
+            ["damage"] = 0
+        };
 
     private static string[] UnitIds(JsonObject battlefield) =>
         battlefield["units"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()).ToArray();

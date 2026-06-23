@@ -469,6 +469,114 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void moving_a_unit_to_an_uncontrolled_battlefield_changes_control_without_scoring()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(afterPlay.Accepted, Is.True);
+
+        var player = afterPlay.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        player["base"]!.AsArray().Single()!["exhausted"] = false;
+        var unitId = player["base"]!.AsArray().Single()!["uid"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            afterPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["battlefieldId"] = battlefieldId }),
+            afterPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(0));
+        Assert.That(ScoredBattlefields(result.State, 0), Is.Empty);
+    }
+
+    [Test]
+    public void reinforcing_a_battlefield_you_already_control_does_not_score_another_conquest_point()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterSecondPlay = engine.ApplyAction(afterFirstPlay.State, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+
+        var player = afterSecondPlay.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var units = player["base"]!.AsArray();
+        foreach (var unit in units)
+        {
+            unit!["exhausted"] = false;
+        }
+
+        var firstMove = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = units[0]!["uid"]!.GetValue<string>(), ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+        Assert.That(firstMove.Accepted, Is.True);
+
+        var secondMove = engine.ApplyAction(
+            firstMove.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = units[1]!["uid"]!.GetValue<string>(), ["battlefieldId"] = battlefieldId }),
+            firstMove.State.SequenceNumber);
+
+        Assert.That(secondMove.Accepted, Is.True);
+        Assert.That(PlayerPoints(secondMove.State, 0), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void controlled_battlefields_score_hold_points_during_beginning()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+        battlefield["controllerId"] = 0;
+        state.State["turnPhase"] = "beginning";
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(1));
+        Assert.That(ScoredBattlefields(result.State, 0), Does.Contain(battlefieldId));
+    }
+
+    [Test]
+    public void hold_can_gain_the_final_point()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["controllerId"] = 0;
+        state.State["turnPhase"] = "beginning";
+        SetPlayerPoints(state, 0, 7);
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(8));
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
+    }
+
+    [Test]
+    public void score_point_is_not_a_legal_player_action()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+
+        var actions = engine.GetLegalActions(state, 0).Select(action => action.Type);
+
+        Assert.That(actions, Has.None.EqualTo("score-point"));
+    }
+
+    [Test]
     public void moving_a_unit_onto_an_opponent_occupied_battlefield_starts_a_contest()
     {
         var engine = new DefaultRulesEngine();
@@ -581,6 +689,18 @@ public class DefaultRulesEngineTests
 
         return current;
     }
+
+    private static int PlayerPoints(EngineMatchState state, int playerId) =>
+        state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == playerId)!["points"]!.GetValue<int>();
+
+    private static JsonObject Player(EngineMatchState state, int playerId) =>
+        state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == playerId)!.AsObject();
+
+    private static void SetPlayerPoints(EngineMatchState state, int playerId, int points) =>
+        Player(state, playerId)["points"] = points;
+
+    private static string[] ScoredBattlefields(EngineMatchState state, int playerId) =>
+        state.State["scoredBattlefieldIdsThisTurn"]?[playerId.ToString()]?.AsArray().Select(node => node!.GetValue<string>()).ToArray() ?? [];
 
     private static EngineMatchConfig Config()
     {
