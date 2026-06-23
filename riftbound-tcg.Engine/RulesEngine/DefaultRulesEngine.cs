@@ -1033,11 +1033,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         if (owners.Length == 1)
         {
-            battlefield["contestedByPlayerId"] = playerId;
-            if (battlefield["controllerId"]?.GetValue<int?>() != playerId)
-            {
-                battlefield["stagedShowdown"] = true;
-            }
+            battlefield["controllerId"] = playerId;
+            battlefield["contestedByPlayerId"] = null;
+            battlefield["stagedShowdown"] = false;
+            battlefield["stagedCombat"] = false;
         }
 
         return state;
@@ -1107,10 +1106,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 battlefield["controllerId"] = null;
                 battlefield["stagedShowdown"] = true;
                 battlefield["stagedCombat"] = true;
-            }
-            else if (battlefield["controllerId"]?.GetValue<int?>() != contestedBy.Value)
-            {
-                battlefield["stagedShowdown"] = true;
             }
         }
 

@@ -134,11 +134,11 @@ public class SpellClassifierTests
     }
 
     [Test]
-    public void CanPlayDuringChainWindow_ActionSpell_OnlyTurnPlayerCanPlay()
+    public void CanPlayDuringChainWindow_ActionSpell_NoPlayerCanPlay()
     {
         var card = CardBuilder.Spell().Text("[Action] Deal 3 to a unit.").Build();
 
-        Assert.That(SpellClassifier.CanPlayDuringChainWindow(card, playerId: 0, turnPlayerId: 0), Is.True);
+        Assert.That(SpellClassifier.CanPlayDuringChainWindow(card, playerId: 0, turnPlayerId: 0), Is.False);
         Assert.That(SpellClassifier.CanPlayDuringChainWindow(card, playerId: 1, turnPlayerId: 0), Is.False);
     }
 }

@@ -613,9 +613,11 @@ public class DefaultRulesEngineTests
 
         Assert.That(result.Accepted, Is.True);
 
-        var closed = PassAllFocus(engine, result.State);
-        var resultBattlefield = closed.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
         Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(resultBattlefield["contestedByPlayerId"], Is.Null);
+        Assert.That(resultBattlefield["stagedShowdown"]?.GetValue<bool>() ?? false, Is.False);
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(0));
     }
 
     [Test]
@@ -640,9 +642,10 @@ public class DefaultRulesEngineTests
 
         Assert.That(result.Accepted, Is.True);
 
-        var closed = PassAllFocus(engine, result.State);
-        var resultBattlefield = closed.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
+        var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();
         Assert.That(resultBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(resultBattlefield["contestedByPlayerId"], Is.Null);
+        Assert.That(resultBattlefield["stagedShowdown"]?.GetValue<bool>() ?? false, Is.False);
     }
 
     [Test]
@@ -665,9 +668,8 @@ public class DefaultRulesEngineTests
             afterPlay.State.SequenceNumber);
 
         Assert.That(result.Accepted, Is.True);
-        var closed = PassAllFocus(engine, result.State);
-        Assert.That(PlayerPoints(closed, 0), Is.EqualTo(1));
-        Assert.That(ScoredBattlefields(closed, 0), Does.Contain(battlefieldId));
+        Assert.That(PlayerPoints(result.State, 0), Is.EqualTo(0));
+        Assert.That(ScoredBattlefields(result.State, 0), Is.Empty);
     }
 
     [Test]
@@ -693,15 +695,14 @@ public class DefaultRulesEngineTests
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = units[0]!["uid"]!.GetValue<string>(), ["battlefieldId"] = battlefieldId }),
             afterSecondPlay.State.SequenceNumber);
         Assert.That(firstMove.Accepted, Is.True);
-        var afterShowdown = PassAllFocus(engine, firstMove.State);
 
         var secondMove = engine.ApplyAction(
-            afterShowdown,
+            firstMove.State,
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = units[1]!["uid"]!.GetValue<string>(), ["battlefieldId"] = battlefieldId }),
-            afterShowdown.SequenceNumber);
+            firstMove.State.SequenceNumber);
 
         Assert.That(secondMove.Accepted, Is.True);
-        Assert.That(PlayerPoints(secondMove.State, 0), Is.EqualTo(1));
+        Assert.That(PlayerPoints(secondMove.State, 0), Is.EqualTo(0));
     }
 
     [Test]
@@ -774,7 +775,7 @@ public class DefaultRulesEngineTests
             afterFirstPlay.State.SequenceNumber);
         Assert.That(afterMoveZero.Accepted, Is.True);
 
-        var current = PassAllFocus(engine, afterMoveZero.State);
+        var current = afterMoveZero.State;
         while (current.State["turnPlayerId"]!.GetValue<int>() != 1 || current.State["turnPhase"]?.GetValue<string>() != "main")
         {
             var turnPlayerId = current.State["turnPlayerId"]!.GetValue<int>();
@@ -842,12 +843,11 @@ public class DefaultRulesEngineTests
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitIds[0], ["battlefieldId"] = battlefieldId }),
             afterSecondPlay.State.SequenceNumber);
         Assert.That(afterFirstMove.Accepted, Is.True);
-        var afterShowdown = PassAllFocus(engine, afterFirstMove.State);
 
         var result = engine.ApplyAction(
-            afterShowdown,
+            afterFirstMove.State,
             new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitIds[1], ["battlefieldId"] = battlefieldId }),
-            afterShowdown.SequenceNumber);
+            afterFirstMove.State.SequenceNumber);
         Assert.That(result.Accepted, Is.True);
 
         var resultBattlefield = result.State.State["battlefields"]!.AsArray().First(b => b!["id"]!.GetValue<string>() == battlefieldId)!.AsObject();

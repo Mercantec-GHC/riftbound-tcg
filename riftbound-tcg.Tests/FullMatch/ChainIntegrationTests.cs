@@ -84,13 +84,15 @@ public class ChainIntegrationTests
     }
 
     [Test]
-    public void ChainLifecycle_NonTurnPlayerCannotChainActionSpell()
+    public void ChainLifecycle_ActionSpellCannotBeChainedInClosedState()
     {
         var chainWindow = ChainRules.Open();
         var actionSpell = CardBuilder.Spell().Text("[Action] Deal 3 to a unit.").Build();
 
+        var turnPlayerResult = ChainRules.ValidateChainPlay(actionSpell, playerId: 0, turnPlayerId: 0, chainWindow);
         var result = ChainRules.ValidateChainPlay(actionSpell, playerId: 1, turnPlayerId: 0, chainWindow);
 
+        Assert.That(turnPlayerResult.IsValid, Is.False);
         Assert.That(result.IsValid, Is.False);
     }
 

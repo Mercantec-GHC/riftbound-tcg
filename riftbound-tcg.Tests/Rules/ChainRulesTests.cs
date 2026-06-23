@@ -101,7 +101,7 @@ public class ChainRulesTests
     }
 
     [Test]
-    public void ValidateChainPlay_ActionSpell_TurnPlayer_WithOpenChain_IsValid()
+    public void ValidateChainPlay_ActionSpell_TurnPlayer_WithOpenChain_IsRejected()
     {
         var card = CardBuilder.Spell()
             .Text("[Action] Deal 3 to a unit.")
@@ -109,7 +109,8 @@ public class ChainRulesTests
 
         var result = ChainRules.ValidateChainPlay(card, playerId: 0, turnPlayerId: 0, chainWindow: ChainRules.Open());
 
-        Assert.That(result.IsValid, Is.True);
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.Error, Does.Contain("[Reaction]"));
     }
 
     [Test]
@@ -122,7 +123,7 @@ public class ChainRulesTests
         var result = ChainRules.ValidateChainPlay(card, playerId: 1, turnPlayerId: 0, chainWindow: ChainRules.Open());
 
         Assert.That(result.IsValid, Is.False);
-        Assert.That(result.Error, Does.Contain("turn player"));
+        Assert.That(result.Error, Does.Contain("[Reaction]"));
     }
 
     [Test]

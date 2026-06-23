@@ -33,8 +33,8 @@ public static ChainWindow? Pass(ChainWindow current, int playerId, IReadOnlyList
         if (subtype == SpellSubtype.Reaction && chainWindow is null)
             return ChainPlayValidation.Rejected($"{card.Name} is a [Reaction] — it can only be played in response to an effect on the chain.");
 
-        if (subtype == SpellSubtype.Action && chainWindow is not null && playerId != turnPlayerId)
-            return ChainPlayValidation.Rejected($"Only the turn player may chain an action spell.");
+        if (subtype == SpellSubtype.Action && chainWindow is not null)
+            return ChainPlayValidation.Rejected($"{card.Name} does not have [Reaction] and cannot be played in a Closed State.");
 
         return ChainPlayValidation.Accepted(subtype);
     }
