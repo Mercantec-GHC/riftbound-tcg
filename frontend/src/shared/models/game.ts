@@ -89,7 +89,7 @@ export type GameState = {
   mulliganPlayerIndex: number
   mulliganConfirmedPlayerIds?: number[]
   activeShowdown: { battlefieldId: string; kind: 'non-combat' | 'combat' } | null
-  activeCombat: { battlefieldId: string; attackerId: number; defenderId: number } | null
+  activeCombat: { battlefieldId: string; attackerPlayerId: number; defenderPlayerId: number } | null
   selectedCard: { player: number; handIndex: number } | null
   selectedUnit: { player: number; unitId: string } | null
   nextUid: number

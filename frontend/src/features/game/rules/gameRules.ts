@@ -426,7 +426,7 @@ export function openNextStagedConflict(state: GameState) {
     return addLog({
       ...state,
       activeShowdown: { battlefieldId: combat.id, kind: 'combat' },
-      activeCombat: { battlefieldId: combat.id, attackerId: combat.contestedByPlayerId, defenderId: defender },
+      activeCombat: { battlefieldId: combat.id, attackerPlayerId: combat.contestedByPlayerId, defenderPlayerId: defender },
       focusPlayerId: combat.contestedByPlayerId,
       priorityPlayerId: combat.contestedByPlayerId,
       hasPassedFocusByPlayer: {},
@@ -466,19 +466,19 @@ export function resolveCombat(state: GameState): GameState {
   if (!combat) return { ...state, activeShowdown: null }
   const field = state.battlefields.find((candidate) => candidate.id === combat.battlefieldId)
   if (!field) return { ...state, activeCombat: null, activeShowdown: null }
-  const attackers = field.units.filter((unit) => unit.owner === combat.attackerId)
-  const defenders = field.units.filter((unit) => unit.owner === combat.defenderId)
+  const attackers = field.units.filter((unit) => unit.owner === combat.attackerPlayerId)
+  const defenders = field.units.filter((unit) => unit.owner === combat.defenderPlayerId)
   const attackerMight = totalMight(attackers)
   const defenderMight = totalMight(defenders)
   let damageToAttackers = defenderMight
   let damageToDefenders = attackerMight
   const damagedUnits = field.units.map((unit) => {
-    if (unit.owner === combat.attackerId && damageToAttackers > 0) {
+    if (unit.owner === combat.attackerPlayerId && damageToAttackers > 0) {
       const dealt = Math.min(unit.might + unit.attachedMight, damageToAttackers)
       damageToAttackers -= dealt
       return { ...unit, damage: unit.damage + dealt }
     }
-    if (unit.owner === combat.defenderId && damageToDefenders > 0) {
+    if (unit.owner === combat.defenderPlayerId && damageToDefenders > 0) {
       const dealt = Math.min(unit.might + unit.attachedMight, damageToDefenders)
       damageToDefenders -= dealt
       return { ...unit, damage: unit.damage + dealt }

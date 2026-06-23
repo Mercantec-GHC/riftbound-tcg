@@ -19,6 +19,20 @@ public class CombatResolutionTests
     }
 
     [Test]
+    public void player_assignment_does_not_resolve_combat_until_the_opponent_assigns()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = SeedCombat(engine, [Unit("attacker-a", 0, 3)], [Unit("defender-a", 1, 3)]);
+
+        var first = SubmitAssignment(engine, state, 0, Attack(("defender-a", 3)));
+
+        Assert.That(first.Accepted, Is.True);
+        Assert.That(first.State.State["activeCombat"], Is.Not.Null);
+        Assert.That(engine.GetLegalActions(first.State, 0).Select(action => action.Type), Has.None.EqualTo("resolve-combat"));
+        Assert.That(engine.GetLegalActions(first.State, 1).Select(action => action.Type), Contains.Item("resolve-combat"));
+    }
+
+    [Test]
     public void one_on_one_combat_can_be_won_by_the_attacker()
     {
         var engine = new DefaultRulesEngine();
@@ -169,7 +183,7 @@ public class CombatResolutionTests
         var state = engine.CreateInitialState(Config(), Decks(), 123);
         state.State["stage"] = "playing";
 
-        var result = Resolve(engine, state, Attack(("defender-a", 1)), Defend(("attacker-a", 1)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("defender-a", 1)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -185,8 +199,7 @@ public class CombatResolutionTests
             new EngineGameAction(0, "resolve-combat", new Dictionary<string, object?>
             {
                 ["battlefieldId"] = "wrong-field",
-                ["attackerAssignments"] = Attack(("defender-a", 3)),
-                ["defenderAssignments"] = Defend(("attacker-a", 3))
+                ["assignments"] = Attack(("defender-a", 3))
             }),
             state.SequenceNumber);
 
@@ -200,7 +213,7 @@ public class CombatResolutionTests
         var state = SeedCombat(engine, [Unit("attacker-a", 0, 3)], [Unit("defender-a", 1, 3)], "ffa-3");
         Battlefield(state)["units"]!.AsArray().Add(Unit("third-a", 2, 3));
 
-        var result = Resolve(engine, state, Attack(("defender-a", 3)), Defend(("attacker-a", 3)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("defender-a", 3)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -211,7 +224,7 @@ public class CombatResolutionTests
         var engine = new DefaultRulesEngine();
         var state = SeedCombat(engine, [Unit("attacker-a", 0, 3)], [Unit("defender-a", 1, 3)]);
 
-        var result = Resolve(engine, state, Attack(("attacker-a", 3)), Defend(("attacker-a", 3)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("attacker-a", 3)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -222,7 +235,7 @@ public class CombatResolutionTests
         var engine = new DefaultRulesEngine();
         var state = SeedCombat(engine, [Unit("attacker-a", 0, 3)], [Unit("defender-a", 1, 3)]);
 
-        var result = Resolve(engine, state, Attack(("missing", 3)), Defend(("attacker-a", 3)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("missing", 3)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -233,7 +246,7 @@ public class CombatResolutionTests
         var engine = new DefaultRulesEngine();
         var state = SeedCombat(engine, [Unit("attacker-a", 0, 3)], [Unit("defender-a", 1, 3)]);
 
-        var result = Resolve(engine, state, Attack(("defender-a", 2)), Defend(("attacker-a", 3)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("defender-a", 2)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -244,7 +257,7 @@ public class CombatResolutionTests
         var engine = new DefaultRulesEngine();
         var state = SeedCombat(engine, [Unit("attacker-a", 0, 4)], [Unit("defender-a", 1, 3), Unit("defender-b", 1, 3)]);
 
-        var result = Resolve(engine, state, Attack(("defender-a", 2), ("defender-b", 2)), Defend(("attacker-a", 6)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("defender-a", 2), ("defender-b", 2)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -255,7 +268,7 @@ public class CombatResolutionTests
         var engine = new DefaultRulesEngine();
         var state = SeedCombat(engine, [Unit("attacker-a", 0, 5)], [Unit("defender-a", 1, 3), Unit("defender-b", 1, 3)]);
 
-        var result = Resolve(engine, state, Attack(("defender-a", 4), ("defender-b", 1)), Defend(("attacker-a", 6)));
+        var result = SubmitAssignment(engine, state, 0, Attack(("defender-a", 4), ("defender-b", 1)));
 
         Assert.That(result.Accepted, Is.False);
     }
@@ -268,7 +281,26 @@ public class CombatResolutionTests
 
         var result = engine.ApplyAction(
             state,
-            new EngineGameAction(2, "resolve-combat", Payload(Attack(("defender-a", 3)), Defend(("attacker-a", 3)))),
+            new EngineGameAction(2, "resolve-combat", Payload(Attack(("defender-a", 3)))),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+    }
+
+    [Test]
+    public void resolve_combat_is_rejected_when_player_submits_the_opponent_assignment()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = SeedCombat(engine, [Unit("attacker-a", 0, 3)], [Unit("defender-a", 1, 3)]);
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "resolve-combat", new Dictionary<string, object?>
+            {
+                ["battlefieldId"] = "field-a",
+                ["assignments"] = Attack(("defender-a", 3)),
+                ["defenderAssignments"] = Defend(("attacker-a", 3))
+            }),
             state.SequenceNumber);
 
         Assert.That(result.Accepted, Is.False);
@@ -276,18 +308,24 @@ public class CombatResolutionTests
 
     private static EngineActionResult Resolve(DefaultRulesEngine engine, EngineMatchState state, Dictionary<string, int> attackerAssignments, Dictionary<string, int> defenderAssignments)
     {
+        var afterAttacker = SubmitAssignment(engine, state, 0, attackerAssignments);
+        Assert.That(afterAttacker.Accepted, Is.True);
+        return SubmitAssignment(engine, afterAttacker.State, 1, defenderAssignments);
+    }
+
+    private static EngineActionResult SubmitAssignment(DefaultRulesEngine engine, EngineMatchState state, int playerId, Dictionary<string, int> assignments)
+    {
         return engine.ApplyAction(
             state,
-            new EngineGameAction(0, "resolve-combat", Payload(attackerAssignments, defenderAssignments)),
+            new EngineGameAction(playerId, "resolve-combat", Payload(assignments)),
             state.SequenceNumber);
     }
 
-    private static Dictionary<string, object?> Payload(Dictionary<string, int> attackerAssignments, Dictionary<string, int> defenderAssignments) =>
+    private static Dictionary<string, object?> Payload(Dictionary<string, int> assignments) =>
         new()
         {
             ["battlefieldId"] = "field-a",
-            ["attackerAssignments"] = attackerAssignments,
-            ["defenderAssignments"] = defenderAssignments
+            ["assignments"] = assignments
         };
 
     private static Dictionary<string, int> Attack(params (string Uid, int Damage)[] assignments) =>

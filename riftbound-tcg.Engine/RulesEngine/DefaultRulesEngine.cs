@@ -135,7 +135,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             var attackerPlayerId = activeCombat["attackerPlayerId"]?.GetValue<int>();
             var defenderPlayerId = activeCombat["defenderPlayerId"]?.GetValue<int>();
-            if (playerId == attackerPlayerId || playerId == defenderPlayerId)
+            var assignmentKey = playerId == attackerPlayerId ? "attackerAssignments" : playerId == defenderPlayerId ? "defenderAssignments" : null;
+            if (assignmentKey is not null && activeCombat[assignmentKey] is null)
             {
                 actions.Add(new("resolve-combat", "resolve-combat", "Resolve combat", playerId));
             }
@@ -647,11 +648,45 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        var attackerAssignments = ReadDamageAssignments(payload, "attackerAssignments");
-        var defenderAssignments = ReadDamageAssignments(payload, "defenderAssignments");
-        if (attackerAssignments is null ||
-            defenderAssignments is null ||
-            !ValidateDamageAssignments(attackers, defenders, attackerAssignments) ||
+        var isAttacker = playerId == attackerPlayerId.Value;
+        var ownAssignments = ReadDamageAssignments(payload, "assignments");
+        var submittedAttackerAssignments = ReadDamageAssignments(payload, "attackerAssignments");
+        var submittedDefenderAssignments = ReadDamageAssignments(payload, "defenderAssignments");
+        if (isAttacker && submittedDefenderAssignments is not null ||
+            !isAttacker && submittedAttackerAssignments is not null)
+        {
+            return null;
+        }
+
+        ownAssignments ??= isAttacker ? submittedAttackerAssignments : submittedDefenderAssignments;
+        if (ownAssignments is null)
+        {
+            return null;
+        }
+
+        var ownUnits = isAttacker ? attackers : defenders;
+        var opposingUnits = isAttacker ? defenders : attackers;
+        if (!ValidateDamageAssignments(ownUnits, opposingUnits, ownAssignments))
+        {
+            return null;
+        }
+
+        var assignmentKey = isAttacker ? "attackerAssignments" : "defenderAssignments";
+        if (activeCombat[assignmentKey] is not null)
+        {
+            return null;
+        }
+
+        activeCombat[assignmentKey] = ToObject(ownAssignments);
+
+        var attackerAssignments = ReadDamageAssignmentsFromNode(activeCombat["attackerAssignments"]);
+        var defenderAssignments = ReadDamageAssignmentsFromNode(activeCombat["defenderAssignments"]);
+        if (attackerAssignments is null || defenderAssignments is null)
+        {
+            return AddLog(state, $"{PlayerName(state, playerId)} assigned combat damage at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+        }
+
+        if (!ValidateDamageAssignments(attackers, defenders, attackerAssignments) ||
             !ValidateDamageAssignments(defenders, attackers, defenderAssignments))
         {
             return null;
@@ -801,6 +836,22 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return null;
+    }
+
+    private static Dictionary<string, int>? ReadDamageAssignmentsFromNode(JsonNode? node)
+    {
+        if (node is not JsonObject jsonObject)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (uid, amount) in jsonObject)
+        {
+            result[uid] = amount?.GetValue<int>() ?? -1;
+        }
+
+        return result;
     }
 
     private static void KillLethalBattlefieldUnits(JsonObject state, JsonObject battlefield)
@@ -1028,6 +1079,17 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return array;
+    }
+
+    private static JsonObject ToObject(IReadOnlyDictionary<string, int> values)
+    {
+        var obj = new JsonObject();
+        foreach (var (key, value) in values)
+        {
+            obj[key] = value;
+        }
+
+        return obj;
     }
 
     private static JsonObject Clone(JsonObject value)
