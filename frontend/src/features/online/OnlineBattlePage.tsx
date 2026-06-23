@@ -310,15 +310,46 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   async function submitAction(action: LegalAction) {
     if (!match) return
     const connection = await ensureConnection()
-    await connection.invoke('SubmitAction', match.id, {
-      actionId: action.id,
-      type: action.type,
-      playerId: action.playerId,
-      payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : {},
-      expectedSequenceNumber: match.sequenceNumber,
-    })
+    try {
+      await connection.invoke('SubmitAction', match.id, {
+        actionId: action.id,
+        type: action.type,
+        playerId: action.playerId,
+        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : {},
+        expectedSequenceNumber: match.sequenceNumber,
+      })
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Unable to submit action.')
+    }
     setMulliganHandIndexes([])
     await connection.invoke('RequestLegalActions', match.id, action.playerId)
+  }
+
+  async function submitTypedAction(type: string, payload: Record<string, unknown>, failureMessage: string) {
+    if (!match) return
+    const action = legalActions.find((candidate) => candidate.type === type && candidate.playerId === playerId)
+    if (!action) return
+    const connection = await ensureConnection()
+    try {
+      await connection.invoke('SubmitAction', match.id, {
+        actionId: action.id,
+        type,
+        playerId,
+        payload,
+        expectedSequenceNumber: match.sequenceNumber,
+      })
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : failureMessage)
+    }
+    await connection.invoke('RequestLegalActions', match.id, playerId)
+  }
+
+  async function playUnit(handIndex: number, battlefieldId?: string) {
+    await submitTypedAction('play-unit', battlefieldId ? { handIndex, battlefieldId } : { handIndex }, 'Unable to play unit.')
+  }
+
+  async function moveUnit(unitId: string, battlefieldId: string) {
+    await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
   }
 
   function toggleMulliganHandIndex(index: number) {
@@ -499,6 +530,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               cards={cards}
               game={state}
               viewerPlayerId={playerId}
+              canPlayUnit={legalActions.some((action) => action.type === 'play-unit' && action.playerId === playerId)}
+              onPlayUnit={playUnit}
+              canMoveUnit={legalActions.some((action) => action.type === 'move-unit' && action.playerId === playerId)}
+              onMoveUnit={moveUnit}
               mulliganSelection={
                 isMulliganTurn ? { selectedIndexes: mulliganHandIndexes, onToggle: toggleMulliganHandIndex } : undefined
               }

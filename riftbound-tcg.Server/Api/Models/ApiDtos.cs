@@ -279,6 +279,7 @@ public sealed record SubmitActionResponseDto(
     bool Accepted,
     MatchEventDto Event,
     object State,
+    int SequenceNumber,
     IReadOnlyList<LegalActionDto>? LegalActions);
 
 public sealed record QueueEntryDto(

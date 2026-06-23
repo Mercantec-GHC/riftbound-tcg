@@ -39,33 +39,41 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
 
     public async Task SubmitAction(string matchId, SubmitMatchActionRequest action)
     {
-        var userId = AuthService.GetUserId(Context.User!);
-        if (userId is null || !await gameService.UserOwnsPlayerSeatAsync(matchId, userId, action.PlayerId, Context.ConnectionAborted))
+        try
         {
-            await Clients.Caller.SendAsync("match.actionRejected", matchId, action.PlayerId, new ApiErrorPayload("match.forbidden", "Authenticated user does not own that player seat."), Context.ConnectionAborted);
-            return;
+            var userId = AuthService.GetUserId(Context.User!);
+            if (userId is null || !await gameService.UserOwnsPlayerSeatAsync(matchId, userId, action.PlayerId, Context.ConnectionAborted))
+            {
+                await Clients.Caller.SendAsync("match.actionRejected", matchId, action.PlayerId, new ApiErrorPayload("match.forbidden", "Authenticated user does not own that player seat."), Context.ConnectionAborted);
+                return;
+            }
+
+            var result = await gameService.SubmitActionAsync(matchId, action, Context.ConnectionAborted);
+            if (result is null)
+            {
+                await Clients.Caller.SendAsync("error", new ApiErrorPayload("match.not_found", "Match was not found."), Context.ConnectionAborted);
+                return;
+            }
+
+            if (!result.Accepted)
+            {
+                await Clients.Caller.SendAsync("match.actionRejected", matchId, action.PlayerId, result.Event.ResultPayload, Context.ConnectionAborted);
+                return;
+            }
+
+            await Clients.Group(MatchGroupName(matchId)).SendAsync("match.eventAppended", matchId, result.Event, Context.ConnectionAborted);
+            await Clients.Group(MatchGroupName(matchId)).SendAsync("match.state", matchId, result.State, result.SequenceNumber, Context.ConnectionAborted);
+
+            var match = await gameService.GetMatchAsync(matchId, Context.ConnectionAborted);
+            if (match?.Status == "completed")
+            {
+                await Clients.Group(MatchGroupName(matchId)).SendAsync("match.completed", matchId, result.State, match.WinnerPlayerId, match.WinningTeamId, Context.ConnectionAborted);
+            }
         }
-
-        var result = await gameService.SubmitActionAsync(matchId, action, Context.ConnectionAborted);
-        if (result is null)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await Clients.Caller.SendAsync("error", new ApiErrorPayload("match.not_found", "Match was not found."), Context.ConnectionAborted);
-            return;
-        }
-
-        if (!result.Accepted)
-        {
-            await Clients.Caller.SendAsync("match.actionRejected", matchId, action.PlayerId, result.Event.ResultPayload, Context.ConnectionAborted);
-            return;
-        }
-
-        await Clients.Group(MatchGroupName(matchId)).SendAsync("match.eventAppended", matchId, result.Event, Context.ConnectionAborted);
-        await Clients.Group(MatchGroupName(matchId)).SendAsync("match.state", matchId, result.State, result.Event.SequenceNumber, Context.ConnectionAborted);
-
-        var match = await gameService.GetMatchAsync(matchId, Context.ConnectionAborted);
-        if (match?.Status == "completed")
-        {
-            await Clients.Group(MatchGroupName(matchId)).SendAsync("match.completed", matchId, result.State, match.WinnerPlayerId, match.WinningTeamId, Context.ConnectionAborted);
+            await Clients.Caller.SendAsync("match.actionRejected", matchId, action.PlayerId, new ApiErrorPayload("match.server_error", ex.Message), Context.ConnectionAborted);
+            throw;
         }
     }
 

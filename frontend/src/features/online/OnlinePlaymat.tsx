@@ -1,6 +1,11 @@
 import { CardFace } from '../../shared/ui/CardFace'
 import { DeckStack } from '../../shared/ui/DeckStack'
+import { readDragData, useDragData } from '../../shared/dragDrop'
 import type { Battlefield, Card, GameState, Player, Unit } from '../../shared/models'
+
+function canAffordCard(player: Player, card: Card): boolean {
+  return player.runes.ready.length + player.runePool.energy >= card.cost
+}
 
 function hydrateCard<T extends Card>(card: T, cardsById: Map<string, Card>): T {
   if (!card.catalogId) return card
@@ -54,10 +59,10 @@ function ReadOnlyArtCard({ card, className = '', title }: { card: Card; classNam
   )
 }
 
-function ReadOnlyUnit({ unit }: { unit: Unit }) {
+function ReadOnlyUnit({ unit, draggable, onDragStart }: { unit: Unit; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void }) {
   return (
-    <div className="online-unit-card-wrap">
-      <ReadOnlyArtCard card={unit} className="online-unit-card" />
+    <div className={`online-unit-card-wrap ${draggable ? 'movable' : ''}`.trim()} draggable={draggable} onDragStart={onDragStart}>
+      <ReadOnlyArtCard card={unit} className={`online-unit-card ${unit.exhausted ? 'exhausted' : ''}`.trim()} />
       {(unit.damage > 0 || unit.exhausted) && (
         <div className="online-card-badges">
           {unit.damage > 0 && <small>{unit.damage} dmg</small>}
@@ -68,11 +73,33 @@ function ReadOnlyUnit({ unit }: { unit: Unit }) {
   )
 }
 
-function OnlineBattlefieldLane({ cardsById, field }: { cardsById: Map<string, Card>; field: Battlefield }) {
+function OnlineBattlefieldLane({
+  cardsById,
+  field,
+  canDropUnit,
+  onPlayUnit,
+  onMoveUnit,
+}: {
+  cardsById: Map<string, Card>
+  field: Battlefield
+  canDropUnit: boolean
+  onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  onMoveUnit?: (unitId: string, battlefieldId: string) => void
+}) {
   const catalogCard = battlefieldCatalogCard(field, cardsById)
 
   return (
-    <article className="online-battlefield" aria-label={field.name}>
+    <article
+      className={`online-battlefield ${canDropUnit ? 'drop-zone' : ''}`.trim()}
+      aria-label={field.name}
+      onDragOver={canDropUnit ? (event) => event.preventDefault() : undefined}
+      onDrop={canDropUnit ? (event) => {
+        event.preventDefault()
+        const payload = readDragData(event)
+        if (payload?.type === 'card') onPlayUnit?.(payload.handIndex, field.id)
+        if (payload?.type === 'unit') onMoveUnit?.(payload.unitId, field.id)
+      } : undefined}
+    >
       {catalogCard ? (
         <ReadOnlyArtCard card={catalogCard} className="online-battlefield-art" title={field.name} />
       ) : (
@@ -86,11 +113,14 @@ function OnlineHandZone({
   isViewer,
   player,
   mulliganSelection,
+  canPlayUnit,
 }: {
   isViewer: boolean
   player: Player
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
+  canPlayUnit?: boolean
 }) {
+  const dragData = useDragData()
   if (!isViewer) {
     return (
       <div className="hidden-hand" aria-label={`${player.name} hidden hand`}>
@@ -125,9 +155,22 @@ function OnlineHandZone({
 
   return (
     <div className="hand online-hand">
-      {player.hand.map((card, index) => (
-        <ReadOnlyArtCard card={card} className="online-hand-card" key={`${card.id}-${index}`} />
-      ))}
+      {player.hand.map((card, index) => {
+        const isPlayableUnit = canPlayUnit && card.kind === 'unit' && canAffordCard(player, card)
+        return (
+          <button
+            type="button"
+            key={`${card.id}-${index}`}
+            className={`online-hand-card-button ${isPlayableUnit ? 'playable' : ''}`.trim()}
+            draggable={isPlayableUnit}
+            disabled={!isPlayableUnit}
+            onDragStart={(event) => dragData(event, { type: 'card', handIndex: index, playerId: player.id })}
+            title={card.kind === 'unit' && !canAffordCard(player, card) ? `Needs ${card.cost} energy to play ${card.name}` : card.name}
+          >
+            <ReadOnlyArtCard card={card} className="online-hand-card" />
+          </button>
+        )
+      })}
       {player.hand.length === 0 && <span className="no-runes">No cards in hand</span>}
     </div>
   )
@@ -154,16 +197,28 @@ function OnlinePlayerMat({
   placement,
   victoryScore,
   mulliganSelection,
+  canPlayUnit,
+  onPlayUnit,
+  canMoveUnit,
 }: {
   isViewer: boolean
   player: Player
   placement: 'opponent' | 'viewer' | 'shared'
   victoryScore: number
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
+  canPlayUnit?: boolean
+  onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  canMoveUnit?: boolean
 }) {
+  const dragData = useDragData()
   const handZone = (
     <section className="online-hand-zone" aria-label={`${player.name} hand`}>
-      <OnlineHandZone isViewer={isViewer} player={player} mulliganSelection={isViewer ? mulliganSelection : undefined} />
+      <OnlineHandZone
+        isViewer={isViewer}
+        player={player}
+        mulliganSelection={isViewer ? mulliganSelection : undefined}
+        canPlayUnit={isViewer ? canPlayUnit : false}
+      />
     </section>
   )
 
@@ -181,13 +236,30 @@ function OnlinePlayerMat({
     </section>
   )
 
+  const canDropOnBase = Boolean(isViewer && canPlayUnit)
   const baseZone = (
-    <section className="mat-zone base-zone flexible-card-zone">
+    <section
+      className={`mat-zone base-zone flexible-card-zone ${canDropOnBase ? 'drop-zone' : ''}`.trim()}
+      onDragOver={canDropOnBase ? (event) => event.preventDefault() : undefined}
+      onDrop={canDropOnBase ? (event) => {
+        event.preventDefault()
+        const payload = readDragData(event)
+        if (payload?.type === 'card') onPlayUnit?.(payload.handIndex)
+      } : undefined}
+    >
       <span className="zone-label">Base</span>
       <div className="unit-row">
-        {player.base.map((unit) => (
-          <ReadOnlyUnit key={unit.uid} unit={unit} />
-        ))}
+        {player.base.map((unit) => {
+          const isMovable = Boolean(isViewer && canMoveUnit && !unit.exhausted)
+          return (
+            <ReadOnlyUnit
+              key={unit.uid}
+              unit={unit}
+              draggable={isMovable}
+              onDragStart={isMovable ? (event) => dragData(event, { type: 'unit', unitId: unit.uid }) : undefined}
+            />
+          )
+        })}
         {player.base.length === 0 && <span className="zone-empty-text">No units</span>}
       </div>
     </section>
@@ -287,12 +359,35 @@ function PlayerVictoryTrack({ player, reverse, victoryScore }: { player: Player;
   )
 }
 
-function BattlefieldZone({ cardsById, game }: { cardsById: Map<string, Card>; game: GameState }) {
+function BattlefieldZone({
+  cardsById,
+  game,
+  viewerPlayerId,
+  canPlayUnit,
+  onPlayUnit,
+  canMoveUnit,
+  onMoveUnit,
+}: {
+  cardsById: Map<string, Card>
+  game: GameState
+  viewerPlayerId: number
+  canPlayUnit?: boolean
+  onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  canMoveUnit?: boolean
+  onMoveUnit?: (unitId: string, battlefieldId: string) => void
+}) {
   return (
     <section className="online-battlefields-zone" aria-label="Battlefields">
       <div className="online-battlefields-row" style={{ gridTemplateColumns: `repeat(${game.battlefields.length}, max-content)` }}>
         {game.battlefields.map((field) => (
-          <OnlineBattlefieldLane cardsById={cardsById} field={field} key={field.id} />
+          <OnlineBattlefieldLane
+            cardsById={cardsById}
+            field={field}
+            key={field.id}
+            canDropUnit={Boolean((canPlayUnit || canMoveUnit) && field.controllerId === viewerPlayerId)}
+            onPlayUnit={onPlayUnit}
+            onMoveUnit={onMoveUnit}
+          />
         ))}
       </div>
     </section>
@@ -304,11 +399,19 @@ export function OnlinePlaymat({
   game,
   viewerPlayerId,
   mulliganSelection,
+  canPlayUnit,
+  onPlayUnit,
+  canMoveUnit,
+  onMoveUnit,
 }: {
   cards: Card[]
   game: GameState
   viewerPlayerId: number
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
+  canPlayUnit?: boolean
+  onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  canMoveUnit?: boolean
+  onMoveUnit?: (unitId: string, battlefieldId: string) => void
 }) {
   const cardsById = new Map(cards.map((card) => [card.id, card]))
   const hydratedGame: GameState = {
@@ -325,7 +428,7 @@ export function OnlinePlaymat({
     return (
       <section className="online-shared-playmat duel-playmat">
         {opponent && <OnlinePlayerMat isViewer={false} placement="opponent" player={opponent} victoryScore={hydratedGame.victoryScore} />}
-        <BattlefieldZone cardsById={cardsById} game={hydratedGame} />
+        <BattlefieldZone cardsById={cardsById} game={hydratedGame} viewerPlayerId={viewerPlayerId} canPlayUnit={canPlayUnit} onPlayUnit={onPlayUnit} canMoveUnit={canMoveUnit} onMoveUnit={onMoveUnit} />
         {viewer && (
           <OnlinePlayerMat
             isViewer
@@ -333,6 +436,9 @@ export function OnlinePlaymat({
             player={viewer}
             victoryScore={hydratedGame.victoryScore}
             mulliganSelection={mulliganSelection}
+            canPlayUnit={canPlayUnit}
+            onPlayUnit={onPlayUnit}
+            canMoveUnit={canMoveUnit}
           />
         )}
       </section>
@@ -342,7 +448,7 @@ export function OnlinePlaymat({
   const orderedPlayers = [...opponents, ...(viewer ? [viewer] : [])]
   return (
     <section className="online-shared-playmat shared-table-playmat">
-      <BattlefieldZone cardsById={cardsById} game={hydratedGame} />
+      <BattlefieldZone cardsById={cardsById} game={hydratedGame} viewerPlayerId={viewerPlayerId} canPlayUnit={canPlayUnit} onPlayUnit={onPlayUnit} canMoveUnit={canMoveUnit} onMoveUnit={onMoveUnit} />
 
       <section className="online-player-mats" aria-label="Player play spaces">
         {orderedPlayers.map((player) => (
@@ -353,6 +459,9 @@ export function OnlinePlaymat({
             player={player}
             victoryScore={hydratedGame.victoryScore}
             mulliganSelection={player.id === viewerPlayerId ? mulliganSelection : undefined}
+            canPlayUnit={player.id === viewerPlayerId ? canPlayUnit : false}
+            onPlayUnit={onPlayUnit}
+            canMoveUnit={player.id === viewerPlayerId ? canMoveUnit : false}
           />
         ))}
       </section>

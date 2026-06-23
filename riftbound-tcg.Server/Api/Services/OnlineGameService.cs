@@ -9,6 +9,7 @@ using RiftboundTcg.Server.Api.Data;
 using RiftboundTcg.Server.Api.Models;
 using RiftboundTcg.Server.Api.Realtime;
 using riftbound_tcg.Engine.RulesEngine;
+using riftbound_tcg.Core.Cards;
 
 namespace RiftboundTcg.Server.Api.Services;
 
@@ -1082,7 +1083,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        return new SubmitActionResponseDto(result.Accepted, ToDto(entity), result.State.State, result.LegalActions.Select(ToDto).ToArray());
+        return new SubmitActionResponseDto(result.Accepted, ToDto(entity), result.State.State, match.SequenceNumber, result.LegalActions.Select(ToDto).ToArray());
     }
 
     private async Task UpdateCompletedMatchStatsAsync(string matchId, int? winnerPlayerId, CancellationToken cancellationToken)
@@ -1251,7 +1252,8 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         var seats = players.Select((player, index) => new EngineSeatConfig(index, player.UserId, users.TryGetValue(player.UserId, out var user) ? user.DisplayName : player.UserId, player.TeamId)).ToArray();
         var engineDecks = decks.Select(deck => new EnginePlayerDeck(deck.Id, deck.LegendId, deck.ChampionId, Deserialize(deck.BattlefieldDeckIdsJson), Deserialize(deck.RuneDeckIdsJson), Deserialize(deck.MainDeckIdsJson))).ToArray();
         var selectedBattlefields = battlefieldIds.Count > 0 ? battlefieldIds : engineDecks.SelectMany(deck => deck.BattlefieldDeckIds).Take(ModeSpec.For(mode).BattlefieldCount).ToArray();
-        var engineState = rulesEngine.CreateInitialState(new EngineMatchConfig(matchId, mode, seats, selectedBattlefields, firstPlayerId), engineDecks, StableSeed(matchId));
+        var catalog = await BuildCardCatalogAsync(engineDecks, cancellationToken);
+        var engineState = rulesEngine.CreateInitialState(new EngineMatchConfig(matchId, mode, seats, selectedBattlefields, firstPlayerId), engineDecks, StableSeed(matchId), catalog);
 
         var match = new MatchEntity
         {
@@ -1457,6 +1459,44 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
     private async Task<int> CountEnabledAdminsAsync(CancellationToken cancellationToken)
     {
         return await db.Users.CountAsync(user => user.IsAdmin && !user.IsDisabled, cancellationToken);
+    }
+
+    private async Task<IReadOnlyDictionary<string, CardDefinition>> BuildCardCatalogAsync(IReadOnlyList<EnginePlayerDeck> engineDecks, CancellationToken cancellationToken)
+    {
+        var cardIds = engineDecks
+            .SelectMany(deck => deck.MainDeckIds.Concat(deck.RuneDeckIds).Append(deck.ChampionId).Append(deck.LegendId))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct()
+            .ToArray();
+
+        var entities = await db.Cards.Where(card => cardIds.Contains(card.Id)).ToListAsync(cancellationToken);
+        return entities.ToDictionary(entity => entity.Id, ToCardDefinition);
+    }
+
+    private static CardDefinition ToCardDefinition(CardEntity card)
+    {
+        var kind = Enum.TryParse<CardKind>(card.Kind, true, out var parsedKind) ? parsedKind : CardKind.Unit;
+        var domain = Enum.TryParse<Domain>(card.Domain, true, out var parsedDomain) ? parsedDomain : Domain.Fury;
+        var domains = Deserialize(card.DomainsJson)
+            .Select(value => Enum.TryParse<Domain>(value, true, out var parsed) ? parsed : (Domain?)null)
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .ToArray();
+        var effectType = Enum.TryParse<CardEffectType>(card.EffectType, true, out var parsedEffect) ? parsedEffect : CardEffectType.Rally;
+        return new CardDefinition(
+            card.Id,
+            card.Name,
+            kind,
+            Deserialize(card.TagsJson),
+            domain,
+            domains.Length > 0 ? domains : [domain],
+            card.Cost,
+            card.Might,
+            card.Text,
+            card.Image,
+            card.CardType,
+            card.Supertype,
+            new CardEffectDefinition(effectType, card.EffectAmount));
     }
 
     private static CardDto ToDto(CardEntity card)
