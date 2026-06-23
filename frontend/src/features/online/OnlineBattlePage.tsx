@@ -58,6 +58,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
+  const playableCardHandIndexes = legalActions
+    .filter((action) => action.type === 'play-card' && action.playerId === playerId)
+    .map((action) => Number(action.payloadSchema?.handIndex))
+    .filter((index) => Number.isInteger(index))
 
   useEffect(() => {
     playerIdRef.current = playerId
@@ -315,7 +319,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
         actionId: action.id,
         type: action.type,
         playerId: action.playerId,
-        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : {},
+        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : action.payloadSchema ?? {},
         expectedSequenceNumber: match.sequenceNumber,
       })
     } catch (error) {
@@ -350,6 +354,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
 
   async function moveUnit(unitId: string, battlefieldId: string) {
     await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
+  }
+
+  async function playCard(handIndex: number) {
+    await submitTypedAction('play-card', { handIndex }, 'Unable to play card.')
   }
 
   function toggleMulliganHandIndex(index: number) {
@@ -532,6 +540,8 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               viewerPlayerId={playerId}
               canPlayUnit={legalActions.some((action) => action.type === 'play-unit' && action.playerId === playerId)}
               onPlayUnit={playUnit}
+              playableCardHandIndexes={playableCardHandIndexes}
+              onPlayCard={playCard}
               canMoveUnit={legalActions.some((action) => action.type === 'move-unit' && action.playerId === playerId)}
               onMoveUnit={moveUnit}
               mulliganSelection={

@@ -25,6 +25,14 @@ export type Unit = Card & {
   defender?: boolean
 }
 
+export type Gear = Card & {
+  uid: string
+  ownerId: number
+  location: { type: 'base' } | { type: 'battlefield'; battlefieldId: string }
+  exhausted: boolean
+  attachedUnitId: string | null
+}
+
 export type Player = {
   id: number
   name: string
@@ -41,6 +49,7 @@ export type Player = {
   hand: Card[]
   trash: Card[]
   base: Unit[]
+  baseGear: Gear[]
   champion: Card | null
   legend: Card | null
   championSummoned: boolean

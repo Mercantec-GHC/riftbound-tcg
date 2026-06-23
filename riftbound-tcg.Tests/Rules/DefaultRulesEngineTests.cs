@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using riftbound_tcg.Core.Cards;
 using riftbound_tcg.Engine.RulesEngine;
 
 namespace riftbound_tcg.Tests.Rules;
@@ -415,6 +416,131 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void legal_actions_include_reaction_spell_from_hand_during_chain_window()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 1, Card("quick-draw", "Quick Draw", "spell", "[Reaction] Draw 1.", "draw", 1, cost: 0));
+        state.State["chainWindow"] = EmptyChainWindow();
+
+        var actions = engine.GetLegalActions(state, 1);
+
+        Assert.That(actions.Select(action => action.Type), Contains.Item("pass-chain-window"));
+        Assert.That(actions.Where(action => action.Type == "play-card").Select(action => action.Label), Contains.Item("Play Quick Draw"));
+    }
+
+    [Test]
+    public void reaction_gear_from_hand_resolves_to_owner_base()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 1, Card("gold-token", "Gold Token", "gear", "[Reaction] Add 1.", "draw", 0, cost: 0));
+        state.State["chainWindow"] = EmptyChainWindow();
+
+        var played = engine.ApplyAction(state, new EngineGameAction(1, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+
+        Assert.That(afterSecondPass.Accepted, Is.True);
+        var player = FindPlayer(afterSecondPass.State, 1);
+        Assert.That(player["baseGear"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(player["baseGear"]!.AsArray()[0]!["name"]!.GetValue<string>(), Is.EqualTo("Gold Token"));
+        Assert.That(afterSecondPass.State.State["chainWindow"], Is.Null);
+    }
+
+    [Test]
+    public void non_reaction_spell_is_illegal_during_chain_window()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 1, Card("slow-spell", "Slow Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0));
+        state.State["chainWindow"] = EmptyChainWindow();
+
+        var actions = engine.GetLegalActions(state, 1);
+        var result = engine.ApplyAction(state, new EngineGameAction(1, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+
+        Assert.That(actions.Select(action => action.Type), Has.None.EqualTo("play-card"));
+        Assert.That(result.Accepted, Is.False);
+    }
+
+    [Test]
+    public void opponent_can_play_reaction_but_not_action_on_turn_players_chain()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(
+            state,
+            1,
+            Card("react", "Reactive Spell", "spell", "[Reaction] Draw 1.", "draw", 1, cost: 0),
+            Card("act", "Action Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0));
+        state.State["chainWindow"] = EmptyChainWindow();
+
+        var actions = engine.GetLegalActions(state, 1);
+
+        Assert.That(actions.Where(action => action.Type == "play-card").Select(action => action.Label), Contains.Item("Play Reactive Spell"));
+        Assert.That(actions.Where(action => action.Type == "play-card").Select(action => action.Label), Has.None.EqualTo("Play Action Spell"));
+    }
+
+    [Test]
+    public void passing_chain_window_resolves_top_after_all_players_pass()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("draw-two", "Draw Two", "spell", "[Action] Draw 2.", "draw", 2, cost: 0));
+        var initialPlayer = FindPlayer(state, 0);
+        initialPlayer["deck"] = new JsonArray(
+            Card("deck-draw-a", "Deck Draw A", "unit", "", "rally", 0, cost: 0),
+            Card("deck-draw-b", "Deck Draw B", "unit", "", "rally", 0, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+        Assert.That(played.State.State["effectStack"]!.AsArray(), Has.Count.EqualTo(1));
+
+        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        Assert.That(afterFirstPass.State.State["effectStack"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(afterFirstPass.State.State["chainWindow"], Is.Not.Null);
+
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+
+        var player = FindPlayer(afterSecondPass.State, 0);
+        Assert.That(afterSecondPass.Accepted, Is.True);
+        Assert.That(afterSecondPass.State.State["effectStack"]!.AsArray(), Is.Empty);
+        Assert.That(afterSecondPass.State.State["chainWindow"], Is.Null);
+        Assert.That(player["hand"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(player["trash"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void action_spell_is_legal_for_focus_player_during_showdown_open_state()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 1, Card("showdown-action", "Showdown Action", "spell", "[Action] Draw 1.", "draw", 1, cost: 0));
+        state.State["activeShowdown"] = new JsonObject { ["battlefieldId"] = "skybridge-0", ["kind"] = "non-combat" };
+        state.State["focusPlayerId"] = 1;
+
+        var actions = engine.GetLegalActions(state, 1);
+
+        Assert.That(actions.Where(action => action.Type == "play-card").Select(action => action.Label), Contains.Item("Play Showdown Action"));
+    }
+
+    [Test]
+    public void play_card_rejects_invalid_hand_index_and_unaffordable_card()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("expensive", "Expensive Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 99));
+
+        var invalidIndex = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 4 }), state.SequenceNumber);
+        var unaffordable = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+
+        Assert.That(invalidIndex.Accepted, Is.False);
+        Assert.That(unaffordable.Accepted, Is.False);
+    }
+
+    [Test]
     public void a_unit_cannot_move_to_a_battlefield_the_player_does_not_control()
     {
         var engine = new DefaultRulesEngine();
@@ -456,6 +582,50 @@ public class DefaultRulesEngineTests
         }
 
         return current;
+    }
+
+    private static JsonObject FindPlayer(EngineMatchState state, int playerId)
+    {
+        return state.State["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(player => player["id"]!.GetValue<int>() == playerId);
+    }
+
+    private static void PutCardInHand(EngineMatchState state, int playerId, params JsonObject[] cards)
+    {
+        var player = FindPlayer(state, playerId);
+        var hand = player["hand"]!.AsArray();
+        hand.Clear();
+        foreach (var card in cards)
+        {
+            hand.Add(card);
+        }
+    }
+
+    private static JsonObject EmptyChainWindow()
+    {
+        return new JsonObject { ["passedByPlayer"] = new JsonObject() };
+    }
+
+    private static JsonObject Card(string id, string name, string kind, string text, string effectType, int amount, int cost)
+    {
+        return new JsonObject
+        {
+            ["id"] = $"{id}-test",
+            ["catalogId"] = id,
+            ["name"] = name,
+            ["kind"] = kind,
+            ["tags"] = new JsonArray(),
+            ["domain"] = "Fury",
+            ["domains"] = new JsonArray("Fury"),
+            ["cost"] = cost,
+            ["might"] = 0,
+            ["text"] = text,
+            ["image"] = string.Empty,
+            ["cardType"] = kind,
+            ["supertype"] = null,
+            ["effect"] = new JsonObject { ["type"] = effectType, ["amount"] = amount }
+        };
     }
 
     private static EngineMatchConfig Config()

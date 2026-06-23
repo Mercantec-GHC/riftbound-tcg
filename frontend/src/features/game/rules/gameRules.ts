@@ -99,6 +99,7 @@ function makePlayer(id: number, name: string, battlefieldId: string, cards: Card
       hand: [],
       trash: [],
       base: [],
+      baseGear: [],
       champion: playerDeck.champion,
       legend: playerDeck.legend,
       championSummoned: false,
