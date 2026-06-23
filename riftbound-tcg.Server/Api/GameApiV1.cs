@@ -97,6 +97,25 @@ public static class GameApiV1
                 : TypedResults.NotFound();
         }).RequireAuthorization();
 
+        api.MapPost("/me/password", async Task<Results<NoContent, UnauthorizedHttpResult, BadRequest<ApiResult<ApiErrorPayload>>>> (ClaimsPrincipal user, ChangePasswordRequest request, AuthService service, CancellationToken cancellationToken) =>
+        {
+            var userId = AuthService.GetUserId(user);
+            if (userId is null)
+            {
+                return TypedResults.Unauthorized();
+            }
+
+            try
+            {
+                await service.ChangePasswordAsync(userId, request, cancellationToken);
+                return TypedResults.NoContent();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(Envelope(Error("auth.password_invalid", ex.Message)));
+            }
+        }).RequireAuthorization();
+
         api.MapPost("/me/avatar", async Task<Results<Ok<ApiResult<UserDto>>, UnauthorizedHttpResult, NotFound, BadRequest<ApiResult<ApiErrorPayload>>>> (HttpRequest request, ClaimsPrincipal user, AuthService service, CancellationToken cancellationToken) =>
         {
             var userId = AuthService.GetUserId(user);

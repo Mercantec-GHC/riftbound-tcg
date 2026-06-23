@@ -119,6 +119,7 @@ function App() {
           activeDecks={deckBuilder.activeDecks}
           apiClient={auth.apiClient}
           session={auth.session}
+          onChangePassword={auth.changePassword}
           onDecksChanged={deckBuilder.refreshDecks}
           onDeleteAvatar={auth.deleteAvatar}
           onUpdateMe={auth.updateMe}

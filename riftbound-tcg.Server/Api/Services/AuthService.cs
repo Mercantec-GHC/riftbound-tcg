@@ -175,6 +175,50 @@ public sealed class AuthService(
         return ToDto(user);
     }
 
+    public async Task ChangePasswordAsync(string userId, ChangePasswordRequest request, CancellationToken cancellationToken)
+    {
+        await EnsureAuthSchemaAsync(cancellationToken);
+        var user = await db.Users.FindAsync([userId], cancellationToken)
+            ?? throw new InvalidOperationException("Authenticated user was not found.");
+
+        if (user.IsDisabled)
+        {
+            throw new InvalidOperationException("Account is disabled.");
+        }
+
+        if (string.IsNullOrWhiteSpace(user.PasswordHash))
+        {
+            throw new InvalidOperationException("Current password could not be verified.");
+        }
+
+        var verification = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword);
+        if (verification == PasswordVerificationResult.Failed)
+        {
+            throw new InvalidOperationException("Current password is incorrect.");
+        }
+
+        if (request.NewPassword.Length < 8)
+        {
+            throw new InvalidOperationException("Password must be at least 8 characters.");
+        }
+
+        user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
+        user.UpdatedAt = DateTimeOffset.UtcNow;
+
+        var preservedTokenHash = string.IsNullOrWhiteSpace(request.CurrentRefreshToken)
+            ? null
+            : HashToken(request.CurrentRefreshToken);
+        var activeTokens = await db.RefreshTokens
+            .Where(token => token.UserId == user.Id && token.RevokedAt == null && token.TokenHash != preservedTokenHash)
+            .ToArrayAsync(cancellationToken);
+        foreach (var token in activeTokens)
+        {
+            token.RevokedAt = user.UpdatedAt;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task<UserDto?> UploadAvatarAsync(string userId, IFormFile image, CancellationToken cancellationToken)
     {
         await EnsureAuthSchemaAsync(cancellationToken);
