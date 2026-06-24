@@ -14,7 +14,7 @@ using riftbound_tcg.Core.DeckConstruction;
 
 namespace RiftboundTcg.Server.Api.Services;
 
-public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine, IHubContext<MatchHub> hubContext)
+public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine, IHubContext<MatchHub> hubContext, MatchReplayService replayService)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] PlaceholderCardIds =
@@ -539,9 +539,10 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         }
 
         var players = await db.MatchPlayers.Where(player => player.MatchId == matchId).OrderBy(player => player.PlayerId).ToArrayAsync(cancellationToken);
-        var snapshot = await db.MatchSnapshots.Where(candidate => candidate.MatchId == matchId).OrderByDescending(candidate => candidate.SequenceNumber).FirstOrDefaultAsync(cancellationToken);
         var avatarImageHashes = await LoadAvatarImageHashesAsync(players, cancellationToken);
-        return ToSnapshot(match, players, avatarImageHashes, snapshot?.StateJson ?? "{}", snapshot?.SequenceNumber ?? match.SequenceNumber);
+        var rebuilt = await replayService.RebuildAsync(matchId, useLatestSnapshot: true, cancellationToken)
+            ?? throw new InvalidOperationException("Match state could not be rebuilt.");
+        return ToSnapshot(match, players, avatarImageHashes, rebuilt.State.ToJsonString(JsonOptions), rebuilt.SequenceNumber);
     }
 
     public async Task<MatchSnapshotDto> CreateMatchAsync(string userId, CreateMatchRequest request, CancellationToken cancellationToken)
@@ -1378,20 +1379,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             return null;
         }
 
-        var players = await db.MatchPlayers.Where(player => player.MatchId == matchId).OrderBy(player => player.PlayerId).ToArrayAsync(cancellationToken);
-        var snapshot = await db.MatchSnapshots.Where(candidate => candidate.MatchId == matchId).OrderByDescending(candidate => candidate.SequenceNumber).FirstOrDefaultAsync(cancellationToken);
-        if (snapshot is null)
-        {
-            return null;
-        }
-
-        return new EngineMatchState(
-            match.Id,
-            match.Mode,
-            match.Status,
-            snapshot.SequenceNumber,
-            JsonNode.Parse(snapshot.StateJson)!.AsObject(),
-            players.Select(player => new EnginePlayerState(player.PlayerId, player.UserId, 0, false)).ToArray());
+        return await replayService.RebuildAsync(matchId, useLatestSnapshot: true, cancellationToken);
     }
 
     private async Task CleanupPlaceholderCardsAsync(CancellationToken cancellationToken)
