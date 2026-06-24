@@ -4,6 +4,7 @@ import './OnlineBattlePage.css'
 import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../shared/api'
 import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../shared/api'
 import { gameModes, type Card, type GameMode, type GameState, type SavedDeck, type Unit } from '../../shared/models'
+import { findServerApprovedAction, hasServerApprovedAction, serverApprovedHandIndexes } from './onlineActionGuards'
 import { OnlinePlaymat } from './OnlinePlaymat'
 
 type OnlineBattlePageProps = {
@@ -298,11 +299,11 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
-  const playableCardHandIndexes = legalActions
-    .filter((action) => action.type === 'play-card' && action.playerId === playerId)
-    .map((action) => Number(action.payloadSchema?.handIndex))
-    .filter((index) => Number.isInteger(index))
-  const canResolveCombat = Boolean(state?.activeCombat && legalActions.some((action) => action.type === 'resolve-combat' && action.playerId === playerId))
+  const playableCardHandIndexes = serverApprovedHandIndexes(legalActions, playerId, 'play-card')
+  const canPlayUnit = hasServerApprovedAction(legalActions, playerId, 'play-unit')
+  const canMoveUnit = hasServerApprovedAction(legalActions, playerId, 'move-unit')
+  const canSummonChampion = hasServerApprovedAction(legalActions, playerId, 'summon-champion')
+  const canResolveCombat = Boolean(state?.activeCombat && hasServerApprovedAction(legalActions, playerId, 'resolve-combat'))
 
   useEffect(() => {
     playerIdRef.current = playerId
@@ -572,7 +573,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
 
   async function submitTypedAction(type: string, payload: Record<string, unknown>, failureMessage: string) {
     if (!match) return
-    const action = legalActions.find((candidate) => candidate.type === type && candidate.playerId === playerId)
+    const action = findServerApprovedAction(legalActions, playerId, type, payload)
     if (!action) return
     const connection = await ensureConnection()
     try {
@@ -807,13 +808,13 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               game={state}
               matchPlayers={match?.players ?? []}
               viewerPlayerId={playerId}
-              canPlayUnit={legalActions.some((action) => action.type === 'play-unit' && action.playerId === playerId)}
+              canPlayUnit={canPlayUnit}
               onPlayUnit={playUnit}
               playableCardHandIndexes={playableCardHandIndexes}
               onPlayCard={playCard}
-              canMoveUnit={legalActions.some((action) => action.type === 'move-unit' && action.playerId === playerId)}
+              canMoveUnit={canMoveUnit}
               onMoveUnit={moveUnit}
-              canSummonChampion={legalActions.some((action) => action.type === 'summon-champion' && action.playerId === playerId)}
+              canSummonChampion={canSummonChampion}
               onSummonChampion={summonChampion}
               mulliganSelection={
                 isMulliganTurn ? { selectedIndexes: mulliganHandIndexes, onToggle: toggleMulliganHandIndex } : undefined

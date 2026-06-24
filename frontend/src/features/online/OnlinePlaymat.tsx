@@ -4,10 +4,6 @@ import { readDragData, useDragData } from '../../shared/dragDrop'
 import type { MatchPlayer } from '../../shared/api'
 import type { Battlefield, Card, GameState, Gear, Player, Unit } from '../../shared/models'
 
-function canAffordCard(player: Player, card: Card): boolean {
-  return player.runes.ready.length + player.runePool.energy >= card.cost
-}
-
 function unitOwnerId(unit: Unit): number {
   return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
 }
@@ -154,7 +150,7 @@ function OnlineBattlefieldLane({
   const renderUnitSide = (units: Unit[], side: 'opponent' | 'viewer') => (
     <div className={`unit-row online-battlefield-units online-battlefield-units-${side}`}>
       {units.map((unit) => {
-        const isMovable = Boolean(canMoveUnit && side === 'viewer' && !unit.exhausted)
+        const isMovable = Boolean(canMoveUnit && side === 'viewer')
         return (
           <ReadOnlyUnit
             key={unit.uid}
@@ -245,7 +241,7 @@ function OnlineHandZone({
   return (
     <div className="hand online-hand">
       {player.hand.map((card, index) => {
-        const isPlayableUnit = canPlayUnit && card.kind === 'unit' && canAffordCard(player, card)
+        const isPlayableUnit = canPlayUnit && card.kind === 'unit'
         const isPlayableCard = (playableCardHandIndexes ?? []).includes(index)
         return (
           <button
@@ -256,7 +252,7 @@ function OnlineHandZone({
             disabled={!isPlayableUnit && !isPlayableCard}
             onClick={isPlayableCard ? () => onPlayCard?.(index) : undefined}
             onDragStart={(event) => dragData(event, { type: 'card', handIndex: index, playerId: player.id })}
-            title={card.kind === 'unit' && !canAffordCard(player, card) ? `Needs ${card.cost} energy to play ${card.name}` : card.name}
+            title={card.name}
           >
             <ReadOnlyArtCard card={card} className="online-hand-card" />
           </button>
@@ -364,7 +360,7 @@ function OnlinePlayerMat({
       <span className="zone-label">Base</span>
       <div className="unit-row">
         {player.base.map((unit) => {
-          const isMovable = Boolean(isViewer && canMoveUnit && !unit.exhausted)
+          const isMovable = Boolean(isViewer && canMoveUnit)
           return (
             <ReadOnlyUnit
               key={unit.uid}
@@ -522,7 +518,7 @@ function BattlefieldZone({
               key={field.id}
               viewerPlayerId={viewerPlayerId}
               isShowdown={game.activeShowdown?.battlefieldId === field.id}
-              canDropPlayedUnit={Boolean(canPlayUnit && field.controllerId === viewerPlayerId)}
+              canDropPlayedUnit={Boolean(canPlayUnit)}
               canDropMovedUnit={Boolean(canMoveUnit)}
               canMoveUnit={canMoveUnit}
               onPlayUnit={onPlayUnit}

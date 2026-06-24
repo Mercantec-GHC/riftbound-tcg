@@ -18,6 +18,8 @@ import {
 } from '../../../shared/models'
 import { randomId } from '../../../shared/utils/randomId'
 
+// Local/hotseat rule helpers only. Online match play must use server state and
+// server legal actions instead of importing this mutation module.
 export type ManualAction =
   | { type: 'adjust-points'; playerId: number; amount: number }
   | { type: 'ready-unit' | 'exhaust-unit' | 'kill-unit' | 'recall-unit'; unitId: string }
