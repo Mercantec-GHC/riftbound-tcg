@@ -23,6 +23,18 @@ type ResolveCombatPayload = {
   assignments: CombatAssignments
 }
 
+type DragActionChoice = {
+  key: string
+  label: string
+  payload: Record<string, unknown>
+  type: string
+}
+
+type DragActionPrompt = {
+  cardName: string
+  choices: DragActionChoice[]
+}
+
 function unitOwnerId(unit: Unit): number {
   return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
 }
@@ -243,6 +255,40 @@ function CombatShowdownModal({
   )
 }
 
+function DragActionModal({
+  prompt,
+  onCancel,
+  onChoose,
+}: {
+  prompt: DragActionPrompt
+  onCancel: () => void
+  onChoose: (choice: DragActionChoice) => void
+}) {
+  return (
+    <div className="combat-modal-backdrop" role="presentation">
+      <section aria-modal="true" className="drag-action-modal" role="dialog">
+        <header>
+          <div>
+            <span>Drag action</span>
+            <h3>{prompt.cardName}</h3>
+          </div>
+          <button aria-label="Cancel drag action" className="combat-modal-close" type="button" onClick={onCancel}>X</button>
+        </header>
+        <div className="drag-action-options">
+          {prompt.choices.map((choice) => (
+            <button key={choice.key} type="button" onClick={() => onChoose(choice)}>
+              {choice.label}
+            </button>
+          ))}
+        </div>
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBattlePageProps) {
   const cardsApi = useMemo(() => createCardsApi(apiClient), [apiClient])
   const lobbiesApi = useMemo(() => createLobbiesApi(apiClient), [apiClient])
@@ -263,6 +309,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [legalActions, setLegalActions] = useState<LegalAction[]>([])
   const [mulliganHandIndexes, setMulliganHandIndexes] = useState<number[]>([])
   const [combatModalOpen, setCombatModalOpen] = useState(false)
+  const [dragActionPrompt, setDragActionPrompt] = useState<DragActionPrompt | null>(null)
   const [events, setEvents] = useState<MatchEvent[]>([])
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
   const [status, setStatus] = useState('Create or join a lobby, or use quick queue for 1v1.')
@@ -300,7 +347,9 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
   const playableCardHandIndexes = serverApprovedHandIndexes(legalActions, playerId, 'play-card')
+  const hideableCardHandIndexes = serverApprovedHandIndexes(legalActions, playerId, 'hide-card')
   const canPlayUnit = hasServerApprovedAction(legalActions, playerId, 'play-unit')
+  const canAttachCard = hasServerApprovedAction(legalActions, playerId, 'attach-card')
   const canMoveUnit = hasServerApprovedAction(legalActions, playerId, 'move-unit')
   const canSummonChampion = hasServerApprovedAction(legalActions, playerId, 'summon-champion')
   const canResolveCombat = Boolean(state?.activeCombat && hasServerApprovedAction(legalActions, playerId, 'resolve-combat'))
@@ -602,6 +651,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     await submitTypedAction('play-card', { handIndex }, 'Unable to play card.')
   }
 
+  async function attachCard(handIndex: number, targetUnitId: string) {
+    await submitTypedAction('attach-card', { handIndex, targetUnitId }, 'Unable to attach card.')
+  }
+
   async function summonChampion() {
     await submitTypedAction('summon-champion', {}, 'Unable to summon champion.')
   }
@@ -624,6 +677,64 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       const next = current.includes(mode) ? current.filter((item) => item !== mode) : [...current, mode]
       return next.length === 0 ? [mode] : next
     })
+  }
+
+  function queueOrSubmitDragChoices(cardName: string, choices: DragActionChoice[]) {
+    if (choices.length === 0) return
+    if (choices.length === 1) {
+      const [choice] = choices
+      void submitTypedAction(choice.type, choice.payload, `Unable to ${choice.label.toLowerCase()}.`)
+      return
+    }
+
+    setDragActionPrompt({ cardName, choices })
+  }
+
+  function cardNameAt(handIndex: number): string {
+    return state?.players.find((player) => player.id === playerId)?.hand[handIndex]?.name ?? 'Card'
+  }
+
+  function dropCardOnBattlefield(handIndex: number, battlefieldId: string) {
+    const choices: DragActionChoice[] = []
+    if (findServerApprovedAction(legalActions, playerId, 'play-unit', { handIndex, battlefieldId })) {
+      choices.push({ key: 'play-unit', label: 'Play to battlefield', type: 'play-unit', payload: { handIndex, battlefieldId } })
+    }
+
+    if (findServerApprovedAction(legalActions, playerId, 'play-card', { handIndex })) {
+      choices.push({ key: 'play-card', label: 'Play normally', type: 'play-card', payload: { handIndex } })
+    }
+
+    if (findServerApprovedAction(legalActions, playerId, 'hide-card', { handIndex, battlefieldId })) {
+      choices.push({ key: 'hide-card', label: 'Play hidden', type: 'hide-card', payload: { handIndex, battlefieldId } })
+    }
+
+    queueOrSubmitDragChoices(cardNameAt(handIndex), choices)
+  }
+
+  function dropCardOnBase(handIndex: number) {
+    const choices: DragActionChoice[] = []
+    if (findServerApprovedAction(legalActions, playerId, 'play-unit', { handIndex })) {
+      choices.push({ key: 'play-unit', label: 'Play to base', type: 'play-unit', payload: { handIndex } })
+    }
+
+    if (findServerApprovedAction(legalActions, playerId, 'play-card', { handIndex })) {
+      choices.push({ key: 'play-card', label: 'Play normally', type: 'play-card', payload: { handIndex } })
+    }
+
+    queueOrSubmitDragChoices(cardNameAt(handIndex), choices)
+  }
+
+  function dropCardOnUnit(handIndex: number, targetUnitId: string) {
+    const choices: DragActionChoice[] = []
+    if (findServerApprovedAction(legalActions, playerId, 'attach-card', { handIndex, targetUnitId })) {
+      choices.push({ key: 'attach-card', label: 'Attach to unit', type: 'attach-card', payload: { handIndex, targetUnitId } })
+    }
+
+    if (findServerApprovedAction(legalActions, playerId, 'play-card', { handIndex })) {
+      choices.push({ key: 'play-card', label: 'Play normally', type: 'play-card', payload: { handIndex } })
+    }
+
+    queueOrSubmitDragChoices(cardNameAt(handIndex), choices)
   }
 
   return (
@@ -810,8 +921,14 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               viewerPlayerId={playerId}
               canPlayUnit={canPlayUnit}
               onPlayUnit={playUnit}
+              onDropCardOnBase={dropCardOnBase}
+              onDropCardOnBattlefield={dropCardOnBattlefield}
+              onDropCardOnUnit={dropCardOnUnit}
               playableCardHandIndexes={playableCardHandIndexes}
+              hideableCardHandIndexes={hideableCardHandIndexes}
               onPlayCard={playCard}
+              canAttachCard={canAttachCard}
+              onAttachCard={attachCard}
               canMoveUnit={canMoveUnit}
               onMoveUnit={moveUnit}
               canSummonChampion={canSummonChampion}
@@ -847,6 +964,16 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 onClose={() => setCombatModalOpen(false)}
                 onResolveCombat={resolveCombat}
                 viewerPlayerId={playerId}
+              />
+            )}
+            {dragActionPrompt && (
+              <DragActionModal
+                prompt={dragActionPrompt}
+                onCancel={() => setDragActionPrompt(null)}
+                onChoose={(choice) => {
+                  setDragActionPrompt(null)
+                  void submitTypedAction(choice.type, choice.payload, `Unable to ${choice.label.toLowerCase()}.`)
+                }}
               />
             )}
             {legalActions.length === 0 && <p>No legal actions for your seat right now.</p>}

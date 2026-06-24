@@ -10,7 +10,16 @@ function payloadValueMatches(expected: unknown, actual: unknown): boolean {
 
 function payloadMatchesServerSchema(action: LegalAction, payload: Record<string, unknown>): boolean {
   const schema = action.payloadSchema ?? {}
-  return Object.entries(schema).every(([key, expected]) => payloadValueMatches(expected, payload[key]))
+  return Object.entries(schema).every(([key, expected]) => {
+    if (payloadValueMatches(expected, payload[key])) return true
+
+    if (key.endsWith('Ids') && Array.isArray(expected)) {
+      const singularKey = `${key.slice(0, -3)}Id`
+      return expected.some((item) => payloadValueMatches(item, payload[singularKey]))
+    }
+
+    return false
+  })
 }
 
 export function findServerApprovedAction(

@@ -1,9 +1,20 @@
 :root {
-  color: #f7efe2;
+  --rift-bg: #05070a;
+  --rift-bg-2: #090d13;
+  --rift-panel: rgba(9, 12, 18, 0.94);
+  --rift-panel-2: rgba(15, 19, 27, 0.96);
+  --rift-gold: #c8aa6e;
+  --rift-gold-bright: #f0d28a;
+  --rift-gold-dim: #6e5a31;
+  --rift-text: #f5ead6;
+  --rift-muted: #9ca6af;
+  --rift-blue: #0ac8d3;
+  --rift-danger: #c94b45;
+  color: var(--rift-text);
   background:
-    radial-gradient(circle at 12% 8%, rgba(255, 118, 71, 0.28), transparent 28%),
-    radial-gradient(circle at 84% 18%, rgba(86, 114, 255, 0.2), transparent 28%),
-    #070916;
+    linear-gradient(90deg, rgba(200, 170, 110, 0.12) 1px, transparent 1px) 4vw 0 / calc(100% - 8vw) 100% no-repeat,
+    radial-gradient(circle at 50% -10%, rgba(31, 72, 92, 0.42), transparent 34%),
+    linear-gradient(180deg, #0b1016 0%, var(--rift-bg) 46%, #030405 100%);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;

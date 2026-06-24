@@ -203,8 +203,22 @@
   width: min(720px, calc(100vw - 36px));
 }
 
+.drag-action-modal {
+  background: #111827;
+  border: 1px solid rgba(255, 220, 138, 0.34);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  color: #f7efe2;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  width: min(420px, calc(100vw - 36px));
+}
+
 .combat-showdown-modal header,
 .combat-showdown-modal footer,
+.drag-action-modal header,
+.drag-action-modal footer,
 .combat-modal-toolbar {
   align-items: center;
   display: flex;
@@ -219,9 +233,27 @@
   text-transform: uppercase;
 }
 
+.drag-action-modal header span {
+  color: #ffdc8a;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .combat-showdown-modal h3,
-.combat-showdown-modal h4 {
+.combat-showdown-modal h4,
+.drag-action-modal h3 {
   margin: 0;
+}
+
+.drag-action-options {
+  display: grid;
+  gap: 10px;
+}
+
+.drag-action-options button {
+  justify-content: center;
+  width: 100%;
 }
 
 .combat-modal-close {
@@ -490,6 +522,11 @@
   cursor: grab;
   outline: 2px solid rgba(120, 220, 140, 0.5);
   border-radius: 10px;
+}
+
+.online-unit-card-wrap.attach-drop-zone {
+  border-radius: 10px;
+  padding: 2px;
 }
 
 .online-card-badges {
@@ -774,4 +811,145 @@
   .lobby-layout {
     grid-template-columns: 1fr;
   }
+}
+
+.online-toolbar,
+.online-status,
+.online-board,
+.online-actions,
+.online-log,
+.lobby-browser,
+.lobby-room,
+.online-check,
+.online-list-item,
+.online-account,
+.online-players .player,
+.online-battlefields article,
+.online-window-panel article,
+.online-stack,
+.combat-showdown-modal,
+.drag-action-modal,
+.combat-assignment-row,
+.combat-validation,
+.online-shared-playmat,
+.online-player-mat,
+.hidden-hand {
+  background:
+    linear-gradient(135deg, rgba(200, 170, 110, 0.08), transparent 18%),
+    linear-gradient(180deg, var(--rift-panel-2), var(--rift-panel));
+  border: 1px solid rgba(200, 170, 110, 0.32);
+  border-radius: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.05),
+    0 18px 48px rgba(0, 0, 0, 0.34);
+  color: var(--rift-text);
+}
+
+.online-toolbar,
+.online-board,
+.online-actions,
+.online-log,
+.lobby-browser,
+.lobby-room,
+.online-shared-playmat,
+.online-player-mat {
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+
+.online-shared-playmat {
+  background:
+    linear-gradient(90deg, rgba(200, 170, 110, 0.08) 1px, transparent 1px) 50% 0 / 1px 100% no-repeat,
+    radial-gradient(circle at 50% 32%, rgba(10, 200, 211, 0.08), transparent 34%),
+    linear-gradient(180deg, #080c12, #05070a);
+  border-color: rgba(200, 170, 110, 0.42);
+}
+
+.viewer-player-mat {
+  border-color: rgba(240, 210, 138, 0.74);
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.18),
+    0 0 32px rgba(200, 170, 110, 0.12);
+}
+
+.online-window-panel span,
+.online-stack strong,
+.online-account span,
+.online-player-mat-header span,
+.hidden-hand strong,
+.zone-empty-text,
+.online-list-item.active,
+.online-showdown-banner {
+  color: var(--rift-gold-bright);
+}
+
+.online-list-item small,
+.online-list-item span,
+.combat-assignment-row small,
+.online-player-mat-header span,
+.hidden-hand,
+.hidden-hand span,
+.zone-empty-text {
+  color: var(--rift-muted);
+}
+
+.online-player-mat-header strong,
+.online-card-badges small,
+.online-battlefield-controller-badge {
+  background: radial-gradient(circle at 36% 26%, var(--rift-gold-bright), var(--rift-gold) 50%, #4a371d);
+  border-color: rgba(240, 210, 138, 0.72);
+  border-radius: 0;
+  color: #07090c;
+}
+
+.online-art-card,
+.online-art-card .card-art,
+.online-hand-card-button,
+.online-art-card.playable {
+  border-radius: 2px;
+}
+
+.online-art-card {
+  border: 1px solid rgba(200, 170, 110, 0.34);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.34);
+}
+
+.online-hand-card-button {
+  border-color: transparent;
+}
+
+.online-hand-card-button.selected,
+.online-art-card.playable {
+  border-color: var(--rift-gold-bright);
+  box-shadow: 0 0 0 1px rgba(240, 210, 138, 0.52), 0 0 24px rgba(200, 170, 110, 0.22);
+}
+
+.online-unit-card-wrap.movable {
+  border-radius: 0;
+  outline-color: rgba(240, 210, 138, 0.68);
+}
+
+.drop-zone {
+  border-radius: 0;
+}
+
+.drop-zone:hover {
+  outline-color: rgba(240, 210, 138, 0.82);
+}
+
+.online-battlefield-units-opponent,
+.online-battlefield-units-viewer {
+  border-color: rgba(200, 170, 110, 0.24);
+}
+
+.online-showdown-banner {
+  background: linear-gradient(180deg, rgba(98, 28, 28, 0.96), rgba(37, 12, 12, 0.96));
+  border: 1px solid rgba(240, 210, 138, 0.52);
+  border-radius: 0;
+  box-shadow: 0 0 18px rgba(201, 75, 69, 0.28);
+}
+
+.combat-validation {
+  background: rgba(65, 18, 18, 0.86);
+  border-color: rgba(201, 75, 69, 0.7);
+  color: #ffd2ca;
 }
