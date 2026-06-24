@@ -474,7 +474,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         else if (currentPhase == "draw")
         {
-            state = DrawCards(state, playerId, 1);
+            if (!ShouldSkipFirstDraw(state, playerId))
+            {
+                state = DrawCards(state, playerId, 1);
+            }
         }
         else if (currentPhase == "ending")
         {
@@ -489,6 +492,19 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         state["turnPhase"] = PhaseOrder[nextIndex];
         return AddLog(state, $"{PlayerName(state, playerId)} advanced to {PhaseOrder[nextIndex]}.");
+    }
+
+    private static bool ShouldSkipFirstDraw(JsonObject state, int playerId)
+    {
+        var mode = state["mode"]?.GetValue<string>() ?? "";
+        if (mode is not ("ffa-3" or "ffa-4" or "teams-2v2"))
+        {
+            return false;
+        }
+
+        var firstPlayerId = state["firstPlayerId"]?.GetValue<int>() ?? 0;
+        var firstTurnCompleted = state["firstTurnCompletedByPlayer"]?[playerId.ToString()]?.GetValue<bool>() ?? false;
+        return playerId == firstPlayerId && !firstTurnCompleted;
     }
 
     private static JsonObject EndTurn(JsonObject state)
