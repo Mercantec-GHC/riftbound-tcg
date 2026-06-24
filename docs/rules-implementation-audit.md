@@ -43,7 +43,30 @@ Rule coverage:
 
 - `103`, `107`, `108`, `111-119`, `128`, `159-171`, `172-175`.
 
-Gaps remain around exact deck construction, privacy, battlefield selection, champion-zone play semantics, domain identity, and public/private information enforcement.
+Gaps remain around privacy, full setup/battlefield selection procedure, champion-zone play semantics, and public/private information enforcement.
+
+### Deck Construction Validation
+
+Status: **Implemented**
+
+- Server deck create/update validation now uses a shared Core deck-construction validator.
+- Main decks must contain at least 40 cards.
+- Rune decks must contain exactly 12 valid rune cards.
+- Battlefield decks must contain exactly 3 valid battlefield cards with no duplicate battlefield names.
+- Chosen Champion must be a champion card, cannot be Signature, and must share a champion tag with the selected Champion Legend.
+- Main deck, rune deck, and battlefield cards must fit the selected Legend's domain identity.
+- Main deck copy limits are enforced by card name, counting the chosen Champion.
+- Signature cards are limited to 3 total and must share a champion tag with the selected Legend.
+- Frontend deck-builder validation and add-card affordances mirror the authoritative server rules.
+- RiftCodex import preserves signature metadata by marking imported signature cards with a `Signature` supertype.
+
+Rule coverage:
+
+- `103.1.b`, `103.2`, `103.2.a-b`, `103.2.d`, `103.3.a`, `103.3.a.1`, `103.4`, `103.4.c`, `133.7.a-b`.
+
+Remaining future work:
+
+- Deck construction is currently mode-agnostic for the supported sanctioned modes and requires three battlefield cards for all online decks. If casual modes with different battlefield counts are added, the validator should receive a mode-specific deck-construction policy.
 
 ### Mulligan
 
@@ -207,7 +230,7 @@ These are places where the app has behavior, but the behavior currently contradi
 
 ### Deck Construction Counts
 
-Status: **Improper**
+Status: **Fixed**
 
 Reference:
 
@@ -215,16 +238,16 @@ Reference:
 - `103.3.a`: Rune Deck has exactly 12 Rune cards.
 - `103.4`: Battlefield count is dictated by mode; sanctioned modes expect each player to bring three battlefields, then select/remove according to mode.
 
-Current behavior:
+Fixed behavior:
 
-- Server `ValidateDeckAsync` rejects main decks with more than 40 cards, allowing decks below 40. This reverses the rule.
-- Frontend validation also says "Main deck can contain at most 40 cards."
-- Server and frontend allow rune decks with at least 12 cards, not exactly 12.
-- Server allows battlefield decks with 1 to 3 cards, not the required three-card battlefield deck for sanctioned modes.
+- Server validation requires main decks to have at least 40 cards.
+- Frontend validation and deck-builder affordances no longer cap the main deck at 40.
+- Server and frontend require rune decks to contain exactly 12 valid rune cards.
+- Server and frontend require each online deck to bring exactly 3 valid battlefield cards.
 
 ### Deck Construction Missing Restrictions
 
-Status: **Improper/Incomplete**
+Status: **Fixed**
 
 Reference:
 
@@ -235,13 +258,14 @@ Reference:
 - `103.3.a.1`: Rune cards must match domain identity.
 - `103.4.c`: No duplicate battlefield names when more than one battlefield is required.
 
-Current behavior:
+Fixed behavior:
 
-- Frontend filters runes by legend domain, but the server does not enforce full domain identity for main deck, rune deck, or battlefields.
-- Server validates champion kind but not champion-tag match.
-- Server and frontend do not enforce copy limits by card name.
-- Signature total and tag restriction are not enforced.
-- Duplicate battlefield-name limits are not enforced.
+- A shared Core validator enforces domain identity across main deck, rune deck, and battlefields.
+- Chosen Champion must be a champion card, cannot be Signature, and must share a champion tag with the selected Legend.
+- Main deck copy limits are enforced by card name, counting the chosen Champion.
+- Signature total and champion-tag restrictions are enforced.
+- Duplicate battlefield-name limits are enforced.
+- Frontend deck-builder validation and card-add controls mirror these restrictions before API submission.
 
 ### First Draw In FFA And 2v2
 
@@ -310,16 +334,22 @@ Current behavior:
 
 ### Burn Out
 
-Status: **Improper/Missing**
+Status: **Fixed for draw effects**
 
 Reference:
 
 - `413.4`, `431`: drawing beyond deck performs Burn Out: draw as much as possible, recycle trash into deck, choose opponent to gain 1 point, then continue drawing.
 
-Current behavior:
+Fixed behavior:
 
-- Draw simply stops when the deck is empty.
-- No trash recycle, opponent point award, repeated Burn Out, or immediate win handling exists.
+- Drawing beyond the remaining main deck now draws as much as possible, recycles the player's trash into the main deck in deterministic randomized order, creates a pending opponent-choice action, awards the chosen opponent 1 point, and continues the remaining draw.
+- Repeated Burn Out with an empty deck/trash is supported through repeated pending choices.
+- Points gained from Burn Out can immediately end the game when they meet the victory condition.
+- Engine tests cover trash recycle, pending opponent choice, repeated empty-deck Burn Out, immediate win, and deterministic recycle order.
+
+Remaining future work:
+
+- Rule `431` also applies when moving cards from the Main Deck to non-hand zones in excess of the remaining deck. Current fixed behavior covers draws, which are the currently modeled online engine path.
 
 ### Rune Pool And Payment
 
@@ -411,7 +441,7 @@ Missing or non-authoritative actions include:
 - Kill as a general action.
 - Banish.
 - Add Power/Energy as actual resource actions.
-- Burn Out.
+- Burn Out for non-draw main-deck zone movement.
 - Double.
 - Swap.
 - Attach/detach.
@@ -439,7 +469,8 @@ Status: **Partial/Missing**
 
 - Mode counts and victory score exist.
 - Team identity exists in state.
-- Team scoring/winning, teammate priority invitation, teammate battlefield restrictions, teammate deck restrictions, friendly semantics, team concession, and final-point team exceptions are missing or incomplete.
+- Lobby loadout selection prevents teammates in team modes from saving the same selected battlefield; saving a teammate-conflicting loadout clears the teammate's duplicate battlefield selection and unreadies them.
+- Team scoring/winning, teammate priority invitation, in-engine teammate battlefield movement/combat restrictions, teammate deck restrictions beyond lobby battlefield de-conflict, friendly semantics, team concession, and final-point team exceptions are missing or incomplete.
 - FFA player removal and continuing-game behavior are missing.
 
 ### Rebuild From Event Log
@@ -463,11 +494,11 @@ Important frontend-only/prototype concerns:
 
 ## Recommended Tracking Order
 
-1. Fix improper deck construction validation: main deck minimum 40, rune deck exactly 12, three battlefield cards where required, champion-tag match, domain identity, copy limits, and signature limits.
-2. Fix server first-turn draw skip for FFA/2v2.
+1. Done: fixed improper deck construction validation: main deck minimum 40, rune deck exactly 12, three battlefield cards, champion-tag match, domain identity, copy limits, signature limits, and duplicate battlefield names.
+2. Done: implemented draw-based Burn Out with deterministic trash recycle, pending opponent choice, point award, repeated Burn Out, and immediate win handling.
 3. Done: corrected `ChainRules.ValidateChainPlay` and `SpellClassifier.CanPlayDuringChainWindow` so Action spells are not valid in Closed State chain windows by default.
-4. Implement battlefield-to-base movement and simultaneous standard moves.
-5. Implement Burn Out.
+4. Fix server first-turn draw skip for FFA/2v2.
+5. Implement battlefield-to-base movement and simultaneous standard moves.
 6. Replace the generic integer resource model with Energy plus domain Power.
 7. Add a real effect/action system for core actions before expanding card text and keywords.
 8. Decide whether frontend local rules remain a local-hotseat feature or should be retired in favor of server-provided legal actions only.

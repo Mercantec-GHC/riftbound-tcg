@@ -173,6 +173,13 @@ function kindFromRaw(card: RiftCodexCard): CardKind {
   return 'unit'
 }
 
+function supertypeFromRaw(card: RiftCodexCard) {
+  const supertype = card.classification.supertype?.trim()
+  if (!card.metadata.signature) return supertype || null
+  if (supertype?.toLowerCase().includes('signature')) return supertype
+  return supertype ? `${supertype} Signature` : 'Signature'
+}
+
 function effectFromText(text: string, kind: CardKind): Effect {
   const lower = text.toLowerCase()
   if (lower.includes('draw')) return { type: 'draw', amount: 1 }
@@ -214,7 +221,7 @@ function rawCardToGameCard(card: RiftCodexCard): Card | null {
     image: card.media.image_url ?? 'ðŸƒ',
     text,
     cardType: card.classification.type,
-    supertype: card.classification.supertype,
+    supertype: supertypeFromRaw(card),
     effect: effectFromText(text, kind),
   }
 }

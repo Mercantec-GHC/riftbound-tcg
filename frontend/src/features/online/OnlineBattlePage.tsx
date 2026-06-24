@@ -270,19 +270,31 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
 
   const selectedDeckId = deckId || decks[0]?.id || ''
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null
+  const currentLobbyPlayer = lobby?.players.find((player) => player.userId === session?.user.id) ?? null
+  const occupiedBattlefieldIds = new Set(
+    lobby?.players
+      .filter((player) =>
+        currentLobbyPlayer?.teamId !== null &&
+        currentLobbyPlayer?.teamId !== undefined &&
+        player.userId !== session?.user.id &&
+        player.teamId === currentLobbyPlayer.teamId)
+      .flatMap((player) => player.selectedBattlefieldIds)
+      .filter(Boolean) ?? [],
+  )
   const battlefieldOptions = selectedDeck
-    ? selectedDeck.battlefieldDeckIds.map((id) => ({
-      id,
-      name: cards.find((card) => card.id === id)?.name ?? battlefieldNames[id] ?? 'Loading battlefield...',
-    }))
+    ? selectedDeck.battlefieldDeckIds
+      .filter((id) => !occupiedBattlefieldIds.has(id) || currentLobbyPlayer?.selectedBattlefieldIds.includes(id))
+      .map((id) => ({
+        id,
+        name: cards.find((card) => card.id === id)?.name ?? battlefieldNames[id] ?? 'Loading battlefield...',
+      }))
     : []
-  const effectiveSelectedBattlefieldId = selectedDeck?.battlefieldDeckIds.includes(selectedBattlefieldId)
+  const effectiveSelectedBattlefieldId = battlefieldOptions.some((battlefield) => battlefield.id === selectedBattlefieldId)
     ? selectedBattlefieldId
-    : selectedDeck?.battlefieldDeckIds[0] ?? ''
+    : battlefieldOptions[0]?.id ?? ''
   const playerId = match?.players.find((player) => player.userId === session?.user.id)?.playerId ?? 0
   const isMulliganTurn =
     state?.stage === 'mulligan' && !(state.mulliganConfirmedPlayerIds ?? []).includes(playerId)
-  const currentLobbyPlayer = lobby?.players.find((player) => player.userId === session?.user.id) ?? null
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
@@ -729,7 +741,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                   <select value={selectedDeckId} onChange={(event) => {
                     const nextDeck = decks.find((deck) => deck.id === event.target.value)
                     setDeckId(event.target.value)
-                    setSelectedBattlefieldId(nextDeck?.battlefieldDeckIds[0] ?? '')
+                    setSelectedBattlefieldId(nextDeck?.battlefieldDeckIds.find((id) => !occupiedBattlefieldIds.has(id) || currentLobbyPlayer?.selectedBattlefieldIds.includes(id)) ?? '')
                   }}>
                     {decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.name}</option>)}
                   </select>

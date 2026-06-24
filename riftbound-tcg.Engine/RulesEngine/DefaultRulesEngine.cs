@@ -87,10 +87,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["selectedUnit"] = null,
             ["nextUid"] = 1,
             ["nextLogId"] = 1,
+            ["rngState"] = seed,
             ["log"] = new JsonArray(new JsonObject { ["id"] = 0, ["text"] = $"{mode.Label} online match created. Players drew 4 and entered mulligan." }),
             ["passShield"] = true,
             ["effectStack"] = new JsonArray(),
-            ["chainWindow"] = null
+            ["chainWindow"] = null,
+            ["pendingBurnOut"] = null
         };
 
         return ToEngineState(config.MatchId, config.Mode, 0, state, config.Seats);
@@ -115,6 +117,25 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var actions = new List<EngineLegalAction> { new("concede", "concede", "Concede", playerId) };
+
+        if (stage == "playing" && PendingBurnOut(state.State) is { } pendingBurnOut)
+        {
+            var burnOutPlayerId = pendingBurnOut["playerId"]?.GetValue<int>() ?? -1;
+            if (burnOutPlayerId == playerId)
+            {
+                foreach (var opponentId in OpponentPlayerIds(state.State, playerId))
+                {
+                    actions.Add(new(
+                        $"choose-burn-out-opponent-{opponentId}",
+                        "choose-burn-out-opponent",
+                        $"Burn Out: {PlayerName(state.State, opponentId)} gains 1 point",
+                        playerId,
+                        new JsonObject { ["opponentPlayerId"] = opponentId }));
+                }
+            }
+
+            return actions;
+        }
 
         if (stage == "playing" && chainOpen)
         {
@@ -199,6 +220,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 break;
             case "advance-phase":
                 nextState = AdvancePhase(nextState);
+                break;
+            case "choose-burn-out-opponent":
+                var burnOutResult = ChooseBurnOutOpponent(nextState, action.PlayerId, ReadInt(action.Payload, "opponentPlayerId"));
+                if (burnOutResult is null)
+                {
+                    return Reject(state, "Invalid choose-burn-out-opponent action: choose a valid opponent.");
+                }
+
+                nextState = burnOutResult;
                 break;
             case "end-turn":
                 nextState = EndCurrentTurn(nextState, action.PlayerId);
@@ -430,7 +460,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         else if (currentPhase == "draw")
         {
-            state = UpdatePlayer(state, playerId, player => Draw(player, 1));
+            state = DrawCards(state, playerId, 1);
         }
         else if (currentPhase == "ending")
         {
@@ -518,7 +548,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             var hasScoredEveryBattlefield = allBattlefieldIds.All(id => scoredNow.Contains(id, StringComparer.OrdinalIgnoreCase));
             if (currentPoints >= victoryScore - 1 && !hasScoredEveryBattlefield)
             {
-                state = UpdatePlayer(state, request.PlayerId, player => Draw(player, 1));
+                state = DrawCards(state, request.PlayerId, 1);
                 state = AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "drew-instead"));
                 return AddLog(state, $"{PlayerName(state, request.PlayerId)} conquered {battlefield["name"]?.GetValue<string>() ?? request.BattlefieldId} and drew instead of gaining the final point.");
             }
@@ -608,7 +638,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
-    private static JsonObject Draw(JsonObject player, int amount)
+    private static JsonObject DrawAvailable(JsonObject player, int amount)
     {
         var deck = player["deck"]!.AsArray();
         var hand = player["hand"]!.AsArray();
@@ -619,6 +649,124 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return player;
+    }
+
+    private static JsonObject DrawCards(JsonObject state, int playerId, int amount)
+    {
+        if (amount <= 0 || PendingBurnOut(state) is not null)
+        {
+            return state;
+        }
+
+        var player = FindPlayer(state, playerId);
+        if (player is null)
+        {
+            return state;
+        }
+
+        var deck = player["deck"]!.AsArray();
+        if (deck.Count >= amount)
+        {
+            DrawAvailable(player, amount);
+            return state;
+        }
+
+        var drawn = deck.Count;
+        DrawAvailable(player, drawn);
+        RecycleTrashIntoMainDeck(state, player);
+        var remaining = amount - drawn;
+        state["pendingBurnOut"] = new JsonObject
+        {
+            ["playerId"] = playerId,
+            ["remainingDraws"] = remaining
+        };
+        return AddLog(state, $"{PlayerName(state, playerId)} burned out and must choose an opponent to gain 1 point.");
+    }
+
+    private static JsonObject? ChooseBurnOutOpponent(JsonObject state, int playerId, int? opponentPlayerId)
+    {
+        var pending = PendingBurnOut(state);
+        if (pending is null || opponentPlayerId is null || pending["playerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        if (!OpponentPlayerIds(state, playerId).Contains(opponentPlayerId.Value))
+        {
+            return null;
+        }
+
+        var remainingDraws = pending["remainingDraws"]?.GetValue<int>() ?? 0;
+        state["pendingBurnOut"] = null;
+        state = UpdatePlayer(state, opponentPlayerId.Value, player =>
+        {
+            player["points"] = Math.Max(0, (player["points"]?.GetValue<int>() ?? 0) + 1);
+            return player;
+        });
+        state = AddLog(state, $"{PlayerName(state, opponentPlayerId.Value)} gained 1 point from {PlayerName(state, playerId)} burning out.");
+        state = CheckWinners(state);
+        if (state["stage"]?.GetValue<string>() == "game-over")
+        {
+            return state;
+        }
+
+        return DrawCards(state, playerId, remainingDraws);
+    }
+
+    private static void RecycleTrashIntoMainDeck(JsonObject state, JsonObject player)
+    {
+        var trash = player["trash"]!.AsArray();
+        if (trash.Count == 0)
+        {
+            return;
+        }
+
+        var recycled = trash.Select(card => card?.DeepClone()).Where(card => card is not null).ToList();
+        trash.Clear();
+        ShuffleInPlace(state, recycled);
+        var deck = player["deck"]!.AsArray();
+        foreach (var card in recycled)
+        {
+            deck.Add(card);
+        }
+    }
+
+    private static void ShuffleInPlace(JsonObject state, IList<JsonNode?> cards)
+    {
+        for (var index = cards.Count - 1; index > 0; index--)
+        {
+            var swapIndex = NextRandomIndex(state, index + 1);
+            (cards[index], cards[swapIndex]) = (cards[swapIndex], cards[index]);
+        }
+    }
+
+    private static int NextRandomIndex(JsonObject state, int maxExclusive)
+    {
+        var current = state["rngState"]?.GetValue<int>() ?? 1;
+        var next = unchecked(current * 1664525 + 1013904223) & int.MaxValue;
+        state["rngState"] = next;
+        return maxExclusive <= 1 ? 0 : next % maxExclusive;
+    }
+
+    private static JsonObject? PendingBurnOut(JsonObject state)
+    {
+        return state["pendingBurnOut"] as JsonObject;
+    }
+
+    private static int[] OpponentPlayerIds(JsonObject state, int playerId)
+    {
+        var players = state["players"]!.AsArray()
+            .Select(player => player!["id"]!.GetValue<int>())
+            .Where(id => id != playerId)
+            .ToArray();
+        var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        if (teamIds.Length == 0 || playerId < 0 || playerId >= teamIds.Length)
+        {
+            return players;
+        }
+
+        var teamId = teamIds[playerId];
+        return players.Where(id => id < 0 || id >= teamIds.Length || teamIds[id] != teamId).ToArray();
     }
 
     private static JsonObject? PlayCard(JsonObject state, int playerId, int? handIndex, string? targetUnitId, string? targetLaneId)
@@ -838,7 +986,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         state = effectType switch
         {
-            "draw" => UpdatePlayer(state, playerId, player => Draw(player, amount)),
+            "draw" => DrawCards(state, playerId, amount),
             "damage" => ApplyDamage(state, playerId, amount, targetUnitId, targetLaneId),
             "buff" => ApplyUnitMod(state, targetUnitId, unit => { unit["attachedMight"] = (unit["attachedMight"]?.GetValue<int>() ?? 0) + amount; return unit; }),
             "rally" => ApplyUnitMod(state, targetUnitId, unit => { unit["exhausted"] = false; return unit; }),
@@ -1049,7 +1197,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static JsonObject RunOutstandingTasks(JsonObject state)
     {
-        if (state["stage"]?.GetValue<string>() != "playing" || state["chainWindow"] is not null)
+        if (state["stage"]?.GetValue<string>() != "playing" || state["chainWindow"] is not null || PendingBurnOut(state) is not null)
         {
             return state;
         }

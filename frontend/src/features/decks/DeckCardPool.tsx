@@ -1,10 +1,11 @@
 import { CardFace } from '../../shared/ui/CardFace'
 import type { DeckSort } from '../../shared/domain/cards/cardFilters'
-import { cardsShareTag } from '../../shared/domain/decks/deckUtils'
+import { cardsShareTag, isSignatureCard } from '../../shared/domain/decks/deckUtils'
 import { domains, type Card, type Domain, type SavedDeck } from '../../shared/models'
 import type { DeckTab } from './deckBuilderTypes'
 
 export function DeckCardPool({
+  cardLibrary,
   deckDraft,
   deckDomainFilter,
   deckMaxCost,
@@ -29,6 +30,7 @@ export function DeckCardPool({
   onDeckTabChange,
   onDeckTagFilterChange,
 }: {
+  cardLibrary: Card[]
   deckDraft: SavedDeck
   deckDomainFilter: '' | Domain
   deckMaxCost: string
@@ -53,6 +55,31 @@ export function DeckCardPool({
   onDeckTabChange: (tab: DeckTab) => void
   onDeckTagFilterChange: (tag: string) => void
 }) {
+  const signatureCount = deckDraft.mainDeckIds
+    .map((id) => cardLibrary.find((card) => card.id === id))
+    .filter((card): card is Card => {
+      if (!card) return false
+      return isSignatureCard(card)
+    }).length
+
+  function canAddMainDeckCard(card: Card) {
+    const copyCount = deckDraft.mainDeckIds
+      .map((id) => cardLibrary.find((candidate) => candidate.id === id))
+      .filter((candidate) => candidate?.name === card.name).length + (selectedChampion?.name === card.name ? 1 : 0)
+    if (copyCount >= 3) return false
+    if (!isSignatureCard(card)) return true
+    return signatureCount < 3 && (!selectedLegend || cardsShareTag(card, selectedLegend))
+  }
+
+  function canAddBattlefield(card: Card) {
+    const selectedNames = new Set(
+      deckDraft.battlefieldDeckIds
+        .map((id) => cardLibrary.find((field) => field.id === id)?.name.trim().toLowerCase())
+        .filter(Boolean),
+    )
+    return deckDraft.battlefieldDeckIds.length < 3 && !selectedNames.has(card.name.trim().toLowerCase())
+  }
+
   function clearFilters() {
     onDeckSearchChange('')
     onDeckTagFilterChange('')
@@ -153,12 +180,12 @@ export function DeckCardPool({
 
       {deckTab === 'main' && (
         <>
-          <h3>Main deck cards ({deckDraft.mainDeckIds.length}/40 · {filteredMainDeckCards.length} shown)</h3>
+          <h3>Main deck cards ({deckDraft.mainDeckIds.length}+ / min 40 · {filteredMainDeckCards.length} shown)</h3>
           <div className="library">
             {filteredMainDeckCards.map((card) => (
               <button
                 className={`mini-card ${card.domain.toLowerCase()}`}
-                disabled={deckDraft.mainDeckIds.length >= 40}
+                disabled={!canAddMainDeckCard(card)}
                 key={card.id}
                 type="button"
                 onClick={() => onDeckDraftChange({ ...deckDraft, mainDeckIds: [...deckDraft.mainDeckIds, card.id] })}
@@ -172,12 +199,13 @@ export function DeckCardPool({
 
       {deckTab === 'runes' && (
         <>
-          <h3>Rune deck cards ({deckDraft.runeDeckIds.length}+ / min 12 · {filteredRunes.length} shown)</h3>
-          <p className="rune-note">Must include at least one rune from each Legend domain: {selectedLegend?.domains.join(' / ') || 'choose a Legend'}.</p>
+          <h3>Rune deck cards ({deckDraft.runeDeckIds.length}/12 · {filteredRunes.length} shown)</h3>
+          <p className="rune-note">Runes must match the Legend domain identity: {selectedLegend?.domains.join(' / ') || 'choose a Legend'}.</p>
           <div className="library">
             {filteredRunes.map((card) => (
               <button
                 className={`mini-card ${card.domain.toLowerCase()}`}
+                disabled={deckDraft.runeDeckIds.length >= 12}
                 key={card.id}
                 type="button"
                 onClick={() => onDeckDraftChange({ ...deckDraft, runeDeckIds: [...deckDraft.runeDeckIds, card.id] })}
@@ -192,12 +220,12 @@ export function DeckCardPool({
       {deckTab === 'battlefields' && (
         <>
           <h3>Battlefield deck cards ({deckDraft.battlefieldDeckIds.length}/3 · {filteredBattlefields.length} shown)</h3>
-          <p className="rune-note">Must contain at least 1 and at most 3 battlefields.</p>
+          <p className="rune-note">Must contain exactly 3 battlefields with unique names.</p>
           <div className="library">
             {filteredBattlefields.map((card) => (
               <button
                 className={`mini-card ${card.domain.toLowerCase()} ${deckDraft.battlefieldDeckIds.includes(card.id) ? 'selected' : ''}`}
-                disabled={deckDraft.battlefieldDeckIds.length >= 3 && !deckDraft.battlefieldDeckIds.includes(card.id)}
+                disabled={!deckDraft.battlefieldDeckIds.includes(card.id) && !canAddBattlefield(card)}
                 key={card.id}
                 type="button"
                 onClick={() => onDeckDraftChange({ ...deckDraft, battlefieldDeckIds: deckDraft.battlefieldDeckIds.includes(card.id) ? deckDraft.battlefieldDeckIds.filter((id) => id !== card.id) : [...deckDraft.battlefieldDeckIds, card.id] })}
