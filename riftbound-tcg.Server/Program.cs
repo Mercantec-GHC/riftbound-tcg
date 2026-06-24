@@ -93,6 +93,7 @@ builder.Services.AddSignalR();
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<PasswordHasher<UserEntity>>();
+builder.Services.AddScoped<MatchReplayService>();
 builder.Services.AddScoped<OnlineGameService>();
 builder.Services.AddSingleton<IRulesEngine, DefaultRulesEngine>();
 
