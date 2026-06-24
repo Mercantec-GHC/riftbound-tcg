@@ -67,7 +67,11 @@ public sealed record GearState(
 public sealed record RunePools(
     IReadOnlyList<string> ReadyCardIds,
     IReadOnlyList<string> ExhaustedCardIds,
-    int Energy);
+    int Energy)
+{
+    public IReadOnlyDictionary<Domain, int> Power { get; init; } = new Dictionary<Domain, int>();
+    public int UniversalPower { get; init; }
+}
 
 public sealed record PlayerState(
     int Id,

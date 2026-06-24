@@ -311,6 +311,118 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void card_can_be_played_with_energy_already_in_the_rune_pool()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var player = FindPlayer(state, 0);
+        PutCardInHand(state, 0, Card("pool-spell", "Pool Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 2));
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runePool"]!["energy"] = 2;
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["runePool"]!["energy"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(resultPlayer["runes"]!["exhausted"]!.AsArray(), Is.Empty);
+    }
+
+    [Test]
+    public void domain_power_cost_can_be_paid_by_recycling_a_matching_rune()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("fury-spell", "Fury Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0, powerCost: new Dictionary<string, int> { ["Fury"] = 1 }));
+        var player = FindPlayer(state, 0);
+        var runeDeckBefore = player["runeDeck"]!.AsArray().Count;
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["runes"]!["ready"]!.AsArray().Count + resultPlayer["runes"]!["exhausted"]!.AsArray().Count, Is.EqualTo(1));
+        Assert.That(resultPlayer["runeDeck"]!.AsArray(), Has.Count.EqualTo(runeDeckBefore + 1));
+    }
+
+    [Test]
+    public void universal_power_can_pay_a_domain_power_cost()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("fury-spell", "Fury Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0, powerCost: new Dictionary<string, int> { ["Fury"] = 1 }));
+        var player = FindPlayer(state, 0);
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runes"]!["exhausted"]!.AsArray().Clear();
+        player["runePool"]!["universalPower"] = 1;
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(FindPlayer(result.State, 0)["runePool"]!["universalPower"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void card_cannot_be_played_without_required_domain_power()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("fury-spell", "Fury Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0, powerCost: new Dictionary<string, int> { ["Fury"] = 1 }));
+        var player = FindPlayer(state, 0);
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runes"]!["exhausted"]!.AsArray().Clear();
+        player["runePool"]!["power"] = new JsonObject { ["Calm"] = 1 };
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(result.State.SequenceNumber, Is.EqualTo(state.SequenceNumber));
+    }
+
+    [Test]
+    public void rune_pool_clears_after_draw_before_main()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        state.State["turnPhase"] = "draw";
+        foreach (var player in state.State["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            player["runePool"] = new JsonObject
+            {
+                ["energy"] = 2,
+                ["power"] = new JsonObject { ["Fury"] = 1 },
+                ["universalPower"] = 1
+            };
+        }
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["turnPhase"]!.GetValue<string>(), Is.EqualTo("main"));
+        foreach (var player in result.State.State["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            Assert.That(player["runePool"]!["energy"]!.GetValue<int>(), Is.EqualTo(0));
+            Assert.That(player["runePool"]!["universalPower"]!.GetValue<int>(), Is.EqualTo(0));
+            Assert.That(player["runePool"]!["power"]!.AsObject(), Is.Empty);
+        }
+    }
+
+    [Test]
     public void champion_can_be_summoned_to_base_when_player_has_enough_runes()
     {
         var engine = new DefaultRulesEngine();
@@ -1072,8 +1184,26 @@ public class DefaultRulesEngineTests
         return new JsonObject { ["passedByPlayer"] = new JsonObject() };
     }
 
-    private static JsonObject Card(string id, string name, string kind, string text, string effectType, int amount, int cost)
+    private static JsonObject Card(
+        string id,
+        string name,
+        string kind,
+        string text,
+        string effectType,
+        int amount,
+        int cost,
+        IReadOnlyDictionary<string, int>? powerCost = null,
+        int universalPower = 0)
     {
+        JsonNode costNode = powerCost is null && universalPower == 0
+            ? JsonValue.Create(cost)!
+            : new JsonObject
+            {
+                ["energy"] = cost,
+                ["power"] = powerCost is null ? new JsonObject() : new JsonObject(powerCost.Select(item => KeyValuePair.Create<string, JsonNode?>(item.Key, JsonValue.Create(item.Value))).ToArray()),
+                ["universalPower"] = universalPower
+            };
+
         return new JsonObject
         {
             ["id"] = $"{id}-test",
@@ -1083,7 +1213,7 @@ public class DefaultRulesEngineTests
             ["tags"] = new JsonArray(),
             ["domain"] = "Fury",
             ["domains"] = new JsonArray("Fury"),
-            ["cost"] = cost,
+            ["cost"] = costNode,
             ["might"] = 0,
             ["text"] = text,
             ["image"] = string.Empty,
