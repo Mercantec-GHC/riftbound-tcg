@@ -12,6 +12,7 @@ public sealed class CardBuilder
     private string _text = "";
     private CardEffectDefinition _effect = new(CardEffectType.Rally, 0);
     private int _cost = 1;
+    private IReadOnlyList<Domain> _powerCost = [];
     private int _might = 2;
     private IReadOnlyList<string> _tags = [];
     private Domain _domain = riftbound_tcg.Core.Cards.Domain.Fury;
@@ -25,6 +26,7 @@ public sealed class CardBuilder
     public CardBuilder Text(string text) { _text = text; return this; }
     public CardBuilder Effect(CardEffectType type, int amount) { _effect = new(type, amount); return this; }
     public CardBuilder Cost(int cost) { _cost = cost; return this; }
+    public CardBuilder PowerCost(params Domain[] domains) { _powerCost = domains; return this; }
     public CardBuilder Might(int might) { _might = might; return this; }
     public CardBuilder Tags(params string[] tags) { _tags = tags; return this; }
     public CardBuilder Domain(Domain domain) { _domain = domain; _domains = [domain]; return this; }
@@ -45,7 +47,10 @@ public sealed class CardBuilder
         Image: "",
         CardType: _cardType ?? _kind.ToString(),
         Supertype: _supertype,
-        Effect: _effect);
+        Effect: _effect)
+    {
+        PowerCost = _powerCost
+    };
 
     public static CardBuilder Spell() => new CardBuilder().Kind(CardKind.Spell);
     public static CardBuilder Gear() => new CardBuilder().Kind(CardKind.Gear);

@@ -142,24 +142,40 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void both_players_can_mulligan_independently_without_waiting_for_each_other()
+    public void next_player_can_confirm_mulligan_after_previous_player_confirms()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
 
         var actionsForSecondPlayerBeforeFirstConfirms = engine.GetLegalActions(state, 1);
-        Assert.That(actionsForSecondPlayerBeforeFirstConfirms.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+        Assert.That(actionsForSecondPlayerBeforeFirstConfirms.Select(action => action.Type), Has.None.EqualTo("confirm-mulligan"));
 
-        var afterSecondPlayerConfirms = engine.ApplyAction(
+        var afterFirstPlayerConfirms = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?>()),
+            0);
+
+        Assert.That(afterFirstPlayerConfirms.Accepted, Is.True);
+        Assert.That(afterFirstPlayerConfirms.State.Stage, Is.EqualTo("mulligan"));
+
+        var secondPlayerActionsAfter = engine.GetLegalActions(afterFirstPlayerConfirms.State, 1);
+        Assert.That(secondPlayerActionsAfter.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+    }
+
+    [Test]
+    public void out_of_order_mulligan_confirmation_is_rejected()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var result = engine.ApplyAction(
             state,
             new EngineGameAction(1, "confirm-mulligan", new Dictionary<string, object?>()),
             0);
 
-        Assert.That(afterSecondPlayerConfirms.Accepted, Is.True);
-        Assert.That(afterSecondPlayerConfirms.State.Stage, Is.EqualTo("mulligan"));
-
-        var firstPlayerActionsAfter = engine.GetLegalActions(afterSecondPlayerConfirms.State, 0);
-        Assert.That(firstPlayerActionsAfter.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(result.State.SequenceNumber, Is.EqualTo(0));
+        Assert.That(result.State.Stage, Is.EqualTo("mulligan"));
     }
 
     [Test]
@@ -194,7 +210,62 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void concede_completes_match()
+    public void mulligan_recycles_returned_cards_to_bottom_in_deterministic_random_order()
+    {
+        var engine = new DefaultRulesEngine();
+        var first = engine.CreateInitialState(Config(), DecksWithLargerLibrary(), 123);
+        var second = engine.CreateInitialState(Config(), DecksWithLargerLibrary(), 123);
+
+        var firstPlayer = FindPlayer(first, 0);
+        var originalHandIds = firstPlayer["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+        var returnedIds = new[] { originalHandIds[0], originalHandIds[1] };
+
+        var firstResult = engine.ApplyAction(
+            first,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 1 } }),
+            0);
+        var secondResult = engine.ApplyAction(
+            second,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 1 } }),
+            0);
+
+        Assert.That(firstResult.Accepted, Is.True);
+        Assert.That(secondResult.Accepted, Is.True);
+
+        var firstBottomIds = FindPlayer(firstResult.State, 0)["deck"]!.AsArray().TakeLast(2).Select(card => card!["id"]!.GetValue<string>()).ToArray();
+        var secondBottomIds = FindPlayer(secondResult.State, 0)["deck"]!.AsArray().TakeLast(2).Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        Assert.That(firstBottomIds, Is.EquivalentTo(returnedIds));
+        Assert.That(secondBottomIds, Is.EqualTo(firstBottomIds));
+        Assert.That(firstBottomIds, Is.EqualTo(new[] { returnedIds[1], returnedIds[0] }));
+    }
+
+    [Test]
+    public void first_player_skips_their_first_draw_phase_in_ffa3()
+    {
+        AssertFirstPlayerFirstDrawAdvance("ffa-3", 3, shouldDraw: false);
+    }
+
+    [Test]
+    public void first_player_skips_their_first_draw_phase_in_ffa4()
+    {
+        AssertFirstPlayerFirstDrawAdvance("ffa-4", 4, shouldDraw: false);
+    }
+
+    [Test]
+    public void first_player_skips_their_first_draw_phase_in_teams_2v2()
+    {
+        AssertFirstPlayerFirstDrawAdvance("teams-2v2", 4, shouldDraw: false);
+    }
+
+    [Test]
+    public void first_player_still_draws_during_their_first_draw_phase_in_duel()
+    {
+        AssertFirstPlayerFirstDrawAdvance("duel-1v1", 2, shouldDraw: true);
+    }
+
+    [Test]
+    public void duel_concede_completes_match()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
@@ -204,6 +275,73 @@ public class DefaultRulesEngineTests
         Assert.That(result.Accepted, Is.True);
         Assert.That(result.State.Stage, Is.EqualTo("game-over"));
         Assert.That(result.State.State["winner"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ffa_concede_removes_player_and_continues_when_multiple_players_remain()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config("ffa-3", 3), Decks(3), 123);
+        var playerOneBattlefield = state.State["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(battlefield => battlefield["chosenBy"]!.GetValue<int>() == 1);
+        playerOneBattlefield["controllerId"] = 1;
+        playerOneBattlefield["units"]!.AsArray().Add(Unit("unit-p1", 1));
+        playerOneBattlefield["units"]!.AsArray().Add(Unit("unit-p2", 2));
+        state.State["effectStack"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "stack-p1",
+            ["playerId"] = 1,
+            ["kind"] = "spell"
+        });
+
+        var result = engine.ApplyAction(state, new EngineGameAction(1, "concede", new Dictionary<string, object?>()), 0);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("mulligan"));
+        Assert.That(ActivePlayerIds(result.State), Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(result.State.Players.Select(player => player.PlayerId), Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(engine.GetLegalActions(result.State, 1), Is.Empty);
+        Assert.That(result.State.State["turnOrder"]!.AsArray().Select(node => node!.GetValue<int>()), Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(result.State.State["effectStack"]!.AsArray(), Is.Empty);
+
+        var replacedBattlefield = result.State.State["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(battlefield => battlefield["id"]!.GetValue<string>() == playerOneBattlefield["id"]!.GetValue<string>());
+        Assert.That(replacedBattlefield["catalogId"]!.GetValue<string>(), Is.EqualTo("token-battlefield"));
+        Assert.That(replacedBattlefield["controllerId"], Is.Null);
+        Assert.That(replacedBattlefield["units"]!.AsArray().Select(unit => unit!["ownerId"]!.GetValue<int>()), Is.EqualTo(new[] { 2 }));
+    }
+
+    [Test]
+    public void ffa_concede_completes_match_when_only_one_player_remains()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config("ffa-3", 3), Decks(3), 123);
+
+        var afterFirstConcede = engine.ApplyAction(state, new EngineGameAction(1, "concede", new Dictionary<string, object?>()), 0);
+        var result = engine.ApplyAction(afterFirstConcede.State, new EngineGameAction(0, "concede", new Dictionary<string, object?>()), 1);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
+        Assert.That(result.State.State["winner"]!.GetValue<int>(), Is.EqualTo(2));
+        Assert.That(ActivePlayerIds(result.State), Is.EqualTo(new[] { 2 }));
+    }
+
+    [Test]
+    public void teams_2v2_concede_causes_conceding_team_to_lose()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config("teams-2v2", 4), Decks(4), 123);
+
+        var result = engine.ApplyAction(state, new EngineGameAction(2, "concede", new Dictionary<string, object?>()), 0);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
+        Assert.That(result.State.State["winningTeamId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(result.State.State["winner"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(ActivePlayerIds(result.State), Is.EqualTo(new[] { 1, 3 }));
+        Assert.That(result.State.Players.Select(player => player.PlayerId), Is.EqualTo(new[] { 1, 3 }));
     }
 
     [Test]
@@ -227,6 +365,28 @@ public class DefaultRulesEngineTests
         Assert.That(baseUnits, Has.Count.EqualTo(1));
         Assert.That(baseUnits[0]!["id"]!.GetValue<string>(), Is.EqualTo(handCardId));
         Assert.That(resultPlayer["hand"]!.AsArray(), Has.None.Matches<JsonNode?>(card => card!["id"]!.GetValue<string>() == handCardId));
+    }
+
+    [Test]
+    public void champion_card_in_hand_can_be_played_to_base_without_summoning_champion_zone()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("main-deck-champion", "Main Deck Champion", "champion", "", "rally", 0, cost: 1));
+
+        var legalActions = engine.GetLegalActions(state, 0);
+        Assert.That(legalActions, Has.Some.Matches<EngineLegalAction>(action => action.Type == "play-unit"));
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["base"]!.AsArray().Single()!["kind"]!.GetValue<string>(), Is.EqualTo("champion"));
+        Assert.That(resultPlayer["championSummoned"]!.GetValue<bool>(), Is.False);
+        Assert.That(resultPlayer["champion"], Is.Not.Null);
     }
 
     [Test]
@@ -308,6 +468,118 @@ public class DefaultRulesEngineTests
         var resultPlayer = result.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
         Assert.That(resultPlayer["runes"]!["ready"]!.AsArray(), Has.Count.EqualTo(readyBefore - cardCost));
         Assert.That(resultPlayer["runes"]!["exhausted"]!.AsArray(), Has.Count.EqualTo(cardCost));
+    }
+
+    [Test]
+    public void card_can_be_played_with_energy_already_in_the_rune_pool()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var player = FindPlayer(state, 0);
+        PutCardInHand(state, 0, Card("pool-spell", "Pool Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 2));
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runePool"]!["energy"] = 2;
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["runePool"]!["energy"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(resultPlayer["runes"]!["exhausted"]!.AsArray(), Is.Empty);
+    }
+
+    [Test]
+    public void domain_power_cost_can_be_paid_by_recycling_a_matching_rune()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("fury-spell", "Fury Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0, powerCost: new Dictionary<string, int> { ["Fury"] = 1 }));
+        var player = FindPlayer(state, 0);
+        var runeDeckBefore = player["runeDeck"]!.AsArray().Count;
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["runes"]!["ready"]!.AsArray().Count + resultPlayer["runes"]!["exhausted"]!.AsArray().Count, Is.EqualTo(1));
+        Assert.That(resultPlayer["runeDeck"]!.AsArray(), Has.Count.EqualTo(runeDeckBefore + 1));
+    }
+
+    [Test]
+    public void universal_power_can_pay_a_domain_power_cost()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("fury-spell", "Fury Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0, powerCost: new Dictionary<string, int> { ["Fury"] = 1 }));
+        var player = FindPlayer(state, 0);
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runes"]!["exhausted"]!.AsArray().Clear();
+        player["runePool"]!["universalPower"] = 1;
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(FindPlayer(result.State, 0)["runePool"]!["universalPower"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void card_cannot_be_played_without_required_domain_power()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("fury-spell", "Fury Spell", "spell", "[Action] Draw 1.", "draw", 1, cost: 0, powerCost: new Dictionary<string, int> { ["Fury"] = 1 }));
+        var player = FindPlayer(state, 0);
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runes"]!["exhausted"]!.AsArray().Clear();
+        player["runePool"]!["power"] = new JsonObject { ["Calm"] = 1 };
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(result.State.SequenceNumber, Is.EqualTo(state.SequenceNumber));
+    }
+
+    [Test]
+    public void rune_pool_clears_after_draw_before_main()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        state.State["turnPhase"] = "draw";
+        foreach (var player in state.State["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            player["runePool"] = new JsonObject
+            {
+                ["energy"] = 2,
+                ["power"] = new JsonObject { ["Fury"] = 1 },
+                ["universalPower"] = 1
+            };
+        }
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["turnPhase"]!.GetValue<string>(), Is.EqualTo("main"));
+        foreach (var player in result.State.State["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            Assert.That(player["runePool"]!["energy"]!.GetValue<int>(), Is.EqualTo(0));
+            Assert.That(player["runePool"]!["universalPower"]!.GetValue<int>(), Is.EqualTo(0));
+            Assert.That(player["runePool"]!["power"]!.AsObject(), Is.Empty);
+        }
     }
 
     [Test]
@@ -483,7 +755,158 @@ public class DefaultRulesEngineTests
             afterPlay.State.SequenceNumber);
 
         Assert.That(result.Accepted, Is.False);
+        Assert.That(result.ResultMessage, Does.Contain("legal shared destination"));
         Assert.That(result.State.SequenceNumber, Is.EqualTo(afterPlay.State.SequenceNumber));
+    }
+
+    [Test]
+    public void an_unexhausted_battlefield_unit_can_move_back_to_base()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(afterPlay.Accepted, Is.True);
+
+        var player = FindPlayer(afterPlay.State, 0);
+        var unit = player["base"]!.AsArray().Single()!.AsObject();
+        unit["exhausted"] = false;
+        var unitId = unit["uid"]!.GetValue<string>();
+
+        var afterMoveOut = engine.ApplyAction(
+            afterPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["battlefieldId"] = battlefieldId }),
+            afterPlay.State.SequenceNumber);
+        Assert.That(afterMoveOut.Accepted, Is.True);
+
+        var battlefieldUnit = afterMoveOut.State.State["battlefields"]![0]!["units"]!.AsArray().Single()!.AsObject();
+        battlefieldUnit["exhausted"] = false;
+
+        var result = engine.ApplyAction(
+            afterMoveOut.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["destination"] = "base" }),
+            afterMoveOut.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["battlefields"]![0]!["units"]!.AsArray(), Is.Empty);
+
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["base"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(resultPlayer["base"]!.AsArray()[0]!["uid"]!.GetValue<string>(), Is.EqualTo(unitId));
+        Assert.That(resultPlayer["base"]!.AsArray()[0]!["exhausted"]!.GetValue<bool>(), Is.True);
+    }
+
+    [Test]
+    public void multiple_unexhausted_base_units_can_move_simultaneously_to_one_battlefield()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterSecondPlay = engine.ApplyAction(afterFirstPlay.State, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+
+        var player = FindPlayer(afterSecondPlay.State, 0);
+        var unitIds = player["base"]!.AsArray().Select(unit =>
+        {
+            unit!["exhausted"] = false;
+            return unit["uid"]!.GetValue<string>();
+        }).ToArray();
+
+        var result = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitIds"] = unitIds, ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Is.Empty);
+
+        var resultBattlefield = result.State.State["battlefields"]![0]!.AsObject();
+        Assert.That(resultBattlefield["units"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()), Is.EquivalentTo(unitIds));
+        Assert.That(resultBattlefield["units"]!.AsArray(), Has.All.Matches<JsonNode?>(unit => unit!["exhausted"]!.GetValue<bool>()));
+    }
+
+    [Test]
+    public void simultaneous_move_rejects_if_any_selected_unit_is_exhausted()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterSecondPlay = engine.ApplyAction(afterFirstPlay.State, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+
+        var player = FindPlayer(afterSecondPlay.State, 0);
+        var units = player["base"]!.AsArray();
+        units[0]!["exhausted"] = false;
+        units[1]!["exhausted"] = true;
+        var unitIds = units.Select(unit => unit!["uid"]!.GetValue<string>()).ToArray();
+
+        var result = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitIds"] = unitIds, ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(result.State.State["battlefields"]![0]!["units"]!.AsArray(), Is.Empty);
+    }
+
+    [Test]
+    public void team_player_cannot_move_to_a_battlefield_controlled_by_their_teammate()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(TeamConfig(), TeamDecks(), 123);
+        state.State["stage"] = "playing";
+        state.State["turnPhase"] = "main";
+        state.State["turnPlayerId"] = 0;
+        state.State["activePlayer"] = 0;
+
+        var player = FindPlayer(state, 0);
+        player["base"]!.AsArray().Add(Unit("team-mover", 0, exhausted: false));
+
+        var teammateControlledBattlefield = state.State["battlefields"]![0]!.AsObject();
+        teammateControlledBattlefield["controllerId"] = 2;
+        var battlefieldId = teammateControlledBattlefield["id"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = "team-mover", ["battlefieldId"] = battlefieldId }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(teammateControlledBattlefield["units"]!.AsArray(), Is.Empty);
+    }
+
+    [Test]
+    public void multiplayer_player_cannot_move_to_a_battlefield_already_occupied_by_two_other_players()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(MultiplayerConfig(), MultiplayerDecks(), 123);
+        state.State["stage"] = "playing";
+        state.State["turnPhase"] = "main";
+        state.State["turnPlayerId"] = 0;
+        state.State["activePlayer"] = 0;
+
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("ffa-mover", 0, exhausted: false));
+
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("first-other", 1, exhausted: true));
+        battlefield["units"]!.AsArray().Add(Unit("second-other", 2, exhausted: true));
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = "ffa-mover", ["battlefieldId"] = battlefieldId }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(battlefield["units"]!.AsArray(), Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -632,6 +1055,22 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void non_targeted_burn_out_choice_uses_choice_payload_not_target_fields()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ResolveBurnOutUntilChoice(123);
+
+        var chosen = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "choose-burn-out-opponent", new Dictionary<string, object?> { ["opponentPlayerId"] = 1, ["targetUnitId"] = "not-a-target" }),
+            state.SequenceNumber);
+
+        Assert.That(chosen.Accepted, Is.True);
+        Assert.That(chosen.State.State["pendingBurnOut"], Is.Null);
+        Assert.That(PlayerPoints(chosen.State, 1), Is.EqualTo(1));
+    }
+
+    [Test]
     public void burn_out_recycle_order_is_deterministic_for_same_seed()
     {
         var first = ResolveBurnOutUntilChoice(123);
@@ -659,6 +1098,87 @@ public class DefaultRulesEngineTests
 
         var wrongPass = engine.ApplyAction(played.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
         Assert.That(wrongPass.Accepted, Is.False);
+    }
+
+    [Test]
+    public void reaction_added_to_chain_gets_newest_controller_priority_and_resolves_lifo()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("draw-two", "Draw Two", "spell", "[Action] Draw 2.", "draw", 2, cost: 0));
+        PutCardInHand(state, 1, Card("quick-draw", "Quick Draw", "spell", "[Reaction] Draw 1.", "draw", 1, cost: 0));
+        FindPlayer(state, 0)["deck"] = new JsonArray(
+            Card("p0-a", "P0 A", "unit", "", "rally", 0, cost: 0),
+            Card("p0-b", "P0 B", "unit", "", "rally", 0, cost: 0));
+        FindPlayer(state, 1)["deck"] = new JsonArray(Card("p1-a", "P1 A", "unit", "", "rally", 0, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterTurnPlayerPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        var reaction = engine.ApplyAction(afterTurnPlayerPass.State, new EngineGameAction(1, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterTurnPlayerPass.State.SequenceNumber);
+
+        Assert.That(reaction.Accepted, Is.True);
+        var reactionWindow = reaction.State.State["chainWindow"]!.AsObject();
+        Assert.That(reactionWindow["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(reaction.State.State["effectStack"]!.AsArray().Select(item => item!["cardName"]!.GetValue<string>()), Is.EqualTo(new[] { "Quick Draw", "Draw Two" }));
+        Assert.That(reaction.State.State["effectStack"]![0]!["status"]!.GetValue<string>(), Is.EqualTo("pending"));
+
+        var afterReactionPass = engine.ApplyAction(reaction.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), reaction.State.SequenceNumber);
+        var afterOriginalControllerPass = engine.ApplyAction(afterReactionPass.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), afterReactionPass.State.SequenceNumber);
+
+        Assert.That(FindPlayer(afterOriginalControllerPass.State, 1)["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("p1-a"));
+        Assert.That(afterOriginalControllerPass.State.State["effectStack"]!.AsArray().Select(item => item!["cardName"]!.GetValue<string>()), Is.EqualTo(new[] { "Draw Two" }));
+        Assert.That(afterOriginalControllerPass.State.State["chainWindow"]!["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+
+        var afterOriginalFirstPass = engine.ApplyAction(afterOriginalControllerPass.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), afterOriginalControllerPass.State.SequenceNumber);
+        var resolved = engine.ApplyAction(afterOriginalFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterOriginalFirstPass.State.SequenceNumber);
+
+        Assert.That(resolved.State.State["effectStack"]!.AsArray(), Is.Empty);
+        Assert.That(FindPlayer(resolved.State, 0)["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Is.EquivalentTo(new[] { "p0-a", "p0-b" }));
+    }
+
+    [TestCase("triggered")]
+    [TestCase("add-created")]
+    public void non_focus_passing_chain_sources_keep_current_focus_after_resolution(string source)
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["deck"] = new JsonArray(Card("drawn", "Drawn", "unit", "", "rally", 0, cost: 0));
+        state.State["activeShowdown"] = new JsonObject { ["battlefieldId"] = "test-field", ["kind"] = "non-combat" };
+        state.State["focusPlayerId"] = 0;
+        state.State["priorityPlayerId"] = 0;
+        state.State["activePlayer"] = 0;
+        state.State["hasPassedFocusByPlayer"] = new JsonObject();
+        state.State["effectStack"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "stack-test",
+            ["card"] = Card("trigger-draw", "Trigger Draw", "spell", "", "draw", 1, cost: 0),
+            ["cardId"] = "trigger-draw",
+            ["cardName"] = "Trigger Draw",
+            ["kind"] = "spell",
+            ["playerId"] = 0,
+            ["effect"] = new JsonObject { ["type"] = "draw", ["amount"] = 1 },
+            ["targetUnitId"] = null,
+            ["targetLaneId"] = null,
+            ["status"] = "pending",
+            ["source"] = source
+        });
+        state.State["chainWindow"] = new JsonObject
+        {
+            ["priorityPlayerId"] = 0,
+            ["startedByPlayerId"] = 0,
+            ["source"] = source,
+            ["passesFocusOnClose"] = false,
+            ["passedByPlayer"] = new JsonObject()
+        };
+
+        var afterFirstPass = engine.ApplyAction(state, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), state.SequenceNumber);
+        var resolved = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+
+        Assert.That(resolved.Accepted, Is.True);
+        Assert.That(resolved.State.State["chainWindow"], Is.Null);
+        Assert.That(resolved.State.State["focusPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(resolved.State.State["activePlayer"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(FindPlayer(resolved.State, 0)["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("drawn"));
     }
 
     [Test]
@@ -694,6 +1214,96 @@ public class DefaultRulesEngineTests
         var resultBattlefield = resolved.State.State["battlefields"]![0]!.AsObject();
         Assert.That(resultBattlefield["units"]!.AsArray(), Is.Empty);
         Assert.That(FindPlayer(resolved.State, 1)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void targeted_effect_does_not_resolve_when_target_becomes_illegal()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("bolt", "Bolt", "spell", "[Action] Deal 2 to an enemy unit.", "damage", 2, cost: 0));
+        var target = Unit("target-unit", ownerId: 1);
+        state.State["battlefields"]![0]!["units"]!.AsArray().Add(target);
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "target-unit" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var liveTarget = played.State.State["battlefields"]![0]!["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(unit => unit["uid"]!.GetValue<string>() == "target-unit");
+        liveTarget["ownerId"] = 0;
+        var resolved = PassChain(engine, played.State);
+
+        var resultUnit = resolved.State.State["battlefields"]![0]!["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(unit => unit["uid"]!.GetValue<string>() == "target-unit");
+        Assert.That(resultUnit["damage"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void targeted_effect_does_not_follow_unit_that_leaves_and_returns_through_non_board_zone()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("bolt", "Bolt", "spell", "[Action] Deal 2 to an enemy unit.", "damage", 2, cost: 0));
+        var target = Unit("target-unit", ownerId: 1);
+        var battlefieldUnits = state.State["battlefields"]![0]!["units"]!.AsArray();
+        battlefieldUnits.Add(target);
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "target-unit" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var liveBattlefieldUnits = played.State.State["battlefields"]![0]!["units"]!.AsArray();
+        var liveTarget = liveBattlefieldUnits.Single(unit => unit!["uid"]!.GetValue<string>() == "target-unit")!.AsObject();
+        liveBattlefieldUnits.Remove(liveTarget);
+        var returned = liveTarget.DeepClone().AsObject();
+        FindPlayer(played.State, 1)["trash"]!.AsArray().Add(liveTarget.DeepClone());
+        FindPlayer(played.State, 1)["base"]!.AsArray().Add(returned);
+
+        var resolved = PassChain(engine, played.State);
+
+        var baseUnit = FindPlayer(resolved.State, 1)["base"]!.AsArray().Single()!.AsObject();
+        Assert.That(baseUnit["damage"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void lane_targeted_effect_partially_resolves_remaining_legal_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("shockwave", "Shockwave", "spell", "[Action] Deal 1 to enemy units at a battlefield.", "damage", 1, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+        var units = battlefield["units"]!.AsArray();
+        units.Add(Unit("enemy-a", ownerId: 1, might: 2));
+        units.Add(Unit("enemy-b", ownerId: 1, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetLaneId"] = battlefieldId }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var liveUnits = played.State.State["battlefields"]![0]!["units"]!.AsArray();
+        var removed = liveUnits.Single(unit => unit!["uid"]!.GetValue<string>() == "enemy-a");
+        liveUnits.Remove(removed);
+        var resolved = PassChain(engine, played.State);
+
+        var remaining = resolved.State.State["battlefields"]![0]!["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(unit => unit["uid"]!.GetValue<string>() == "enemy-b");
+        Assert.That(remaining["uid"]!.GetValue<string>(), Is.EqualTo("enemy-b"));
+        Assert.That(remaining["damage"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void up_to_targeted_effect_can_be_played_with_zero_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("optional-rally", "Optional Rally", "spell", "[Action] Ready up to one friendly unit.", "rally", 1, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+
+        Assert.That(played.Accepted, Is.True);
+        Assert.That(played.State.State["effectStack"]!.AsArray().Single()!["targets"]!.AsArray(), Is.Empty);
     }
 
     [Test]
@@ -1049,6 +1659,64 @@ public class DefaultRulesEngineTests
         return current;
     }
 
+    private static void AssertFirstPlayerFirstDrawAdvance(string mode, int playerCount, bool shouldDraw)
+    {
+        var engine = new DefaultRulesEngine();
+        var current = engine.CreateInitialState(MultiplayerConfig(mode, playerCount), MultiplayerDecks(playerCount), 123);
+        current = ConfirmAllMulligans(engine, current, playerCount);
+
+        Assert.That(current.State["turnPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(current.State["turnPhase"]!.GetValue<string>(), Is.EqualTo("draw"));
+
+        var playerBefore = Player(current, 0);
+        var handBefore = playerBefore["hand"]!.AsArray().Count;
+        var deckBefore = playerBefore["deck"]!.AsArray().Count;
+
+        var result = engine.ApplyAction(
+            current,
+            new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()),
+            current.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["turnPhase"]!.GetValue<string>(), Is.EqualTo("main"));
+
+        var playerAfter = Player(result.State, 0);
+        var expectedHand = shouldDraw ? handBefore + 1 : handBefore;
+        var expectedDeck = shouldDraw ? deckBefore - 1 : deckBefore;
+        Assert.That(playerAfter["hand"]!.AsArray(), Has.Count.EqualTo(expectedHand));
+        Assert.That(playerAfter["deck"]!.AsArray(), Has.Count.EqualTo(expectedDeck));
+    }
+
+    private static EngineMatchState ConfirmAllMulligans(DefaultRulesEngine engine, EngineMatchState state, int playerCount)
+    {
+        var current = state;
+        var turnOrder = current.State["turnOrder"]!.AsArray()
+            .Select(node => node!.GetValue<int>())
+            .Take(playerCount)
+            .ToArray();
+        foreach (var playerId in turnOrder)
+        {
+            var result = engine.ApplyAction(
+                current,
+                new EngineGameAction(playerId, "confirm-mulligan", new Dictionary<string, object?>()),
+                current.SequenceNumber);
+
+            Assert.That(result.Accepted, Is.True);
+            current = result.State;
+        }
+
+        return current;
+    }
+
+    private static EngineActionResult PassChain(DefaultRulesEngine engine, EngineMatchState state)
+    {
+        var afterFirstPass = engine.ApplyAction(state, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), state.SequenceNumber);
+        Assert.That(afterFirstPass.Accepted, Is.True);
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+        Assert.That(afterSecondPass.Accepted, Is.True);
+        return afterSecondPass;
+    }
+
     private static JsonObject FindPlayer(EngineMatchState state, int playerId)
     {
         return state.State["players"]!.AsArray()
@@ -1072,8 +1740,26 @@ public class DefaultRulesEngineTests
         return new JsonObject { ["passedByPlayer"] = new JsonObject() };
     }
 
-    private static JsonObject Card(string id, string name, string kind, string text, string effectType, int amount, int cost)
+    private static JsonObject Card(
+        string id,
+        string name,
+        string kind,
+        string text,
+        string effectType,
+        int amount,
+        int cost,
+        IReadOnlyDictionary<string, int>? powerCost = null,
+        int universalPower = 0)
     {
+        JsonNode costNode = powerCost is null && universalPower == 0
+            ? JsonValue.Create(cost)!
+            : new JsonObject
+            {
+                ["energy"] = cost,
+                ["power"] = powerCost is null ? new JsonObject() : new JsonObject(powerCost.Select(item => KeyValuePair.Create<string, JsonNode?>(item.Key, JsonValue.Create(item.Value))).ToArray()),
+                ["universalPower"] = universalPower
+            };
+
         return new JsonObject
         {
             ["id"] = $"{id}-test",
@@ -1083,13 +1769,33 @@ public class DefaultRulesEngineTests
             ["tags"] = new JsonArray(),
             ["domain"] = "Fury",
             ["domains"] = new JsonArray("Fury"),
-            ["cost"] = cost,
+            ["cost"] = costNode,
             ["might"] = 0,
             ["text"] = text,
             ["image"] = string.Empty,
             ["cardType"] = kind,
             ["supertype"] = null,
             ["effect"] = new JsonObject { ["type"] = effectType, ["amount"] = amount }
+        };
+    }
+
+    private static JsonObject Unit(string uid, int ownerId, int might = 2)
+    {
+        return new JsonObject
+        {
+            ["id"] = $"{uid}-card",
+            ["catalogId"] = $"{uid}-card",
+            ["uid"] = uid,
+            ["name"] = uid,
+            ["kind"] = "unit",
+            ["ownerId"] = ownerId,
+            ["cost"] = 1,
+            ["might"] = might,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["exhausted"] = false,
+            ["attacker"] = false,
+            ["defender"] = false
         };
     }
 
@@ -1118,6 +1824,58 @@ public class DefaultRulesEngineTests
             0);
     }
 
+    private static EngineMatchConfig MultiplayerConfig(string mode, int playerCount)
+    {
+        return new EngineMatchConfig(
+            $"match-{mode}",
+            mode,
+            Enumerable.Range(0, playerCount)
+                .Select(playerId => new EngineSeatConfig(
+                    playerId,
+                    $"user-demo-{playerId + 1:000}",
+                    $"Demo {playerId + 1}",
+                    mode == "teams-2v2" ? playerId / 2 : playerId))
+                .ToArray(),
+            Enumerable.Range(0, playerCount).Select(playerId => $"battlefield-{playerId}").ToArray(),
+            0);
+    }
+
+    private static EngineMatchConfig Config(string mode, int playerCount)
+    {
+        return new EngineMatchConfig(
+            "match-demo-001",
+            mode,
+            Enumerable.Range(0, playerCount)
+                .Select(playerId => new EngineSeatConfig(playerId, $"user-demo-{playerId + 1:000}", $"Demo {playerId + 1}", mode == "teams-2v2" ? playerId % 2 : playerId))
+                .ToArray(),
+            Enumerable.Range(0, playerCount).Select(playerId => $"battlefield-{playerId}").ToArray(),
+            0);
+    }
+
+    private static EngineMatchConfig MultiplayerConfig()
+    {
+        return new EngineMatchConfig(
+            "match-demo-ffa",
+            "ffa-3",
+            Enumerable.Range(0, 3).Select(id => new EngineSeatConfig(id, $"user-demo-{id}", $"Demo {id}", id)).ToArray(),
+            ["skybridge", "emberfield", "mistfield"],
+            0);
+    }
+
+    private static EngineMatchConfig TeamConfig()
+    {
+        return new EngineMatchConfig(
+            "match-demo-teams",
+            "teams-2v2",
+            [
+                new EngineSeatConfig(0, "user-demo-001", "Demo One", 0),
+                new EngineSeatConfig(1, "user-demo-002", "Demo Two", 1),
+                new EngineSeatConfig(2, "user-demo-003", "Demo Three", 0),
+                new EngineSeatConfig(3, "user-demo-004", "Demo Four", 1)
+            ],
+            ["skybridge", "emberfield", "mistfield"],
+            0);
+    }
     private static IReadOnlyList<EnginePlayerDeck> Decks()
     {
         return
@@ -1127,6 +1885,21 @@ public class DefaultRulesEngineTests
         ];
     }
 
+    private static IReadOnlyList<EnginePlayerDeck> MultiplayerDecks(int playerCount)
+    {
+        return Enumerable.Range(0, playerCount)
+            .Select(playerId => new EnginePlayerDeck(
+                $"deck-{playerId}",
+                $"legend-{playerId}",
+                $"champion-{playerId}",
+                [$"battlefield-{playerId}"],
+                [$"rune-{playerId}", $"rune-{playerId}", $"rune-{playerId}"],
+                Enumerable.Range(0, 5).Select(index => $"unit-{playerId}-{index}").ToArray()))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<EnginePlayerDeck> Decks(int playerCount) => MultiplayerDecks(playerCount);
+
     private static IReadOnlyList<EnginePlayerDeck> DecksWithLargerLibrary()
     {
         return
@@ -1134,5 +1907,42 @@ public class DefaultRulesEngineTests
             new EnginePlayerDeck("deck-a", "legend-a", "champion-a", ["skybridge"], ["rune-a", "rune-a", "rune-a"], Enumerable.Range(0, 12).Select(i => $"unit-a{i}").ToArray()),
             new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["emberfield"], ["rune-b", "rune-b", "rune-b"], Enumerable.Range(0, 12).Select(i => $"unit-b{i}").ToArray())
         ];
+    }
+
+    private static IReadOnlyList<EnginePlayerDeck> MultiplayerDecks() =>
+        Enumerable.Range(0, 3)
+            .Select(id => new EnginePlayerDeck($"deck-{id}", $"legend-{id}", $"champion-{id}", [$"field-{id}"], [$"rune-{id}", $"rune-{id}", $"rune-{id}"], [$"unit-{id}-a", $"unit-{id}-b", $"unit-{id}-c", $"unit-{id}-d"]))
+            .ToArray();
+
+    private static IReadOnlyList<EnginePlayerDeck> TeamDecks() =>
+        Enumerable.Range(0, 4)
+            .Select(id => new EnginePlayerDeck($"deck-{id}", $"legend-{id}", $"champion-{id}", [$"field-{id}"], [$"rune-{id}", $"rune-{id}", $"rune-{id}"], [$"unit-{id}-a", $"unit-{id}-b", $"unit-{id}-c", $"unit-{id}-d"]))
+            .ToArray();
+
+    private static JsonObject Unit(string uid, int ownerId, bool exhausted) =>
+        new()
+        {
+            ["id"] = $"{uid}-card",
+            ["catalogId"] = $"{uid}-card",
+            ["uid"] = uid,
+            ["name"] = uid,
+            ["kind"] = "unit",
+            ["ownerId"] = ownerId,
+            ["cost"] = 1,
+            ["might"] = 1,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["exhausted"] = exhausted,
+            ["attacker"] = false,
+            ["defender"] = false
+        };
+
+    private static JsonObject Unit(string uid, int ownerId) => Unit(uid, ownerId, exhausted: false);
+
+    private static int[] ActivePlayerIds(EngineMatchState state)
+    {
+        return state.State["players"]!.AsArray()
+            .Select(node => node!["id"]!.GetValue<int>())
+            .ToArray();
     }
 }

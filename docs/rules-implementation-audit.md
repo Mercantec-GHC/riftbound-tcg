@@ -2,54 +2,59 @@
 
 Reference source: `rules/`, generated from `Riftbound Core Rules.pdf` last updated 2026-03-30.
 
-This audit tracks how much of the new numbered rules reference is represented in the current app. "Implemented" means there is server/engine behavior, not just UI affordance, unless explicitly noted.
+Last audited against code: 2026-06-24.
+
+This audit tracks how much of the numbered rules reference is represented in the current app. "Implemented" means there is server/engine behavior, not just UI affordance, unless explicitly noted.
 
 ## Status Legend
 
-- **Implemented:** covered by the server-side C# rules engine or backend validation with tests or direct persistence support.
+- **Implemented:** covered by the server-side C# rules engine or backend validation with tests or direct persistence/replay support.
 - **Partial:** some behavior exists, but the rule family is incomplete.
 - **Improper:** behavior exists but contradicts the reference rules.
 - **Missing:** no meaningful authoritative implementation found.
-- **Frontend-only/prototype:** implemented in `frontend/src/features/game/rules/gameRules.ts` or manual UI controls, but not authoritative for online matches.
+- **Frontend-only/prototype:** implemented in `frontend/src/features/game/rules/gameRules.ts` or UI controls, but not authoritative for online matches.
 
 ## Properly Implemented Or Mostly Correct
 
-### Rules Engine Authority And Determinism
+### Rules Engine Authority, Persistence, And Determinism
 
 Status: **Implemented**
 
 - `IRulesEngine` exposes authoritative create-state, legal-action, and apply-action operations.
 - `DefaultRulesEngine` validates player seating, expected sequence number, and current legal action before accepting actions.
 - Initial state is serializable JSON.
-- Main deck and rune deck shuffles use a deterministic seeded algorithm, and tests cover deterministic initial state.
+- Main deck, rune deck, mulligan recycle, and Burn Out recycle use deterministic seeded randomization.
 - Server online play routes actions through `IRulesEngine`; accepted actions are persisted as match events and snapshots.
+- `MatchReplayService` can rebuild from the creation event and accepted event log, optionally starting from the latest snapshot, and verifies recorded post-state when present.
+- Player-scoped snapshots and action responses can carry redacted views.
 
 Rule coverage:
 
-- `000-099`: deterministic rules precedence is not deeply implemented, but the engine authority rule aligns with project architecture.
-- `300-324`, `407-448`: action sequencing and server-side legality are partially enforced.
+- `000-099`: engine authority and deterministic resolution align with the project architecture, although rule/card-text precedence is not a general system.
+- `300-324`, `407-448`: server-side legality, sequence checks, and action application are partially enforced.
 
 ### Basic Setup, Zones, And Match State
 
 Status: **Partial**
 
-- Players get legend, champion, main deck, rune deck, hand, trash, base, runes, rune pool, points, and selected battlefield state.
+- Players get legend, champion, main deck, rune deck, hand, trash, banished, base, base gear, runes, rune pool, points, and selected battlefield state.
 - Players draw 4 during initial setup.
 - Separate main deck and rune deck zones exist in state.
-- Battlefields exist as shared board locations.
+- Battlefields exist as shared board locations with hidden-card slots.
 - Champion and legend are represented as distinct slots.
+- Facedown state exists, and player-view redaction hides opponent hand, deck order, and unrevealed facedown identity from non-viewers.
 
 Rule coverage:
 
-- `103`, `107`, `108`, `111-119`, `128`, `159-171`, `172-175`.
+- `103`, `107`, `108`, `111-119`, `128`, `159-175`.
 
-Gaps remain around privacy, full setup/battlefield selection procedure, champion-zone play semantics, and public/private information enforcement.
+Gaps remain around the full setup/battlefield selection procedure, complete public/private information rules, top-most cards, ownership replacement, and complete champion-zone play semantics.
 
 ### Deck Construction Validation
 
-Status: **Implemented**
+Status: **Implemented for current online modes**
 
-- Server deck create/update validation now uses a shared Core deck-construction validator.
+- Server deck create/update validation uses a shared Core deck-construction validator.
 - Main decks must contain at least 40 cards.
 - Rune decks must contain exactly 12 valid rune cards.
 - Battlefield decks must contain exactly 3 valid battlefield cards with no duplicate battlefield names.
@@ -66,24 +71,20 @@ Rule coverage:
 
 Remaining future work:
 
-- Deck construction is currently mode-agnostic for the supported sanctioned modes and requires three battlefield cards for all online decks. If casual modes with different battlefield counts are added, the validator should receive a mode-specific deck-construction policy.
+- Deck construction is currently mode-agnostic for the supported online modes and requires three battlefield cards for all online decks. If casual modes with different battlefield counts are added, the validator should receive a mode-specific deck-construction policy.
 
 ### Mulligan
 
-Status: **Mostly implemented**
+Status: **Implemented**
 
-- Each player may choose up to two cards, redraw the same number, then returned cards go back into the deck.
+- Mulligan confirmations are enforced in turn order.
+- Each player may choose up to two cards, redraw the same number, then returned cards are recycled to the bottom of the deck in deterministic randomized order.
 - Duplicate/out-of-range card indexes are ignored.
-- Current server engine allows players to confirm mulligan independently rather than requiring strict turn-order confirmations.
+- A player cannot confirm twice.
 
 Rule coverage:
 
-- `118.1-118.3`.
-
-Improper/incomplete details:
-
-- Returned cards are appended to the deck, but rule `118.3` says they are Recycled, which delegates to rule `416`; simultaneous main-deck recycle should randomize the returned cards onto the bottom.
-- The reference says mulligans are performed in turn order; the server currently allows any unconfirmed player to confirm.
+- `118.1-118.3`, `416`.
 
 ### Turn Skeleton
 
@@ -94,42 +95,51 @@ Status: **Partial**
 - Beginning scores held battlefields.
 - Channel adds runes from the rune deck.
 - Draw draws 1.
-- Ending advances turn order and clears per-turn scored battlefield tracking.
+- The first player skips their first draw in FFA3, FFA4, and 2v2; duel first player still draws.
+- Ending advances turn order and clears per-turn scoring trackers.
 
 Rule coverage:
 
-- `301-306`, `314-317`, `315.1-315.4`, `316`, `317`.
+- `301-306`, `314-317`, `315.1-315.4`, `316`, `317`, `482.7`, `483.7`, `484.7`.
 
-Improper/incomplete details are listed below under "Improperly Implemented".
+Major gaps:
+
+- Priority, open/closed state handling, cleanups, and "beginning of/ending of" triggered timing are still simplified compared with the full turn rules.
 
 ### Resource And Cost Basics
 
 Status: **Partial**
 
-- Ready runes can be exhausted to pay generic numeric costs.
-- A simple energy pool exists and is emptied at draw and end-turn boundaries.
-- Simple affordability checks prevent playing cards without enough generic resources.
+- Card costs can be represented as energy plus domain Power and universal Power.
+- Ready runes can be exhausted for energy.
+- Matching rune resources can pay domain Power by being recycled.
+- Universal Power can satisfy domain Power.
+- Rune pool energy exists and clears after draw and at turn-end boundaries.
+- Simple affordability checks prevent playing cards without enough resources.
+- Deflect adds an extra targeting cost to enemy spells.
 
 Rule coverage:
 
-- `131`, `161-166`, `356-357`, `429-430`.
+- `131`, `161-166`, `356-357`, `429-430`, `801`.
 
 Major gaps:
 
-- Power costs and domains are not modeled in payment.
-- Rune activated abilities and reaction resource abilities are not implemented.
-- Cost replacement, increases, discounts, optional/mandatory additional costs, and non-standard costs are not implemented.
+- Rune activated/add abilities are not modeled as a full payment-time action system.
+- Cost replacement, cost increases/discounts, optional/mandatory additional costs beyond currently modeled keyword cases, and non-standard costs are incomplete.
 
-### Basic Card Play And Simple Effects
+### Basic Card Play, Targets, And Effects
 
 Status: **Partial**
 
-- Units can be played from hand to base or a controlled battlefield.
+- Units can be played from hand to base or to a controlled battlefield.
+- Champion cards in hand can be played as units, and the champion-zone card can be summoned once from the champion slot when affordable.
 - Units enter exhausted.
 - Gear can be played and resolves to the owner's base.
 - Spells/gear/effects can create stack items.
-- Simple effect model supports only `draw`, `damage`, `buff`, and `rally`.
-- Basic target checks exist for friendly buff/rally, enemy damage, and lane damage.
+- Simple effect model supports `draw`, `damage`, `buff`, and `rally`.
+- Target legality checks distinguish friendly, enemy, lane, optional/up-to, and still-legal-on-resolution targets.
+- Effects do not follow objects that leave and return through a non-board zone.
+- Lane-targeted effects can partially resolve remaining legal targets.
 
 Rule coverage:
 
@@ -137,28 +147,31 @@ Rule coverage:
 
 Major gaps:
 
-- Card text is not parsed into general effects.
-- Modes, additional choices, non-public target rules, mistargeting, linked instructions, triggered abilities, replacement effects, and most card categories are not implemented.
+- Card text is not parsed into a general instruction tree.
+- Modes, linked instructions, full non-public target rules, "do as much as possible" as a general rule, prevention/replacement hooks for all actions, and most card categories are incomplete.
 
 ### Chain And Reaction Window
 
 Status: **Partial**
 
 - The engine models an effect stack and chain window.
-- Reactions can be played during an open chain window.
-- Passing by all players resolves the newest stack item first.
-- Tests cover simple LIFO reaction resolution.
+- Reactions and Quick-Draw cards can be played during an open chain window.
+- Action spells are rejected during Closed State chain windows unless future card-specific permission is added.
+- Chain priority is tracked; non-priority passes are rejected.
+- Passing by all active players resolves the newest stack item first.
+- New reaction items give priority to their controller and resolve LIFO.
+- Triggered/add-created chain sources do not pass showdown focus on close.
+- Tests cover simple LIFO reaction resolution and priority movement.
 
 Rule coverage:
 
-- `327-340`, `806`, `813`.
+- `327-340`, `806`, `813`, `820`.
 
-Improper/incomplete details:
+Remaining gaps:
 
-- `ChainRules.ValidateChainPlay` now rejects Action spells during an existing chain for all players unless a future rule/effect grants explicit Closed State timing.
-- Priority order is simplified to all players passing rather than "controller of newest item, then next player in turn order" with exact FEPR behavior.
-- Pending vs finalized chain items are simplified.
-- Triggered abilities, activated abilities, add-resource chain behavior, and "chain opened by triggered/add ability does not pass Focus" are missing.
+- The full FEPR priority model is still simplified.
+- Pending vs finalized chain items are represented but not a complete model of every chain timing edge.
+- Add-resource chain behavior, advanced triggered ability ordering, and card-granted timing exceptions are incomplete.
 
 ### Showdowns, Movement, And Battlefield Control
 
@@ -167,221 +180,75 @@ Status: **Partial**
 - Moving units to a battlefield can create contested state, active showdown, and active combat.
 - Non-combat showdown can pass focus and close.
 - Control can be established after uncontested movement or showdown/combat resolution.
+- Moving into an undefended enemy-controlled battlefield can flip control without scoring.
 - A player may control multiple units at the same battlefield.
+- Server movement supports base-to-battlefield, battlefield-to-base, and simultaneous standard moves to a shared destination.
+- Team movement rejects teammate-controlled battlefields.
+- Multiplayer movement rejects battlefields already occupied by two other players.
+- Ganking is recognized for battlefield-to-battlefield movement.
 
 Rule coverage:
 
 - `144`, `185-189`, `341-348`, `440-448`.
 
-Improper/incomplete details:
+Remaining gaps:
 
-- Standard move is implemented only for one unit at a time; rule `144.3` allows simultaneous standard moves to the same destination.
-- Moving from battlefield back to base is not implemented in the server action, even though rule `144.4.b` allows it.
-- Ganking battlefield-to-battlefield movement is missing.
-- Multi-player and team destination restrictions are incomplete.
+- Destination and combat restrictions for every FFA/team edge case are not complete.
+- Full simultaneous movement ordering and all showdown timing details remain simplified.
 
 ### Combat And Scoring
 
-Status: **Partial, with solid basic tests**
+Status: **Partial, with substantial basic coverage**
 
-- Combat is restricted to exactly two players.
-- Attacker and defender assignments are represented.
+- Combat participants are represented, including team-side grouping for 2v2.
 - Both sides submit damage assignments before damage is applied.
 - Combat damage is simultaneous.
-- Damage assignment validates summed might, friendly/missing targets, lethal-before-spill, and over-assignment before all opposing units are lethal.
+- Damage assignment validates summed might, friendly/missing targets, lethal-before-spill, positive lethal assignment before spreading, Tank priority, Backline/last-damage ordering, Deflect costs, over-assignment before all opposing units are lethal, and non-participant submissions.
+- Current might, attached might, Shield, stunned units, prevention entries, and source attribution are considered by combat resolution.
 - Lethal units go to owners' trash.
 - Surviving units are healed after combat cleanup.
+- Surviving attackers are recalled when defenders remain.
+- Combat designation outcome and combat-open designation triggers are recorded/queued.
 - Winner establishes battlefield control and may score Conquer.
 - Hold scoring occurs during beginning phase.
 - "Only score each battlefield once per turn" is tracked.
-- Final Conquer point draws instead unless every battlefield was scored that turn; Hold can gain the final point.
+- Final Conquer point draws instead unless every battlefield was scored this turn, with a 2v2 teammate-occupied battlefield exception; Hold can gain the final point.
+- Team totals are used for 2v2 winning.
 
 Rule coverage:
 
-- `142-143`, `454-467`.
+- `142-143`, `454-467`, parts of `468-475`, `480-484`.
 
-Missing details:
+Remaining gaps:
 
-- Tank/last damage priority, Deflect, Shield, Stun, prevention, damage source attribution, triggered combat abilities, attacker recall when defenders remain, combat-result designation effects, and repeated combat staging are only partially represented or absent.
+- Damage source attribution, prevention, repeated combat staging, and trigger hooks exist only for modeled cases and are not a full Deal/Kill/Prevent/Replace action system.
+- Combat result designation effects and all keyword interactions are still incomplete.
 
 ### Modes And Conceding
 
 Status: **Partial**
 
 - Supported modes are represented by player count, battlefield count, and victory score: `duel-1v1`, `ffa-3`, `ffa-4`, and `teams-2v2`.
+- 2v2 turn order alternates teams when team data is available.
 - Duel second-player extra first-turn channel is implemented.
 - FFA/2v2 last-player extra first-turn channel is implemented.
-- Concede action exists.
+- FFA/2v2 first-player first-draw skip is implemented.
+- Duel concession completes the match.
+- FFA concession removes the conceding player and continues while more than one active player remains.
+- 2v2 concession causes the conceding team to lose.
 
 Rule coverage:
 
 - `476-484`, `649-652`.
 
-Improper/incomplete details:
+Remaining gaps:
 
-- FFA/2v2 first player should skip their first draw; the frontend prototype does this, but the server engine currently always draws.
-- 2v2 turn order is not guaranteed to alternate teams; it is just a rotated numeric seat order.
-- 2v2 team win/loss and teammate concession removal are incomplete.
-- FFA concession/removal process is missing; current concede just awards the match to the first other player.
+- Full FFA removal cleanup is incomplete: the removed player's objects, active chain/showdown contributions, pending abilities, and battlefield contribution are only partially cleared.
+- Full team shared-loss cleanup and teammate object handling are incomplete.
 
-## Improperly Implemented Rules
+## Improperly Implemented Or Incomplete Rules
 
-These are places where the app has behavior, but the behavior currently contradicts the reference rules.
-
-### Deck Construction Counts
-
-Status: **Fixed**
-
-Reference:
-
-- `103.2`: Main Deck must have at least 40 cards.
-- `103.3.a`: Rune Deck has exactly 12 Rune cards.
-- `103.4`: Battlefield count is dictated by mode; sanctioned modes expect each player to bring three battlefields, then select/remove according to mode.
-
-Fixed behavior:
-
-- Server validation requires main decks to have at least 40 cards.
-- Frontend validation and deck-builder affordances no longer cap the main deck at 40.
-- Server and frontend require rune decks to contain exactly 12 valid rune cards.
-- Server and frontend require each online deck to bring exactly 3 valid battlefield cards.
-
-### Deck Construction Missing Restrictions
-
-Status: **Fixed**
-
-Reference:
-
-- `103.1.b`: Cards must match the Champion Legend's domain identity.
-- `103.2.a`: Chosen Champion must be a champion unit with a champion tag matching the Champion Legend.
-- `103.2.b`: Up to 3 copies of the same named main-deck card.
-- `103.2.d`: Up to 3 total Signature cards matching the Champion Legend's champion tag.
-- `103.3.a.1`: Rune cards must match domain identity.
-- `103.4.c`: No duplicate battlefield names when more than one battlefield is required.
-
-Fixed behavior:
-
-- A shared Core validator enforces domain identity across main deck, rune deck, and battlefields.
-- Chosen Champion must be a champion card, cannot be Signature, and must share a champion tag with the selected Legend.
-- Main deck copy limits are enforced by card name, counting the chosen Champion.
-- Signature total and champion-tag restrictions are enforced.
-- Duplicate battlefield-name limits are enforced.
-- Frontend deck-builder validation and card-add controls mirror these restrictions before API submission.
-
-### First Draw In FFA And 2v2
-
-Status: **Improper**
-
-Reference:
-
-- `482.7`, `483.7`, `484.7`: in FFA3, FFA4, and 2v2, the player going first does not draw during their first Draw Phase.
-
-Current behavior:
-
-- Server `DefaultRulesEngine.AdvancePhase` always draws 1 in the draw phase.
-- The frontend prototype has a skip path, but online/server-authoritative play does not.
-
-### Chain Timing For Action Spells In Closed State
-
-Status: **Fixed**
-
-Reference:
-
-- `309.1.a`, `338.1.a.2`, `358.3`: Closed State cards generally need Reaction timing unless a rule/effect creates another exception.
-- `158.2.a`: Action allows play during Open States during Showdowns, not ordinary chain response timing.
-
-Fixed behavior:
-
-- `DefaultRulesEngine.GetLegalActions` only offers Reactions during `chainWindow`, which is correct for current online behavior.
-- `SpellClassifier.CanPlayDuringChainWindow` now only allows cards with Reaction timing.
-- `ChainRules.ValidateChainPlay` now rejects Action spells during a Closed State chain window for both the turn player and non-turn players.
-- Tests were updated in `SpellClassifierTests`, `ChainRulesTests`, and `ChainIntegrationTests` so Action spells cannot be chained by turn-player exception.
-
-Remaining future work:
-
-- If a future card effect or explicit exception allows an Action spell to be played in a Closed State, model that as a separate granted timing permission rather than a default turn-player exception.
-
-### Movement Restrictions
-
-Status: **Improper/Incomplete**
-
-Reference:
-
-- `144.4.a`: Units may move from base to a battlefield, subject to occupancy/combat restrictions.
-- `144.4.b`: Units may move from a battlefield to their base.
-- `144.3`: Multiple units may standard move simultaneously if they share a destination.
-- `442.2.a-b`, `444.2`, `457.1-457.3`: multiplayer and team combat destination restrictions.
-
-Current behavior:
-
-- Server `move-unit` only moves a player's own unexhausted base unit to a battlefield.
-- Battlefield-to-base standard movement is missing.
-- Simultaneous multi-unit movement is missing.
-- The error message says "battlefield you control," but the implementation can move into enemy or uncontrolled battlefields for contesting. The behavior is closer to the rules than the message, but the validation text is incorrect.
-- Team destination restrictions are missing.
-
-### Concede
-
-Status: **Improper**
-
-Reference:
-
-- `650-652`: A player may concede any time; if more than one player remains, remove that player and continue. In team modes, teammates also lose. The removed player's objects, battlefield contribution, spells, and abilities are processed.
-
-Current behavior:
-
-- Any concede immediately sets `game-over` and picks the first other player as winner.
-- This is only correct for a 1v1 game. It is wrong for FFA and incomplete for teams.
-
-### Burn Out
-
-Status: **Fixed for draw effects**
-
-Reference:
-
-- `413.4`, `431`: drawing beyond deck performs Burn Out: draw as much as possible, recycle trash into deck, choose opponent to gain 1 point, then continue drawing.
-
-Fixed behavior:
-
-- Drawing beyond the remaining main deck now draws as much as possible, recycles the player's trash into the main deck in deterministic randomized order, creates a pending opponent-choice action, awards the chosen opponent 1 point, and continues the remaining draw.
-- Repeated Burn Out with an empty deck/trash is supported through repeated pending choices.
-- Points gained from Burn Out can immediately end the game when they meet the victory condition.
-- Engine tests cover trash recycle, pending opponent choice, repeated empty-deck Burn Out, immediate win, and deterministic recycle order.
-
-Remaining future work:
-
-- Rule `431` also applies when moving cards from the Main Deck to non-hand zones in excess of the remaining deck. Current fixed behavior covers draws, which are the currently modeled online engine path.
-
-### Rune Pool And Payment
-
-Status: **Improper/Incomplete**
-
-Reference:
-
-- `161-166`, `356-357`, `429`: costs include Energy and domain Power; resource Add abilities can be used during payment.
-
-Current behavior:
-
-- Costs are a single integer `cost`.
-- Rune payment exhausts ready runes directly as generic energy.
-- Domain Power, universal Power, rune Add abilities, and payment-time Reaction abilities are missing.
-
-### Damage, Might, And Lethal Edge Cases
-
-Status: **Improper/Incomplete**
-
-Reference:
-
-- `143.2.a`: a unit is killed if nonzero damage equals or exceeds Might.
-- `143.2.b`: Might below 0 is treated as 0 for references and combat damage, but actual Might remains negative.
-- `417.1.e`: valid damage is a positive integer.
-
-Current behavior:
-
-- Combat tests allow zero damage assignments when current combat might is zero. That is probably acceptable for assignment, but the engine does not clearly distinguish assigning 0 from dealing valid positive damage.
-- Lethal threshold is clamped to at least 1 in `LethalDamage`; this helps avoid zero/negative instant death but does not fully model "nonzero damage equals/exceeds Might" for every edge case.
-- Simple spell damage does not run the full Deal action model with prevention, sources, bonus damage, or trigger hooks.
-
-## Missing Or Essentially Not Implemented
+These are places where the app has behavior, but the behavior still contradicts or under-models the reference rules.
 
 ### Golden And Silver Rules
 
@@ -390,115 +257,164 @@ Status: **Missing as a general system**
 - Card text superseding rules (`002`) is not implemented as a general override model.
 - "Can't beats can" (`054`) is not modeled.
 - "Do as much as you can" (`055`) exists only in some simple effect behavior, not generally.
-- Owner-zone replacement (`056`) is not implemented.
+- Owner-zone replacement (`056`) is not implemented as a general rule.
 
 ### Full Privacy And Information Rules
 
-Status: **Missing**
+Status: **Partial**
 
-- Secret/private/public information is not enforced as a rules system.
-- Hand visibility, deck order secrecy, facedown card privacy, and reveal rules are not modeled authoritatively.
+- Player-scoped redaction hides opponent hand, deck order, and unrevealed facedown card identity in API views.
+- Hidden cards and facedown state exist.
+
+Missing areas:
+
+- A full public/private/secret information rules system is not present.
+- Reveal, facedown visibility history, hidden card ownership visibility, deck inspection, and information-sharing restrictions are only lightly represented.
 
 ### Full Object Model
 
-Status: **Missing/Partial**
+Status: **Partial**
 
-- Permanents, runes, legends, battlefields, tokens, attached cards, top-most cards, facedown zones, banishment, and continuous modifications are not represented with the full rule semantics.
-- Attach/detach, top-most card, effect text, inactive rules text, might bonuses as attached-card layer effects, and token lifecycle are missing.
+- Units, gear, tokens, runes, legends, champions, battlefields, attached cards, hidden cards, facedown cards, banished cards, and continuous effects are represented in some form.
+- Attach/detach and token creation have server actions.
+- Temporary and Deathknell have limited lifecycle behavior.
+
+Missing areas:
+
+- Full permanent/card/object distinction, top-most cards, facedown zones, token lifecycle, ownership replacement, text boxes, inactive rules text, and controller/source semantics are incomplete.
 
 ### Abilities
 
-Status: **Missing**
+Status: **Partial**
 
-Reference `360-406` is almost entirely unimplemented.
+- Triggered abilities can be collected and queued after matching events.
+- Delayed triggered abilities can fire once.
+- Replacement abilities can intercept modeled score events.
+- Activated and modal abilities can be legal/paid/resolved in simple cases.
+- Passive abilities can contribute to unit state.
 
-Missing areas include:
+Missing areas:
 
-- Passive abilities.
-- Triggered abilities.
-- Activated abilities.
-- Replacement effects.
-- Delayed triggered/replacement abilities.
-- Continuous effects.
-- Modal abilities.
-- Ability source/controller changes.
-- Ability timing beyond simple spell Action/Reaction text classification.
+- Full `360-406` semantics are not implemented.
+- Ability source/controller changes, advanced trigger ordering, nested/repeated triggers, delayed replacements beyond simple cases, modal targeting across all effect shapes, and continuous effect generation from arbitrary card text are incomplete.
 
-### Most Game Actions
+### Internal Game Actions
 
-Status: **Missing**
+Status: **Partial framework**
 
-Only a small subset exists: draw, exhaust/ready via turn/move/payment, play, move, deal damage, channel, score, and concede.
-
-Missing or non-authoritative actions include:
+`InternalGameActionExecutor` supports modeled internal actions for:
 
 - Recycle.
-- Hide.
 - Discard.
-- Stun.
 - Reveal.
-- Counter.
-- Kill as a general action.
+- Kill.
 - Banish.
-- Add Power/Energy as actual resource actions.
-- Burn Out for non-draw main-deck zone movement.
-- Double.
-- Swap.
-- Attach/detach.
-- Predict.
+- Stun.
+- Counter.
 - Prevent.
-- Replace.
 - Create.
-- Recall as a general permanent correction.
+- Predict.
+- Attach.
+- Detach.
+- Swap.
+- Double.
+- Recall.
+
+Current caveat:
+
+- These are low-level executor operations and tests, not all exposed as player-legal actions or wired into every card/effect path. Treat them as implementation building blocks, not full rule-family completion.
+
+### Burn Out
+
+Status: **Implemented for draw effects**
+
+- Drawing beyond the remaining main deck draws as much as possible, recycles the player's trash into the main deck in deterministic randomized order, creates a pending opponent-choice action, awards the chosen opponent 1 point, and continues the remaining draw.
+- Repeated Burn Out with an empty deck/trash is supported through repeated pending choices.
+- Points gained from Burn Out can immediately end the game when they meet the victory condition.
+- Engine tests cover trash recycle, pending opponent choice, repeated empty-deck Burn Out, immediate win, and deterministic recycle order.
+
+Remaining future work:
+
+- Rule `431` also applies when moving cards from the Main Deck to non-hand zones in excess of the remaining deck. Current fixed behavior covers draws, which are the currently modeled online engine path.
+
+### Damage, Might, And Lethal Edge Cases
+
+Status: **Partial**
+
+- Combat now accounts for current might, negative might contributing zero combat damage, positive lethal assignment before spreading, Shield, Stun, prevention, Tank, Backline/last-damage ordering, and source attribution in modeled cases.
+
+Remaining gaps:
+
+- Simple spell damage does not run a full universal Deal action model with every prevention, source, bonus damage, replacement, and trigger hook.
+- Kill/lethal handling is still implemented in specific resolution paths rather than as one generalized rules action.
 
 ### Keywords
 
-Status: **Mostly missing**
+Status: **Partial**
 
-Only `Action` and `Reaction` are lightly recognized by text search. The keyword rules in `800-keywords.md` are otherwise missing, including Accelerate, Deathknell, Deflect, Ganking, Hidden, Shield, Tank-like assignment modifiers, Temporary, and others.
+- `KeywordCatalog` parses and classifies: Accelerate, Action, Assault, Deathknell, Deflect, Ganking, Hidden, Legion, Reaction, Shield, Tank, Temporary, Vision, Equip, Quick-Draw, Repeat, Weaponmaster, Ambush, Hunt, Level, Unique, and Backline.
+- Implemented behavior exists for several keywords, including Accelerate, Reaction, Action, Deflect, Ganking, Hidden, Shield, Tank, Temporary, Deathknell, Backline, and Quick-Draw.
+
+Missing or incomplete areas:
+
+- Many keyword behaviors are classified but not fully executed.
+- Unique is still primarily a deck/card constraint concept, not a complete in-game uniqueness rule.
+- Legion, Level, Vision, Equip, Repeat, Weaponmaster, Ambush, and Hunt need complete card-effect behavior.
 
 ### Layers
 
-Status: **Missing**
+Status: **Partial**
 
-The rules in `468-475` are not implemented. Current `attachedMight` is a flat modifier, not a layer system with trait-altering effects, ability-altering effects, arithmetic ordering, dependencies, or timestamps.
+- `ContinuousEffectLayerResolver` evaluates trait, ability, and arithmetic layers.
+- It supports add/remove/set operations, dependencies, timestamps, source order, arithmetic increases before decreases, and JSON-defined effects.
+- Legacy `attachedMight` is folded into arithmetic might evaluation.
+
+Missing areas:
+
+- This is a focused characteristic resolver, not the full rules `468-475` system.
+- Full object applicability, timestamps from actual game events, dependencies across all characteristic types, continuous effects generated by card text, and layer interaction with every rules query are incomplete.
 
 ### Multiplayer And Team Specific Rules
 
-Status: **Partial/Missing**
+Status: **Partial**
 
 - Mode counts and victory score exist.
 - Team identity exists in state.
+- 2v2 turn order alternates teams when possible.
+- Team scoring/winning uses team totals.
+- Teammate spell priority and friendly/enemy target semantics exist for modeled cases.
+- Team movement and team combat grouping have coverage.
 - Lobby loadout selection prevents teammates in team modes from saving the same selected battlefield; saving a teammate-conflicting loadout clears the teammate's duplicate battlefield selection and unreadies them.
-- Team scoring/winning, teammate priority invitation, in-engine teammate battlefield movement/combat restrictions, teammate deck restrictions beyond lobby battlefield de-conflict, friendly semantics, team concession, and final-point team exceptions are missing or incomplete.
-- FFA player removal and continuing-game behavior are missing.
+- FFA and team concession behavior exists for basic outcomes.
 
-### Rebuild From Event Log
+Missing areas:
 
-Status: **Persistence implemented, replay not found**
-
-- Match events and snapshots are persisted.
-- Current loading uses the latest snapshot.
-- No authoritative replay-from-events path was found for rebuilding match state from the append-only event log.
+- Full FFA player-removal cleanup, teammate battlefield contribution rules, all final-point exceptions, team shared-object cleanup, and every multiplayer destination restriction are incomplete.
 
 ## Frontend-Only Or Prototype Implementations To Watch
 
 The local/hotseat rules module under `frontend/src/features/game/rules/gameRules.ts` contains client-side rule resolution for setup, turns, movement, combat, scoring, stack effects, and manual actions. This is useful for local play/prototyping, but it should not be treated as authoritative for online matches.
 
+The online frontend path uses server-provided legal actions and `onlineActionGuards.ts` to check legal-action type and payload schema before submitting. That is appropriate as a UI guard only; final legality remains server-side.
+
 Important frontend-only/prototype concerns:
 
-- It has a first-player draw skip for FFA/2v2 that the server engine lacks.
 - It can manually adjust points, readiness, damage, kills, recalls, controller, showdown, and combat staging.
-- It resolves combat automatically instead of using the same assignment flow as the server engine.
-- It contains rule logic that should either be removed from online paths or kept strictly as display/local-hotseat behavior.
+- It resolves some combat and local actions independently of the server engine.
+- Any online path should continue to use server-provided legal actions and backend responses as authoritative.
 
 ## Recommended Tracking Order
 
-1. Done: fixed improper deck construction validation: main deck minimum 40, rune deck exactly 12, three battlefield cards, champion-tag match, domain identity, copy limits, signature limits, and duplicate battlefield names.
-2. Done: implemented draw-based Burn Out with deterministic trash recycle, pending opponent choice, point award, repeated Burn Out, and immediate win handling.
-3. Done: corrected `ChainRules.ValidateChainPlay` and `SpellClassifier.CanPlayDuringChainWindow` so Action spells are not valid in Closed State chain windows by default.
-4. Fix server first-turn draw skip for FFA/2v2.
-5. Implement battlefield-to-base movement and simultaneous standard moves.
-6. Replace the generic integer resource model with Energy plus domain Power.
-7. Add a real effect/action system for core actions before expanding card text and keywords.
-8. Decide whether frontend local rules remain a local-hotseat feature or should be retired in favor of server-provided legal actions only.
+1. Done: fixed deck construction validation: main deck minimum 40, rune deck exactly 12, three battlefield cards, champion-tag match, domain identity, copy limits, signature limits, and duplicate battlefield names.
+2. Done: implemented ordered mulligan confirmations with deterministic recycle to bottom.
+3. Done: implemented draw-based Burn Out with deterministic trash recycle, pending opponent choice, point award, repeated Burn Out, and immediate win handling.
+4. Done: corrected chain timing so Action spells are not valid in Closed State chain windows by default.
+5. Done: fixed first-turn draw skip for FFA/2v2.
+6. Done: implemented battlefield-to-base movement, simultaneous standard moves, and several team/multiplayer movement restrictions.
+7. Done: added domain Power and universal Power payment basics.
+8. Done: added replay-from-events support with snapshot tail replay.
+9. Next: turn internal game actions into a consistently used general action/effect pipeline across card effects.
+10. Next: complete ability and keyword behavior for the parsed keyword catalog.
+11. Next: expand privacy/reveal/facedown rules from redaction support into a full information model.
+12. Next: finish FFA/team player-removal cleanup and remaining multiplayer destination/combat restrictions.
+13. Next: decide whether frontend local rules remain a local-hotseat feature or should be retired in favor of server-provided legal actions only.

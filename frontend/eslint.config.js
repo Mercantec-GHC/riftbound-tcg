@@ -19,4 +19,15 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/features/online/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['../game/rules/*', '../../features/game/rules/*', '**/features/game/rules/*'],
+          message: 'Online match UI must render server state and submit server-approved actions; keep local hotseat rule helpers out of online paths.',
+        }],
+      }],
+    },
+  },
 ])

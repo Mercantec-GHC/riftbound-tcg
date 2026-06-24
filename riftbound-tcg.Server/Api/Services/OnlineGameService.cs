@@ -14,7 +14,7 @@ using riftbound_tcg.Core.DeckConstruction;
 
 namespace RiftboundTcg.Server.Api.Services;
 
-public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine, IHubContext<MatchHub> hubContext)
+public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine, IHubContext<MatchHub> hubContext, MatchReplayService replayService)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] PlaceholderCardIds =
@@ -529,7 +529,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return matches.Select(match => ToSummary(match, players.Where(player => player.MatchId == match.Id), avatarImageHashes)).ToArray();
     }
 
-    public async Task<MatchSnapshotDto?> GetMatchAsync(string matchId, CancellationToken cancellationToken)
+    public async Task<MatchSnapshotDto?> GetMatchAsync(string matchId, string userId, CancellationToken cancellationToken)
     {
         await EnsureCreatedAsync(cancellationToken);
         var match = await db.Matches.FindAsync([matchId], cancellationToken);
@@ -539,9 +539,16 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         }
 
         var players = await db.MatchPlayers.Where(player => player.MatchId == matchId).OrderBy(player => player.PlayerId).ToArrayAsync(cancellationToken);
-        var snapshot = await db.MatchSnapshots.Where(candidate => candidate.MatchId == matchId).OrderByDescending(candidate => candidate.SequenceNumber).FirstOrDefaultAsync(cancellationToken);
+        var viewerPlayerId = players.FirstOrDefault(player => player.UserId == userId)?.PlayerId;
+        if (viewerPlayerId is null)
+        {
+            return null;
+        }
+
         var avatarImageHashes = await LoadAvatarImageHashesAsync(players, cancellationToken);
-        return ToSnapshot(match, players, avatarImageHashes, snapshot?.StateJson ?? "{}", snapshot?.SequenceNumber ?? match.SequenceNumber);
+        var rebuilt = await replayService.RebuildAsync(matchId, useLatestSnapshot: true, cancellationToken)
+            ?? throw new InvalidOperationException("Match state could not be rebuilt.");
+        return ToSnapshot(match, players, avatarImageHashes, rebuilt.State.ToJsonString(JsonOptions), rebuilt.SequenceNumber, viewerPlayerId);
     }
 
     public async Task<MatchSnapshotDto> CreateMatchAsync(string userId, CreateMatchRequest request, CancellationToken cancellationToken)
@@ -565,7 +572,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             decks.Add(deck);
         }
 
-        return await CreateMatchFromDecksAsync(request.Mode, request.Players, decks, request.BattlefieldIds ?? [], request.FirstPlayerId ?? 0, cancellationToken);
+        return await CreateMatchFromDecksAsync(request.Mode, request.Players, decks, request.BattlefieldIds ?? [], request.FirstPlayerId ?? 0, userId, cancellationToken);
     }
 
     public async Task<LobbyDto> CreateLobbyAsync(string hostUserId, CreateLobbyRequest request, CancellationToken cancellationToken)
@@ -1053,7 +1060,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         await db.SaveChangesAsync(cancellationToken);
 
         var matchPlayers = players.Select(player => new CreateMatchPlayerRequest(player.UserId, player.DeckId!, player.TeamId)).ToArray();
-        var match = await CreateMatchFromDecksAsync(lobby.SelectedMode, matchPlayers, decks, battlefieldIds, 0, cancellationToken);
+        var match = await CreateMatchFromDecksAsync(lobby.SelectedMode, matchPlayers, decks, battlefieldIds, 0, lobby.HostUserId, cancellationToken);
         lobby.Status = "matched";
         lobby.MatchId = match.Id;
         lobby.UpdatedAt = DateTimeOffset.UtcNow;
@@ -1145,7 +1152,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        return new SubmitActionResponseDto(result.Accepted, ToDto(entity), result.State.State, match.SequenceNumber, result.LegalActions.Select(ToDto).ToArray());
+        return new SubmitActionResponseDto(result.Accepted, ToDto(entity), PlayerViewRedactor.Redact(result.State.State, request.PlayerId), match.SequenceNumber, result.LegalActions.Select(ToDto).ToArray());
     }
 
     private async Task UpdateCompletedMatchStatsAsync(string matchId, int? winnerPlayerId, CancellationToken cancellationToken)
@@ -1272,6 +1279,14 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return await db.MatchPlayers.AnyAsync(player => player.MatchId == matchId && player.UserId == userId && player.PlayerId == playerId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<MatchPlayerDto>> ListMatchPlayersAsync(string matchId, CancellationToken cancellationToken)
+    {
+        await EnsureCreatedAsync(cancellationToken);
+        var players = await db.MatchPlayers.Where(player => player.MatchId == matchId).OrderBy(player => player.PlayerId).ToArrayAsync(cancellationToken);
+        var avatarImageHashes = await LoadAvatarImageHashesAsync(players, cancellationToken);
+        return players.Select(player => ToDto(player, avatarImageHashes)).ToArray();
+    }
+
     private async Task TryPairTicketAsync(MatchmakingTicketEntity ticket, CancellationToken cancellationToken)
     {
         var opponent = await db.MatchmakingTickets
@@ -1295,7 +1310,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             new CreateMatchPlayerRequest(ticket.UserId, ticket.DeckId, 0),
             new CreateMatchPlayerRequest(opponent.UserId, opponent.DeckId, 1)
         };
-        var match = await CreateMatchFromDecksAsync(ticket.Mode, players, [firstDeck, secondDeck], [], 0, cancellationToken);
+        var match = await CreateMatchFromDecksAsync(ticket.Mode, players, [firstDeck, secondDeck], [], 0, ticket.UserId, cancellationToken);
         ticket.Status = "matched";
         ticket.MatchId = match.Id;
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
@@ -1307,7 +1322,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         await hubContext.Clients.Group(MatchHub.TicketGroupName(opponent.Id)).SendAsync("matchmaking.ticketUpdated", ToDto(opponent), cancellationToken);
     }
 
-    private async Task<MatchSnapshotDto> CreateMatchFromDecksAsync(string mode, IReadOnlyList<CreateMatchPlayerRequest> players, IReadOnlyList<DeckEntity> decks, IReadOnlyList<string> battlefieldIds, int firstPlayerId, CancellationToken cancellationToken)
+    private async Task<MatchSnapshotDto> CreateMatchFromDecksAsync(string mode, IReadOnlyList<CreateMatchPlayerRequest> players, IReadOnlyList<DeckEntity> decks, IReadOnlyList<string> battlefieldIds, int firstPlayerId, string viewerUserId, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var matchId = $"match-{Guid.NewGuid():N}";
@@ -1366,7 +1381,8 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             db.MatchPlayers.Local.Where(player => player.MatchId == matchId).ToArray(),
             users.ToDictionary(item => item.Key, item => item.Value.AvatarImageHash),
             engineState.State.ToJsonString(JsonOptions),
-            0);
+            0,
+            seats.First(seat => seat.UserId == viewerUserId).PlayerId);
     }
 
     private async Task<EngineMatchState?> LoadEngineStateAsync(string matchId, CancellationToken cancellationToken)
@@ -1378,20 +1394,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             return null;
         }
 
-        var players = await db.MatchPlayers.Where(player => player.MatchId == matchId).OrderBy(player => player.PlayerId).ToArrayAsync(cancellationToken);
-        var snapshot = await db.MatchSnapshots.Where(candidate => candidate.MatchId == matchId).OrderByDescending(candidate => candidate.SequenceNumber).FirstOrDefaultAsync(cancellationToken);
-        if (snapshot is null)
-        {
-            return null;
-        }
-
-        return new EngineMatchState(
-            match.Id,
-            match.Mode,
-            match.Status,
-            snapshot.SequenceNumber,
-            JsonNode.Parse(snapshot.StateJson)!.AsObject(),
-            players.Select(player => new EnginePlayerState(player.PlayerId, player.UserId, 0, false)).ToArray());
+        return await replayService.RebuildAsync(matchId, useLatestSnapshot: true, cancellationToken);
     }
 
     private async Task CleanupPlaceholderCardsAsync(CancellationToken cancellationToken)
@@ -1921,9 +1924,11 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         return new MatchSummaryDto(match.Id, match.Mode, match.Status, players.OrderBy(player => player.PlayerId).Select(player => ToDto(player, avatarImageHashes)).ToArray(), match.CreatedAt, match.UpdatedAt, match.CompletedAt, match.WinnerPlayerId, match.WinningTeamId);
     }
 
-    private static MatchSnapshotDto ToSnapshot(MatchEntity match, IEnumerable<MatchPlayerEntity> players, IReadOnlyDictionary<string, string?> avatarImageHashes, string stateJson, int sequenceNumber)
+    private static MatchSnapshotDto ToSnapshot(MatchEntity match, IEnumerable<MatchPlayerEntity> players, IReadOnlyDictionary<string, string?> avatarImageHashes, string stateJson, int sequenceNumber, int? viewerPlayerId = null)
     {
-        return new MatchSnapshotDto(match.Id, match.Mode, match.Status, players.OrderBy(player => player.PlayerId).Select(player => ToDto(player, avatarImageHashes)).ToArray(), match.CreatedAt, match.UpdatedAt, match.CompletedAt, match.WinnerPlayerId, match.WinningTeamId, JsonNode.Parse(stateJson)!, sequenceNumber);
+        var state = JsonNode.Parse(stateJson)!.AsObject();
+        var view = viewerPlayerId is null ? state : PlayerViewRedactor.Redact(state, viewerPlayerId.Value);
+        return new MatchSnapshotDto(match.Id, match.Mode, match.Status, players.OrderBy(player => player.PlayerId).Select(player => ToDto(player, avatarImageHashes)).ToArray(), match.CreatedAt, match.UpdatedAt, match.CompletedAt, match.WinnerPlayerId, match.WinningTeamId, view, sequenceNumber);
     }
 
     private static MatchPlayerDto ToDto(MatchPlayerEntity player, IReadOnlyDictionary<string, string?> avatarImageHashes)

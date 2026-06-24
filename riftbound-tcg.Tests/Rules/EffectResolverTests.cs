@@ -143,7 +143,7 @@ public class EffectResolverTests
 
         var result = EffectResolver.ResolveTop([item1, item2], [StateBuilder.Player(0, deckSize: 5)], [])!;
 
-        Assert.That(result.ResolvedItem, Is.EqualTo(item1));
+        Assert.That(result.ResolvedItem, Is.EqualTo(item1 with { Status = ChainItemStatus.Finalized }));
         Assert.That(result.RemainingStack, Has.Count.EqualTo(1));
         Assert.That(result.RemainingStack[0], Is.EqualTo(item2));
     }

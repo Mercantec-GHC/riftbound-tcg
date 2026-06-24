@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using riftbound_tcg.Core.Cards;
+using riftbound_tcg.Core.Effects;
 
 namespace riftbound_tcg.Engine.RulesEngine;
 
@@ -13,7 +15,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
     public EngineMatchState CreateInitialState(EngineMatchConfig config, IReadOnlyList<EnginePlayerDeck> playerDecks, int seed, IReadOnlyDictionary<string, CardDefinition>? catalog = null)
     {
         var mode = ModeConfig.For(config.Mode);
-        var turnOrder = OrderedPlayerIds(mode.PlayerCount, config.FirstPlayerId);
+        var teamIdsByPlayer = config.Seats.OrderBy(seat => seat.PlayerId).Select(seat => seat.TeamId ?? seat.PlayerId).ToArray();
+        var turnOrder = OrderedPlayerIds(mode.PlayerCount, config.FirstPlayerId, teamIdsByPlayer, config.Mode);
         var players = config.Seats
             .OrderBy(seat => seat.PlayerId)
             .Select(seat =>
@@ -29,10 +32,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     ["points"] = 0,
                     ["runes"] = new JsonObject { ["ready"] = new JsonArray(), ["exhausted"] = new JsonArray() },
                     ["runeDeck"] = ToArray(Shuffle(deck.RuneDeckIds.Select((id, index) => Card(id, $"rune-{seat.PlayerId}-{index}", catalog)).ToList(), seed + seat.PlayerId + 47)),
-                    ["runePool"] = new JsonObject { ["energy"] = 0 },
+                    ["runePool"] = EmptyRunePool(),
                     ["deck"] = ToArray(library),
                     ["hand"] = ToArray(hand),
                     ["trash"] = new JsonArray(),
+                    ["banished"] = new JsonArray(),
                     ["base"] = new JsonArray(),
                     ["baseGear"] = new JsonArray(),
                     ["champion"] = string.IsNullOrWhiteSpace(deck.ChampionId) ? null : Card(deck.ChampionId, $"champion-{seat.PlayerId}", catalog),
@@ -55,7 +59,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["claim"] = 2,
             ["chosenBy"] = index % mode.PlayerCount,
             ["controllerId"] = null,
-            ["units"] = new JsonArray()
+            ["units"] = new JsonArray(),
+            ["hiddenCards"] = new JsonArray()
         }).ToArray();
 
         var state = new JsonObject
@@ -76,9 +81,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["winner"] = null,
             ["winningTeamId"] = null,
             ["turnOrder"] = ToArray(turnOrder),
-            ["teamIds"] = ToArray(config.Seats.OrderBy(seat => seat.PlayerId).Select(seat => seat.TeamId ?? seat.PlayerId).ToArray()),
+            ["teamIds"] = ToArray(teamIdsByPlayer),
             ["hasPassedFocusByPlayer"] = new JsonObject(),
             ["scoredBattlefieldIdsThisTurn"] = new JsonObject(),
+            ["teamScoreBlockedBattlefieldIdsThisTurn"] = new JsonObject(),
+            ["teamFinalPointExemptBattlefieldIdsThisTurn"] = new JsonObject(),
             ["firstTurnCompletedByPlayer"] = new JsonObject(),
             ["mulliganConfirmedPlayerIds"] = new JsonArray(),
             ["activeShowdown"] = null,
@@ -91,6 +98,9 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["log"] = new JsonArray(new JsonObject { ["id"] = 0, ["text"] = $"{mode.Label} online match created. Players drew 4 and entered mulligan." }),
             ["passShield"] = true,
             ["effectStack"] = new JsonArray(),
+            ["pendingTriggeredAbilities"] = new JsonArray(),
+            ["delayedAbilities"] = new JsonArray(),
+            ["abilityEvents"] = new JsonArray(),
             ["chainWindow"] = null,
             ["pendingBurnOut"] = null
         };
@@ -100,7 +110,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     public IReadOnlyList<EngineLegalAction> GetLegalActions(EngineMatchState state, int playerId)
     {
-        if (state.Players.All(player => player.PlayerId != playerId))
+        if (state.Players.All(player => player.PlayerId != playerId) || !ActivePlayerIds(state.State).Contains(playerId))
         {
             return [];
         }
@@ -145,11 +155,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 actions.Add(new("pass-chain-window", "pass-chain-window", "Pass priority", playerId));
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsReactionCard(card)));
             }
+            else if (CanUsePriority(state.State, playerId, chainPriorityPlayerId.Value))
+            {
+                actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsReactionCard(card)));
+            }
 
             return actions;
         }
 
-        if (stage == "mulligan" && !mulliganConfirmedPlayerIds.Contains(playerId))
+        if (stage == "mulligan" && CurrentMulliganPlayerId(state.State, mulliganConfirmedPlayerIds) == playerId)
         {
             actions.Add(new("confirm-mulligan", "confirm-mulligan", "Confirm mulligan", playerId));
         }
@@ -163,13 +177,24 @@ public sealed class DefaultRulesEngine : IRulesEngine
             {
                 actions.Add(new("play-unit", "play-unit", "Play unit", playerId));
                 actions.Add(new("move-unit", "move-unit", "Move unit", playerId));
+                actions.Add(new("create-token", "create-token", "Create token", playerId));
+                actions.Add(new("attach-card", "attach-card", "Attach card", playerId));
+                actions.Add(new("detach-card", "detach-card", "Detach card", playerId));
+                actions.Add(new("banish-object", "banish-object", "Banish object", playerId));
+                actions.Add(new("set-facedown", "set-facedown", "Set facedown", playerId));
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, IsSpellOrGear));
+                actions.AddRange(ActivatedAbilityActions(state.State, playerId));
+                actions.AddRange(HideCardsFromHand(state.State, playerId));
 
                 if (CanSummonChampion(state.State, playerId))
                 {
                     actions.Add(new("summon-champion", "summon-champion", "Summon champion", playerId));
                 }
             }
+        }
+        else if (stage == "playing" && !IsShowdownOpen(state.State) && IsTeammate(state.State, playerId, turnPlayerId) && turnPhase == "main")
+        {
+            actions.AddRange(PlayableCardsFromHand(state.State, playerId, IsSpellOrGear));
         }
 
         if (stage == "playing" && IsShowdownOpen(state.State) && !CombatDamageRequired(state.State))
@@ -180,6 +205,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             if (focusPlayerId == playerId)
             {
                 actions.Add(new("pass-focus", "pass-focus", "Pass focus", playerId));
+                actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsSpellOrGear(card) && (IsActionCard(card) || IsReactionCard(card))));
+                actions.AddRange(ActivatedAbilityActions(state.State, playerId));
+            }
+            else if (CanUsePriority(state.State, playerId, focusPlayerId))
+            {
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsSpellOrGear(card) && (IsActionCard(card) || IsReactionCard(card))));
             }
         }
@@ -239,7 +269,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 nextState = EndCurrentTurn(nextState, action.PlayerId);
                 break;
             case "play-unit":
-                var playUnitResult = PlayUnit(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"));
+                var playUnitResult = PlayUnit(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"), ReadBool(action.Payload, "accelerate") == true);
                 if (playUnitResult is null)
                 {
                     return Reject(state, "Invalid play-unit action: unit can only be played to your base or a battlefield you control.");
@@ -257,13 +287,63 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 nextState = summonChampionResult;
                 break;
             case "move-unit":
-                var moveUnitResult = MoveUnit(nextState, action.PlayerId, ReadString(action.Payload, "unitId"), ReadString(action.Payload, "battlefieldId"));
+                var moveUnitResult = MoveUnits(
+                    nextState,
+                    action.PlayerId,
+                    ReadUnitIds(action.Payload),
+                    ReadString(action.Payload, "battlefieldId"),
+                    ReadString(action.Payload, "destination"));
                 if (moveUnitResult is null)
                 {
-                    return Reject(state, "Invalid move-unit action: only your own, unexhausted base units can move to a battlefield you control.");
+                    return Reject(state, "Invalid move-unit action: choose one or more of your own unexhausted units and a legal shared destination.");
                 }
 
                 nextState = moveUnitResult;
+                break;
+            case "create-token":
+                var createTokenResult = CreateToken(nextState, action.PlayerId, ReadString(action.Payload, "cardId"), ReadString(action.Payload, "name"), ReadString(action.Payload, "battlefieldId"));
+                if (createTokenResult is null)
+                {
+                    return Reject(state, "Invalid create-token action: target base or battlefield must exist.");
+                }
+
+                nextState = createTokenResult;
+                break;
+            case "attach-card":
+                var attachCardResult = AttachCard(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "targetUnitId"));
+                if (attachCardResult is null)
+                {
+                    return Reject(state, "Invalid attach-card action: choose one of your cards in hand and an existing unit.");
+                }
+
+                nextState = attachCardResult;
+                break;
+            case "detach-card":
+                var detachCardResult = DetachCard(nextState, action.PlayerId, ReadString(action.Payload, "attachedCardUid"));
+                if (detachCardResult is null)
+                {
+                    return Reject(state, "Invalid detach-card action: only attached cards you own can be detached.");
+                }
+
+                nextState = detachCardResult;
+                break;
+            case "banish-object":
+                var banishObjectResult = BanishObject(nextState, action.PlayerId, ReadString(action.Payload, "objectUid"));
+                if (banishObjectResult is null)
+                {
+                    return Reject(state, "Invalid banish-object action: object must exist and be controlled by you.");
+                }
+
+                nextState = banishObjectResult;
+                break;
+            case "set-facedown":
+                var setFaceDownResult = SetFaceDown(nextState, action.PlayerId, ReadString(action.Payload, "objectUid"), ReadBool(action.Payload, "faceDown") ?? true);
+                if (setFaceDownResult is null)
+                {
+                    return Reject(state, "Invalid set-facedown action: object must exist and be controlled by you.");
+                }
+
+                nextState = setFaceDownResult;
                 break;
             case "play-card":
                 var playCardResult = PlayCard(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "targetUnitId"), ReadString(action.Payload, "targetLaneId"));
@@ -273,6 +353,31 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 }
 
                 nextState = playCardResult;
+                break;
+            case "activate-ability":
+                var activateAbilityResult = ActivateAbility(
+                    nextState,
+                    action.PlayerId,
+                    ReadString(action.Payload, "sourceUid"),
+                    ReadString(action.Payload, "abilityId"),
+                    ReadString(action.Payload, "modeId"),
+                    ReadString(action.Payload, "targetUnitId"),
+                    ReadString(action.Payload, "targetLaneId"));
+                if (activateAbilityResult is null)
+                {
+                    return Reject(state, "Invalid activate-ability action: source, ability, mode, cost, or targets are not legal.");
+                }
+
+                nextState = activateAbilityResult;
+                break;
+            case "hide-card":
+                var hideCardResult = HideCard(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"));
+                if (hideCardResult is null)
+                {
+                    return Reject(state, "Invalid hide-card action: only cards with Hidden can be hidden at a battlefield you control with no hidden card there.");
+                }
+
+                nextState = hideCardResult;
                 break;
             case "pass-chain-window":
                 var passResult = PassChainWindow(nextState, action.PlayerId);
@@ -302,10 +407,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 nextState = combatResult;
                 break;
             case "concede":
-                var winner = state.Players.First(player => player.PlayerId != action.PlayerId).PlayerId;
-                nextState["stage"] = "game-over";
-                nextState["winner"] = winner;
-                nextState = AddLog(nextState, $"{PlayerName(nextState, action.PlayerId)} conceded.");
+                nextState = Concede(nextState, action.PlayerId);
                 break;
             default:
                 return Reject(state, $"Action '{action.ActionType}' is not supported.");
@@ -313,12 +415,231 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         if (!string.Equals(action.ActionType, "resolve-combat", StringComparison.OrdinalIgnoreCase))
         {
+            nextState = CollectTriggeredAbilities(nextState, "action-applied", new JsonObject
+            {
+                ["playerId"] = action.PlayerId,
+                ["actionType"] = action.ActionType
+            });
             nextState = RunFeprUntilChoiceRequired(nextState);
         }
         var resultPayload = BuildResultPayload(nextState);
         nextState.Remove("__scoreOutcomes");
-        var next = ToEngineState(state.MatchId, state.Mode, state.SequenceNumber + 1, nextState, state.Players.Select(player => new EngineSeatConfig(player.PlayerId, player.UserId, PlayerName(nextState, player.PlayerId), null)).ToArray());
+        var next = ToEngineState(state.MatchId, state.Mode, state.SequenceNumber + 1, nextState, ActiveSeats(nextState, state.Players));
         return new EngineActionResult(true, "accepted", $"Accepted {action.ActionType}.", next, GetLegalActions(next, action.PlayerId), resultPayload);
+    }
+
+    private static JsonObject Concede(JsonObject state, int playerId)
+    {
+        var concedingPlayerName = PlayerName(state, playerId);
+        var mode = state["mode"]?.GetValue<string>() ?? "duel-1v1";
+        var activePlayerIds = ActivePlayerIds(state);
+
+        if (mode == "teams-2v2")
+        {
+            var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+            var losingTeamId = TeamIdForPlayer(teamIds, playerId);
+            var winningTeamId = activePlayerIds
+                .Where(id => TeamIdForPlayer(teamIds, id) != losingTeamId)
+                .Select(id => TeamIdForPlayer(teamIds, id))
+                .FirstOrDefault();
+            var winningPlayerId = activePlayerIds.FirstOrDefault(id => TeamIdForPlayer(teamIds, id) == winningTeamId);
+
+            foreach (var removedPlayerId in activePlayerIds.Where(id => TeamIdForPlayer(teamIds, id) == losingTeamId).ToArray())
+            {
+                state = RemovePlayerFromContinuingGame(state, removedPlayerId);
+            }
+
+            state["stage"] = "game-over";
+            state["winner"] = winningPlayerId;
+            state["winningTeamId"] = winningTeamId;
+            return AddLog(state, $"{concedingPlayerName} conceded. Team {losingTeamId + 1} loses the match.");
+        }
+
+        var remainingAfterConcede = activePlayerIds.Where(id => id != playerId).ToArray();
+        if (mode == "duel-1v1" || remainingAfterConcede.Length == 1)
+        {
+            var winner = remainingAfterConcede.FirstOrDefault();
+            state = RemovePlayerFromContinuingGame(state, playerId);
+            state["stage"] = "game-over";
+            state["winner"] = winner;
+            state["winningTeamId"] = null;
+            return AddLog(state, $"{concedingPlayerName} conceded.");
+        }
+
+        state = RemovePlayerFromContinuingGame(state, playerId);
+        return AddLog(state, $"{concedingPlayerName} conceded and was removed from the game.");
+    }
+
+    private static JsonObject RemovePlayerFromContinuingGame(JsonObject state, int playerId)
+    {
+        var oldOrder = state["turnOrder"]!.Deserialize<int[]>(JsonOptions) ?? [];
+        var nextAfterRemoved = NextAvailablePlayerId(oldOrder, playerId, id => id != playerId && FindPlayer(state, id) is not null);
+
+        RemovePlayerObjects(state, playerId);
+        RemovePlayerState(state, playerId);
+
+        var activePlayerIds = oldOrder.Where(id => FindPlayer(state, id) is not null).ToArray();
+        if (activePlayerIds.Length == 0)
+        {
+            activePlayerIds = state["players"]!.AsArray()
+                .Select(node => node!.AsObject()["id"]!.GetValue<int>())
+                .ToArray();
+        }
+
+        state["turnOrder"] = ToArray(activePlayerIds);
+        if (activePlayerIds.Length == 0)
+        {
+            state["turnPlayerId"] = null;
+            state["activePlayer"] = null;
+            state["priorityPlayerId"] = null;
+            state["focusPlayerId"] = null;
+            return state;
+        }
+
+        nextAfterRemoved = nextAfterRemoved is not null && activePlayerIds.Contains(nextAfterRemoved.Value)
+            ? nextAfterRemoved
+            : activePlayerIds[0];
+
+        if (state["firstPlayerId"]?.GetValue<int?>() == playerId)
+        {
+            state["firstPlayerId"] = activePlayerIds[0];
+        }
+
+        if (state["turnPlayerId"]?.GetValue<int?>() == playerId)
+        {
+            state["turnPlayerId"] = nextAfterRemoved;
+            state["turnPhase"] = "awaken";
+            state["scoredBattlefieldIdsThisTurn"] = new JsonObject();
+        }
+
+        if (state["activePlayer"]?.GetValue<int?>() == playerId)
+        {
+            state["activePlayer"] = state["turnPlayerId"]?.GetValue<int?>() ?? nextAfterRemoved;
+        }
+
+        ReassignPriorityAndFocus(state, playerId, activePlayerIds);
+        NormalizeMulliganAfterPlayerRemoval(state, activePlayerIds);
+        return state;
+    }
+
+    private static void RemovePlayerObjects(JsonObject state, int playerId)
+    {
+        var removedBattlefieldId = FindPlayer(state, playerId)?["battlefieldId"]?.GetValue<string>();
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var units = battlefield["units"]!.AsArray();
+            for (var i = units.Count - 1; i >= 0; i--)
+            {
+                if (units[i]!["ownerId"]?.GetValue<int?>() == playerId)
+                {
+                    units.RemoveAt(i);
+                }
+            }
+
+            if (battlefield["controllerId"]?.GetValue<int?>() == playerId)
+            {
+                battlefield["controllerId"] = null;
+            }
+
+            if (battlefield["contestedByPlayerId"]?.GetValue<int?>() == playerId)
+            {
+                battlefield["contestedByPlayerId"] = null;
+                battlefield["stagedShowdown"] = false;
+                battlefield["stagedCombat"] = false;
+            }
+
+            var chosenBy = battlefield["chosenBy"]?.GetValue<int?>();
+            var catalogId = battlefield["catalogId"]?.GetValue<string>();
+            if (chosenBy == playerId || !string.IsNullOrWhiteSpace(removedBattlefieldId) && string.Equals(catalogId, removedBattlefieldId, StringComparison.OrdinalIgnoreCase))
+            {
+                battlefield["catalogId"] = "token-battlefield";
+                battlefield["name"] = "Token Battlefield";
+                battlefield["claim"] = 2;
+                battlefield["chosenBy"] = null;
+            }
+        }
+
+        var stack = state["effectStack"]!.AsArray();
+        for (var i = stack.Count - 1; i >= 0; i--)
+        {
+            if (stack[i]!["playerId"]?.GetValue<int?>() == playerId)
+            {
+                stack.RemoveAt(i);
+            }
+        }
+
+        if (state["activeCombat"] is JsonObject activeCombat
+            && (activeCombat["attackerPlayerId"]?.GetValue<int?>() == playerId || activeCombat["defenderPlayerId"]?.GetValue<int?>() == playerId))
+        {
+            state["activeCombat"] = null;
+            state["activeShowdown"] = null;
+            state["focusPlayerId"] = null;
+            state["priorityPlayerId"] = null;
+            state["hasPassedFocusByPlayer"] = new JsonObject();
+        }
+
+        if (PendingBurnOut(state)?["playerId"]?.GetValue<int?>() == playerId)
+        {
+            state["pendingBurnOut"] = null;
+        }
+    }
+
+    private static void RemovePlayerState(JsonObject state, int playerId)
+    {
+        var players = state["players"]!.AsArray();
+        for (var i = players.Count - 1; i >= 0; i--)
+        {
+            if (players[i]!["id"]?.GetValue<int?>() == playerId)
+            {
+                players.RemoveAt(i);
+            }
+        }
+
+        RemoveObjectProperty(state["hasPassedFocusByPlayer"], playerId);
+        RemoveObjectProperty(state["scoredBattlefieldIdsThisTurn"], playerId);
+        RemoveObjectProperty(state["firstTurnCompletedByPlayer"], playerId);
+        RemoveArrayValue(state["mulliganConfirmedPlayerIds"], playerId);
+        RemoveObjectProperty(state["chainWindow"]?["passedByPlayer"], playerId);
+    }
+
+    private static void ReassignPriorityAndFocus(JsonObject state, int removedPlayerId, int[] activePlayerIds)
+    {
+        if (state["chainWindow"] is JsonObject chainWindow)
+        {
+            var currentPriority = chainWindow["priorityPlayerId"]?.GetValue<int?>()
+                ?? state["priorityPlayerId"]?.GetValue<int?>();
+            if (currentPriority == removedPlayerId || currentPriority is null || !activePlayerIds.Contains(currentPriority.Value))
+            {
+                var nextPriority = NextPlayerId(state, removedPlayerId);
+                chainWindow["priorityPlayerId"] = nextPriority;
+                state["priorityPlayerId"] = nextPriority;
+                state["activePlayer"] = nextPriority;
+            }
+        }
+
+        var focusPlayerId = state["focusPlayerId"]?.GetValue<int?>();
+        if (state["activeShowdown"] is not null && (focusPlayerId == removedPlayerId || focusPlayerId is null || !activePlayerIds.Contains(focusPlayerId.Value)))
+        {
+            var nextFocus = NextPlayerId(state, removedPlayerId);
+            state["focusPlayerId"] = nextFocus;
+            state["priorityPlayerId"] = nextFocus;
+            state["activePlayer"] = nextFocus;
+        }
+    }
+
+    private static void NormalizeMulliganAfterPlayerRemoval(JsonObject state, int[] activePlayerIds)
+    {
+        if (state["stage"]?.GetValue<string>() != "mulligan")
+        {
+            return;
+        }
+
+        var confirmed = state["mulliganConfirmedPlayerIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        if (activePlayerIds.Length > 0 && activePlayerIds.All(confirmed.Contains))
+        {
+            state["stage"] = "playing";
+            state["activePlayer"] = state["turnPlayerId"]?.GetValue<int?>() ?? activePlayerIds[0];
+        }
     }
 
     private static JsonObject ConfirmMulligan(JsonObject state, int playerId, IReadOnlyList<int> handIndexes)
@@ -334,12 +655,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             var hand = player["hand"]!.AsArray();
             var deck = player["deck"]!.AsArray();
-            var selected = handIndexes.Distinct().Where(i => i >= 0 && i < hand.Count).OrderDescending().ToArray();
+            var selected = handIndexes.Distinct().Where(i => i >= 0 && i < hand.Count).Order().ToArray();
             var redrawCount = selected.Length;
-            var returned = new List<JsonNode?>();
-            foreach (var handIndex in selected)
+            var returned = selected.Select(handIndex => hand[handIndex]?.DeepClone()).ToList();
+            foreach (var handIndex in selected.OrderDescending())
             {
-                returned.Add(hand[handIndex]?.DeepClone());
                 hand.RemoveAt(handIndex);
             }
 
@@ -350,10 +670,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 deck.RemoveAt(0);
             }
 
-            foreach (var card in returned)
-            {
-                deck.Add(card);
-            }
+            RecycleCardsToMainDeck(state, player, returned);
 
             return player;
         });
@@ -384,6 +701,20 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return state;
+    }
+
+    private static int? CurrentMulliganPlayerId(JsonObject state, IReadOnlyCollection<int> confirmedPlayerIds)
+    {
+        var order = state["turnOrder"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        foreach (var playerId in order)
+        {
+            if (!confirmedPlayerIds.Contains(playerId))
+            {
+                return playerId;
+            }
+        }
+
+        return null;
     }
 
     private static JsonObject EndCurrentTurn(JsonObject state, int playerId)
@@ -462,6 +793,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         else if (currentPhase == "beginning")
         {
+            state = KillTemporaryPermanents(state, playerId);
+            MarkTeamBeginningPhaseRestrictions(state, playerId);
             foreach (var battlefieldId in ControlledBattlefieldIds(state, playerId))
             {
                 state = ScoreBattlefield(state, new ScoreRequest(playerId, battlefieldId, ScoreSource.Hold));
@@ -474,7 +807,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         else if (currentPhase == "draw")
         {
-            state = DrawCards(state, playerId, 1);
+            if (!ShouldSkipFirstDraw(state, playerId))
+            {
+                state = DrawCards(state, playerId, 1);
+            }
+            state = ClearRunePools(state);
         }
         else if (currentPhase == "ending")
         {
@@ -491,6 +828,19 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return AddLog(state, $"{PlayerName(state, playerId)} advanced to {PhaseOrder[nextIndex]}.");
     }
 
+    private static bool ShouldSkipFirstDraw(JsonObject state, int playerId)
+    {
+        var mode = state["mode"]?.GetValue<string>() ?? "";
+        if (mode is not ("ffa-3" or "ffa-4" or "teams-2v2"))
+        {
+            return false;
+        }
+
+        var firstPlayerId = state["firstPlayerId"]?.GetValue<int>() ?? 0;
+        var firstTurnCompleted = state["firstTurnCompletedByPlayer"]?[playerId.ToString()]?.GetValue<bool>() ?? false;
+        return playerId == firstPlayerId && !firstTurnCompleted;
+    }
+
     private static JsonObject EndTurn(JsonObject state)
     {
         var order = state["turnOrder"]!.Deserialize<int[]>(JsonOptions) ?? [0, 1];
@@ -499,6 +849,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var next = order[(currentIndex + 1) % order.Length];
         state["firstTurnCompletedByPlayer"]![current.ToString()] = true;
         state["scoredBattlefieldIdsThisTurn"] = new JsonObject();
+        state["teamScoreBlockedBattlefieldIdsThisTurn"] = new JsonObject();
+        state["teamFinalPointExemptBattlefieldIdsThisTurn"] = new JsonObject();
         state["turnPlayerId"] = next;
         state["activePlayer"] = next;
         state["turnPhase"] = "awaken";
@@ -510,6 +862,16 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         state = AddLog(state, $"{PlayerName(state, next)} begins their turn.");
         return AutoAdvanceToDraw(state);
+    }
+
+    private static JsonObject ClearRunePools(JsonObject state)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            player["runePool"] = EmptyRunePool();
+        }
+
+        return state;
     }
 
     private static JsonObject ConquerBattlefield(JsonObject state, int playerId, string battlefieldId)
@@ -547,6 +909,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "already-scored-this-turn"));
         }
 
+        var scoringTeamId = TeamIdForPlayer(state, request.PlayerId);
+        if (BlockedBattlefieldIdsForTeam(state, scoringTeamId).Contains(request.BattlefieldId, StringComparer.OrdinalIgnoreCase))
+        {
+            return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "teammate-controlled-at-beginning"));
+        }
+
         var scoredNow = alreadyScored.Append(request.BattlefieldId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var scored = state["scoredBattlefieldIdsThisTurn"]!.AsObject();
         scored[request.PlayerId.ToString()] = ToArray(scoredNow);
@@ -554,12 +922,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
         if (request.Source == ScoreSource.Conquer)
         {
             var victoryScore = ScoreRules.VictoryScore(state);
-            var currentPoints = ReadPlayerPoints(state, request.PlayerId);
+            var currentPoints = TeamPoints(state, scoringTeamId);
             var allBattlefieldIds = state["battlefields"]!.AsArray()
                 .Select(node => node!["id"]?.GetValue<string>() ?? string.Empty)
                 .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Where(id => !FinalPointExemptBattlefieldIdsForTeam(state, scoringTeamId).Contains(id, StringComparer.OrdinalIgnoreCase))
                 .ToArray();
-            var hasScoredEveryBattlefield = allBattlefieldIds.All(id => scoredNow.Contains(id, StringComparer.OrdinalIgnoreCase));
+            var teamScoredNow = ScoredBattlefieldIdsForTeam(state, scoringTeamId).Append(request.BattlefieldId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var hasScoredEveryBattlefield = allBattlefieldIds.All(id => teamScoredNow.Contains(id, StringComparer.OrdinalIgnoreCase));
             if (currentPoints >= victoryScore - 1 && !hasScoredEveryBattlefield)
             {
                 state = DrawCards(state, request.PlayerId, 1);
@@ -568,7 +938,20 @@ public sealed class DefaultRulesEngine : IRulesEngine
             }
         }
 
-        var awardedPoints = ScoreRules.AwardedPoints(state, request);
+        var award = ApplyReplacementAbilities(state, "score-point", new JsonObject
+        {
+            ["playerId"] = request.PlayerId,
+            ["battlefieldId"] = request.BattlefieldId,
+            ["source"] = ScoreSourceValue(request.Source),
+            ["amount"] = ScoreRules.AwardedPoints(state, request)
+        });
+        state = award.State;
+        if (award.Prevented)
+        {
+            return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "replaced"));
+        }
+
+        var awardedPoints = award.Amount;
         if (awardedPoints <= 0)
         {
             return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "no-points-awarded"));
@@ -584,7 +967,55 @@ public sealed class DefaultRulesEngine : IRulesEngine
         state = AppendScoreOutcome(state, outcome);
         var verb = request.Source == ScoreSource.Hold ? "held" : "conquered";
         state = AddLog(state, $"{PlayerName(state, request.PlayerId)} {verb} {battlefield["name"]?.GetValue<string>() ?? request.BattlefieldId} for {awardedPoints} point{(awardedPoints == 1 ? string.Empty : "s")}.");
+        state = CollectTriggeredAbilities(state, "score-point", new JsonObject
+        {
+            ["playerId"] = request.PlayerId,
+            ["battlefieldId"] = request.BattlefieldId,
+            ["source"] = ScoreSourceValue(request.Source),
+            ["amount"] = awardedPoints
+        });
         return CheckWinners(state);
+    }
+
+    private static void MarkTeamBeginningPhaseRestrictions(JsonObject state, int playerId)
+    {
+        if (!IsTeamMode(state))
+        {
+            return;
+        }
+
+        var teamId = TeamIdForPlayer(state, playerId);
+        var teammateIds = TeammatePlayerIds(state, playerId);
+        if (teammateIds.Length == 0)
+        {
+            return;
+        }
+
+        var blocked = BlockedBattlefieldIdsForTeam(state, teamId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var exempt = FinalPointExemptBattlefieldIdsForTeam(state, teamId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var battlefieldId = battlefield["id"]?.GetValue<string>() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(battlefieldId))
+            {
+                continue;
+            }
+
+            if (battlefield["controllerId"]?.GetValue<int?>() is { } controllerId && teammateIds.Contains(controllerId))
+            {
+                blocked.Add(battlefieldId);
+            }
+
+            if (battlefield["units"]!.AsArray().Any(unit => teammateIds.Contains(unit!["ownerId"]?.GetValue<int>() ?? -1)))
+            {
+                exempt.Add(battlefieldId);
+            }
+        }
+
+        var blockedByTeam = state["teamScoreBlockedBattlefieldIdsThisTurn"]!.AsObject();
+        blockedByTeam[teamId.ToString()] = ToArray(blocked);
+        var exemptByTeam = state["teamFinalPointExemptBattlefieldIdsThisTurn"]!.AsObject();
+        exemptByTeam[teamId.ToString()] = ToArray(exempt);
     }
 
     private static string[] ControlledBattlefieldIds(JsonObject state, int playerId)
@@ -641,12 +1072,13 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private static JsonObject CheckWinners(JsonObject state)
     {
         var victoryScore = ScoreRules.VictoryScore(state);
-        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        foreach (var teamId in ActivePlayerIds(state).Select(id => TeamIdForPlayer(state, id)).Distinct())
         {
-            if ((player["points"]?.GetValue<int>() ?? 0) < victoryScore) continue;
+            if (TeamPoints(state, teamId) < victoryScore) continue;
             state["stage"] = "game-over";
-            state["winner"] = player["id"]!.GetValue<int>();
-            return AddLog(state, $"{player["name"]?.GetValue<string>() ?? "Player"} wins the match.");
+            state["winningTeamId"] = teamId;
+            state["winner"] = ActivePlayerIds(state).First(id => TeamIdForPlayer(state, id) == teamId);
+            return AddLog(state, IsTeamMode(state) ? $"Team {teamId} wins the match." : $"{PlayerName(state, state["winner"]!.GetValue<int>())} wins the match.");
         }
 
         return state;
@@ -681,12 +1113,36 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var deck = player["deck"]!.AsArray();
         if (deck.Count >= amount)
         {
-            DrawAvailable(player, amount);
+            var draw = ApplyReplacementAbilities(state, "draw-cards", new JsonObject
+            {
+                ["playerId"] = playerId,
+                ["amount"] = amount
+            });
+            state = draw.State;
+            if (draw.Prevented)
+            {
+                return state;
+            }
+
+            DrawAvailable(player, draw.Amount);
+            state = CollectTriggeredAbilities(state, "cards-drawn", new JsonObject
+            {
+                ["playerId"] = playerId,
+                ["amount"] = draw.Amount
+            });
             return state;
         }
 
         var drawn = deck.Count;
         DrawAvailable(player, drawn);
+        if (drawn > 0)
+        {
+            state = CollectTriggeredAbilities(state, "cards-drawn", new JsonObject
+            {
+                ["playerId"] = playerId,
+                ["amount"] = drawn
+            });
+        }
         RecycleTrashIntoMainDeck(state, player);
         var remaining = amount - drawn;
         state["pendingBurnOut"] = new JsonObject
@@ -737,6 +1193,16 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var recycled = trash.Select(card => card?.DeepClone()).Where(card => card is not null).ToList();
         trash.Clear();
+        RecycleCardsToMainDeck(state, player, recycled);
+    }
+
+    private static void RecycleCardsToMainDeck(JsonObject state, JsonObject player, IList<JsonNode?> recycled)
+    {
+        if (recycled.Count == 0)
+        {
+            return;
+        }
+
         ShuffleInPlace(state, recycled);
         var deck = player["deck"]!.AsArray();
         foreach (var card in recycled)
@@ -769,18 +1235,104 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static int[] OpponentPlayerIds(JsonObject state, int playerId)
     {
-        var players = state["players"]!.AsArray()
-            .Select(player => player!["id"]!.GetValue<int>())
-            .Where(id => id != playerId)
-            .ToArray();
+        return ActivePlayerIds(state).Where(id => id != playerId && !IsFriendlyPlayer(state, playerId, id)).ToArray();
+    }
+
+    private static int[] TeammatePlayerIds(JsonObject state, int playerId)
+    {
+        return ActivePlayerIds(state).Where(id => id != playerId && IsFriendlyPlayer(state, playerId, id)).ToArray();
+    }
+
+    private static int[] ActivePlayerIds(JsonObject state)
+    {
+        return state["turnOrder"]?.Deserialize<int[]>(JsonOptions)
+            ?? state["players"]!.AsArray().Select(player => player!["id"]!.GetValue<int>()).ToArray();
+    }
+
+    private static bool IsTeamMode(JsonObject state)
+    {
+        var activeTeams = ActivePlayerIds(state).Select(id => TeamIdForPlayer(state, id)).Distinct().Count();
+        return ActivePlayerIds(state).Length > activeTeams;
+    }
+
+    private static bool CanUsePriority(JsonObject state, int playerId, int priorityPlayerId)
+    {
+        return playerId == priorityPlayerId || IsTeammate(state, playerId, priorityPlayerId);
+    }
+
+    private static bool IsTeammate(JsonObject state, int playerId, int otherPlayerId)
+    {
+        return playerId != otherPlayerId && IsFriendlyPlayer(state, playerId, otherPlayerId);
+    }
+
+    private static bool IsFriendlyPlayer(JsonObject state, int playerId, int otherPlayerId)
+    {
+        return TeamIdForPlayer(state, playerId) == TeamIdForPlayer(state, otherPlayerId);
+    }
+
+    private static bool IsFriendlyUnit(JsonObject state, int playerId, JsonObject unit)
+    {
+        var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+        return ownerId >= 0 && IsFriendlyPlayer(state, playerId, ownerId);
+    }
+
+    private static bool IsEnemyUnit(JsonObject state, int playerId, JsonObject unit)
+    {
+        var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+        return ownerId >= 0 && !IsFriendlyPlayer(state, playerId, ownerId);
+    }
+
+    private static int TeamIdForPlayer(JsonObject state, int playerId)
+    {
         var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
-        if (teamIds.Length == 0 || playerId < 0 || playerId >= teamIds.Length)
+        return playerId >= 0 && playerId < teamIds.Length ? teamIds[playerId] : playerId;
+    }
+
+    private static int TeamPoints(JsonObject state, int teamId)
+    {
+        return state["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Where(player => TeamIdForPlayer(state, player["id"]!.GetValue<int>()) == teamId)
+            .Sum(player => player["points"]?.GetValue<int>() ?? 0);
+    }
+
+    private static string[] ScoredBattlefieldIdsForTeam(JsonObject state, int teamId)
+    {
+        return ActivePlayerIds(state)
+            .Where(id => TeamIdForPlayer(state, id) == teamId)
+            .SelectMany(id => ScoredBattlefieldIds(state, id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string[] BlockedBattlefieldIdsForTeam(JsonObject state, int teamId)
+    {
+        return state["teamScoreBlockedBattlefieldIdsThisTurn"]?[teamId.ToString()]?.Deserialize<string[]>(JsonOptions) ?? [];
+    }
+
+    private static string[] FinalPointExemptBattlefieldIdsForTeam(JsonObject state, int teamId)
+    {
+        return state["teamFinalPointExemptBattlefieldIdsThisTurn"]?[teamId.ToString()]?.Deserialize<string[]>(JsonOptions) ?? [];
+    }
+
+    private static bool AreTeammates(JsonObject state, int firstPlayerId, int secondPlayerId)
+    {
+        if (firstPlayerId == secondPlayerId)
         {
-            return players;
+            return true;
         }
 
-        var teamId = teamIds[playerId];
-        return players.Where(id => id < 0 || id >= teamIds.Length || teamIds[id] != teamId).ToArray();
+        var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        return firstPlayerId >= 0 &&
+            firstPlayerId < teamIds.Length &&
+            secondPlayerId >= 0 &&
+            secondPlayerId < teamIds.Length &&
+            teamIds[firstPlayerId] == teamIds[secondPlayerId];
+    }
+
+    private static int PlayerCount(JsonObject state)
+    {
+        return state["players"]!.AsArray().Count;
     }
 
     private static bool CanSummonChampion(JsonObject state, int playerId)
@@ -799,11 +1351,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return false;
         }
 
-        var cost = champion["cost"]?.GetValue<int>() ?? 0;
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energyNeeded = Math.Max(0, cost - energy);
-        return readyRunes.Count >= energyNeeded;
+        return CanPay(player, ReadCost(champion));
     }
 
     private static JsonObject? SummonChampion(JsonObject state, int playerId)
@@ -822,11 +1370,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        var cost = champion["cost"]?.GetValue<int>() ?? 0;
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energyNeeded = Math.Max(0, cost - energy);
-        if (readyRunes.Count < energyNeeded)
+        var cost = ReadCost(champion);
+        if (!CanPay(player, cost))
         {
             return null;
         }
@@ -834,31 +1379,36 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var unit = Clone(champion);
         unit["uid"] = $"unit-{state["nextUid"]?.GetValue<int>() ?? 1}";
         unit["ownerId"] = playerId;
+        unit["controllerId"] = playerId;
+        unit["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null, ["attachedToUid"] = null };
         unit["exhausted"] = true;
         unit["damage"] = 0;
         unit["attachedMight"] = 0;
         unit["attacker"] = false;
         unit["defender"] = false;
+        unit["isToken"] = false;
+        unit["isFaceDown"] = false;
+        unit["rulesTextActive"] = true;
+        unit["attachedCards"] = new JsonArray();
+        unit["topCardId"] = unit["id"]?.GetValue<string>() ?? champion["id"]?.GetValue<string>() ?? string.Empty;
 
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
 
         state = UpdatePlayer(state, playerId, p =>
         {
-            var ready = p["runes"]!["ready"]!.AsArray();
-            var exhausted = p["runes"]!["exhausted"]!.AsArray();
-            for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
-            {
-                exhausted.Add(ready[0]?.DeepClone());
-                ready.RemoveAt(0);
-            }
-
-            p["runePool"]!["energy"] = energy + energyNeeded - cost;
+            PayCost(p, cost);
             p["championSummoned"] = true;
             p["base"]!.AsArray().Add(unit);
             return p;
         });
 
-        return AddLog(state, $"{PlayerName(state, playerId)} summoned {champion["name"]?.GetValue<string>() ?? "their champion"} to their base.");
+        state = AddLog(state, $"{PlayerName(state, playerId)} summoned {champion["name"]?.GetValue<string>() ?? "their champion"} to their base.");
+        return CollectTriggeredAbilities(state, "unit-entered", new JsonObject
+        {
+            ["playerId"] = playerId,
+            ["sourceUid"] = unit["uid"]?.GetValue<string>(),
+            ["zone"] = "base"
+        });
     }
 
     private static JsonObject? PlayCard(JsonObject state, int playerId, int? handIndex, string? targetUnitId, string? targetLaneId)
@@ -886,12 +1436,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        if (!TargetsAreValid(state, playerId, card, targetUnitId, targetLaneId))
+        var targetSelection = ValidateTargetSelection(state, playerId, card, targetUnitId, targetLaneId);
+        if (!targetSelection.IsValid)
         {
             return null;
         }
 
-        var cost = card["cost"]?.GetValue<int>() ?? 0;
+        var cost = ReadCost(card);
+        var additionalEnergyCost = AdditionalTargetingCost(state, playerId, card, targetUnitId, targetLaneId);
+        if (additionalEnergyCost > 0)
+        {
+            cost = cost with { Energy = cost.Energy + additionalEnergyCost };
+        }
         if (!CanPay(player, cost))
         {
             return null;
@@ -904,10 +1460,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return p;
         });
 
-        return FinalizePendingCardPlay(state, playerId, card, targetUnitId, targetLaneId);
+        return FinalizePendingCardPlay(state, playerId, card, targetSelection);
     }
 
-    private static JsonObject FinalizePendingCardPlay(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
+    private static JsonObject FinalizePendingCardPlay(JsonObject state, int playerId, JsonObject card, TargetSelection targetSelection)
     {
         var kind = card["kind"]?.GetValue<string>() ?? string.Empty;
         if (kind == "gear")
@@ -915,11 +1471,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             state = PutResolvedGearIntoBase(state, playerId, card);
             if (state["effectStack"]!.AsArray().Count > 0)
             {
-                OpenChainWindow(state, playerId, playerId);
+                OpenChainWindow(state, playerId, playerId, ChainItemSourceValue(ChainItemSource.AddCreated));
             }
             else
             {
-                CloseChainWindow(state, playerId);
+                CloseChainWindow(state, playerId, passesFocusOnClose: false);
             }
 
             return AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a gear"} to base.");
@@ -934,12 +1490,21 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["kind"] = kind,
             ["playerId"] = playerId,
             ["effect"] = card["effect"]?.DeepClone(),
-            ["targetUnitId"] = targetUnitId,
-            ["targetLaneId"] = targetLaneId
+            ["targetUnitId"] = targetSelection.LegacyTargetUnitId,
+            ["targetLaneId"] = targetSelection.LegacyTargetLaneId,
+            ["targets"] = ToArray(targetSelection.Targets.Select(TargetToJson)),
+            ["status"] = ChainItemStatusValue(ChainItemStatus.Pending),
+            ["source"] = ChainItemSourceValue(ChainItemSource.PlayedCard)
         };
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
         state["effectStack"]!.AsArray().Insert(0, stackItem);
-        OpenChainWindow(state, playerId, playerId);
+        state = CollectTriggeredAbilities(state, "card-played", new JsonObject
+        {
+            ["playerId"] = playerId,
+            ["cardId"] = stackItem["cardId"]?.GetValue<string>(),
+            ["kind"] = kind
+        });
+        OpenChainWindow(state, playerId, playerId, ChainItemSourceValue(ChainItemSource.PlayedCard));
         return AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a spell"} to the chain.");
     }
 
@@ -971,12 +1536,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
             if (stack.Count > 0)
             {
                 var nextPriority = stack[0]!["playerId"]?.GetValue<int>() ?? playerId;
-                OpenChainWindow(state, nextPriority, nextPriority);
+                var nextSource = stack[0]!["source"]?.GetValue<string>() ?? ChainItemSourceValue(ChainItemSource.PlayedCard);
+                OpenChainWindow(state, nextPriority, nextPriority, nextSource);
             }
             else
             {
                 var startedBy = chainWindow["startedByPlayerId"]?.GetValue<int>() ?? playerId;
-                CloseChainWindow(state, startedBy);
+                var passesFocusOnClose = chainWindow["passesFocusOnClose"]?.GetValue<bool>() ?? true;
+                CloseChainWindow(state, startedBy, passesFocusOnClose);
             }
         }
         else
@@ -1023,28 +1590,48 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
-    private static void OpenChainWindow(JsonObject state, int priorityPlayerId, int startedByPlayerId)
+    private static void OpenChainWindow(JsonObject state, int priorityPlayerId, int startedByPlayerId, string source)
     {
         state["chainWindow"] = new JsonObject
         {
             ["priorityPlayerId"] = priorityPlayerId,
             ["startedByPlayerId"] = startedByPlayerId,
+            ["source"] = source,
+            ["passesFocusOnClose"] = source == ChainItemSourceValue(ChainItemSource.PlayedCard),
             ["passedByPlayer"] = new JsonObject()
         };
         state["priorityPlayerId"] = priorityPlayerId;
         state["activePlayer"] = priorityPlayerId;
     }
 
-    private static void CloseChainWindow(JsonObject state, int startedByPlayerId)
+    private static void CloseChainWindow(JsonObject state, int startedByPlayerId, bool passesFocusOnClose)
     {
         state["chainWindow"] = null;
         state["priorityPlayerId"] = null;
-        if (state["activeShowdown"] is not null && !CombatDamageRequired(state))
+        if (passesFocusOnClose && state["activeShowdown"] is not null && !CombatDamageRequired(state))
         {
+            if (state["activeShowdown"]?["kind"]?.GetValue<string>() == "combat" && state["activeCombat"] is JsonObject activeCombat)
+            {
+                var attackerPlayerId = activeCombat["attackerPlayerId"]?.GetValue<int>() ?? startedByPlayerId;
+                state["focusPlayerId"] = attackerPlayerId;
+                state["activePlayer"] = attackerPlayerId;
+                state["hasPassedFocusByPlayer"] = new JsonObject();
+                return;
+            }
+
             var nextFocus = NextPlayerId(state, startedByPlayerId);
             state["focusPlayerId"] = nextFocus;
             state["activePlayer"] = nextFocus;
             state["hasPassedFocusByPlayer"] = new JsonObject();
+        }
+        else if (state["activeShowdown"] is not null && !CombatDamageRequired(state))
+        {
+            var focusPlayerId = state["focusPlayerId"]?.GetValue<int?>()
+                ?? state["activePlayer"]?.GetValue<int?>()
+                ?? state["turnPlayerId"]?.GetValue<int>()
+                ?? 0;
+            state["focusPlayerId"] = focusPlayerId;
+            state["activePlayer"] = focusPlayerId;
         }
         else
         {
@@ -1067,6 +1654,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var item = stack[0]!.AsObject();
+        item["status"] = ChainItemStatusValue(ChainItemStatus.Finalized);
         stack.RemoveAt(0);
 
         var playerId = item["playerId"]?.GetValue<int>() ?? 0;
@@ -1075,13 +1663,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var amount = effect?["amount"]?.GetValue<int>() ?? 0;
         var targetUnitId = item["targetUnitId"]?.GetValue<string>();
         var targetLaneId = item["targetLaneId"]?.GetValue<string>();
+        var targets = ReadStackTargets(item, targetUnitId, targetLaneId);
 
         state = effectType switch
         {
             "draw" => DrawCards(state, playerId, amount),
-            "damage" => ApplyDamage(state, playerId, amount, targetUnitId, targetLaneId),
-            "buff" => ApplyUnitMod(state, targetUnitId, unit => { unit["attachedMight"] = (unit["attachedMight"]?.GetValue<int>() ?? 0) + amount; return unit; }),
-            "rally" => ApplyUnitMod(state, targetUnitId, unit => { unit["exhausted"] = false; return unit; }),
+            "damage" => ApplyDamage(state, playerId, amount, targets),
+            "buff" => ApplyUnitMod(state, playerId, targets, unit => { unit["attachedMight"] = (unit["attachedMight"]?.GetValue<int>() ?? 0) + amount; return unit; }),
+            "rally" => ApplyUnitMod(state, playerId, targets, unit => { unit["exhausted"] = false; return unit; }),
             _ => state
         };
 
@@ -1108,9 +1697,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var gear = Clone(card);
         gear["uid"] = $"gear-{state["nextUid"]?.GetValue<int>() ?? 1}";
         gear["ownerId"] = playerId;
-        gear["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null };
+        gear["controllerId"] = playerId;
+        gear["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null, ["attachedToUid"] = null };
         gear["exhausted"] = false;
         gear["attachedUnitId"] = null;
+        gear["isToken"] = false;
+        gear["isFaceDown"] = false;
+        gear["rulesTextActive"] = true;
+        gear["attachedCards"] = new JsonArray();
+        gear["topCardId"] = gear["id"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty;
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
 
         return UpdatePlayer(state, playerId, player =>
@@ -1120,7 +1715,59 @@ public sealed class DefaultRulesEngine : IRulesEngine
         });
     }
 
-    private static JsonObject? PlayUnit(JsonObject state, int playerId, int? handIndex, string? battlefieldId)
+    private static JsonObject? HideCard(JsonObject state, int playerId, int? handIndex, string? battlefieldId)
+    {
+        if (handIndex is null || string.IsNullOrWhiteSpace(battlefieldId))
+        {
+            return null;
+        }
+
+        var player = FindPlayer(state, playerId);
+        var battlefield = FindBattlefield(state, battlefieldId);
+        if (player is null || battlefield is null || battlefield["controllerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        var hiddenCards = battlefield["hiddenCards"] as JsonArray ?? new JsonArray();
+        battlefield["hiddenCards"] = hiddenCards;
+        if (hiddenCards.Any(node => node?["ownerId"]?.GetValue<int>() == playerId))
+        {
+            return null;
+        }
+
+        var hand = player["hand"]!.AsArray();
+        if (handIndex.Value < 0 || handIndex.Value >= hand.Count)
+        {
+            return null;
+        }
+
+        var card = hand[handIndex.Value]!.AsObject();
+        if (!HasKeyword(card, KeywordKind.Hidden) || !CanPay(player, 1))
+        {
+            return null;
+        }
+
+        state = UpdatePlayer(state, playerId, p =>
+        {
+            p["hand"]!.AsArray().RemoveAt(handIndex.Value);
+            PayCost(p, 1);
+            return p;
+        });
+
+        var hiddenCard = Clone(card);
+        hiddenCard["uid"] = $"hidden-{state["nextUid"]?.GetValue<int>() ?? 1}";
+        hiddenCard["ownerId"] = playerId;
+        hiddenCard["hiddenAtBattlefieldId"] = battlefieldId;
+        hiddenCard["hiddenTurnNumber"] = state["turnNumber"]?.GetValue<int>() ?? 1;
+        hiddenCard["facedown"] = true;
+        state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+        hiddenCards.Add(hiddenCard);
+
+        return AddLog(state, $"{PlayerName(state, playerId)} hid a card at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+    }
+
+    private static JsonObject? PlayUnit(JsonObject state, int playerId, int? handIndex, string? battlefieldId, bool accelerate)
     {
         if (handIndex is null)
         {
@@ -1142,7 +1789,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var card = hand[handIndex.Value]!.AsObject();
-        if (card["kind"]?.GetValue<string>() != "unit")
+        if (!IsPlayableUnitCard(card))
         {
             return null;
         }
@@ -1159,11 +1806,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
             }
         }
 
-        var cost = card["cost"]?.GetValue<int>() ?? 0;
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energyNeeded = Math.Max(0, cost - energy);
-        if (readyRunes.Count < energyNeeded)
+        var cost = ReadCost(card);
+        if (accelerate && !HasKeyword(card, KeywordKind.Accelerate))
+        {
+            return null;
+        }
+
+        if (accelerate)
+        {
+            cost = cost with { Energy = cost.Energy + 2 };
+        }
+
+        if (!CanPay(player, cost))
         {
             return null;
         }
@@ -1171,27 +1825,25 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var unit = Clone(card);
         unit["uid"] = $"unit-{state["nextUid"]?.GetValue<int>() ?? 1}";
         unit["ownerId"] = playerId;
-        unit["exhausted"] = true;
+        unit["controllerId"] = playerId;
+        unit["location"] = new JsonObject { ["type"] = battlefield is null ? "base" : "battlefield", ["battlefieldId"] = battlefield?["id"]?.GetValue<string>(), ["attachedToUid"] = null };
+        unit["exhausted"] = !accelerate;
         unit["damage"] = 0;
         unit["attachedMight"] = 0;
         unit["attacker"] = false;
         unit["defender"] = false;
+        unit["isToken"] = false;
+        unit["isFaceDown"] = false;
+        unit["rulesTextActive"] = true;
+        unit["attachedCards"] = new JsonArray();
+        unit["topCardId"] = unit["id"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty;
 
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
 
         state = UpdatePlayer(state, playerId, p =>
         {
             p["hand"]!.AsArray().RemoveAt(handIndex.Value);
-
-            var ready = p["runes"]!["ready"]!.AsArray();
-            var exhausted = p["runes"]!["exhausted"]!.AsArray();
-            for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
-            {
-                exhausted.Add(ready[0]?.DeepClone());
-                ready.RemoveAt(0);
-            }
-
-            p["runePool"]!["energy"] = energy + energyNeeded - cost;
+            PayCost(p, cost);
             return p;
         });
 
@@ -1209,60 +1861,355 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var destinationLabel = battlefield is null ? "their base" : battlefield["name"]?.GetValue<string>() ?? "a battlefield";
-        return AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a unit"} to {destinationLabel}.");
+        state = AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a unit"} to {destinationLabel}.");
+        return CollectTriggeredAbilities(state, "unit-entered", new JsonObject
+        {
+            ["playerId"] = playerId,
+            ["sourceUid"] = unit["uid"]?.GetValue<string>(),
+            ["zone"] = battlefield is null ? "base" : "battlefield",
+            ["battlefieldId"] = battlefield?["id"]?.GetValue<string>()
+        });
     }
 
-    private static JsonObject? MoveUnit(JsonObject state, int playerId, string? unitId, string? battlefieldId)
+    private static JsonObject? CreateToken(JsonObject state, int playerId, string? cardId, string? name, string? battlefieldId)
     {
-        if (string.IsNullOrWhiteSpace(unitId) || string.IsNullOrWhiteSpace(battlefieldId))
+        if (FindPlayer(state, playerId) is null)
         {
             return null;
         }
 
-        var player = state["players"]!.AsArray()
-            .Select(node => node!.AsObject())
-            .FirstOrDefault(candidate => candidate["id"]?.GetValue<int>() == playerId);
+        JsonObject? battlefield = null;
+        if (!string.IsNullOrWhiteSpace(battlefieldId))
+        {
+            battlefield = FindBattlefield(state, battlefieldId);
+            if (battlefield is null)
+            {
+                return null;
+            }
+        }
+
+        var nextUid = state["nextUid"]?.GetValue<int>() ?? 1;
+        var tokenId = string.IsNullOrWhiteSpace(cardId) ? "token-unit" : cardId;
+        var token = new JsonObject
+        {
+            ["id"] = $"{tokenId}-token-{nextUid}",
+            ["catalogId"] = tokenId,
+            ["name"] = string.IsNullOrWhiteSpace(name) ? DisplayName(tokenId) : name,
+            ["kind"] = "unit",
+            ["tags"] = new JsonArray("token"),
+            ["domain"] = "Fury",
+            ["domains"] = new JsonArray("Fury"),
+            ["cost"] = 0,
+            ["might"] = 1,
+            ["text"] = string.Empty,
+            ["image"] = "*",
+            ["cardType"] = "Unit",
+            ["supertype"] = "Token",
+            ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 },
+            ["uid"] = $"token-{nextUid}",
+            ["ownerId"] = playerId,
+            ["controllerId"] = playerId,
+            ["location"] = new JsonObject { ["type"] = battlefield is null ? "base" : "battlefield", ["battlefieldId"] = battlefield?["id"]?.GetValue<string>(), ["attachedToUid"] = null },
+            ["exhausted"] = false,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["attacker"] = false,
+            ["defender"] = false,
+            ["isToken"] = true,
+            ["isFaceDown"] = false,
+            ["rulesTextActive"] = true,
+            ["attachedCards"] = new JsonArray(),
+            ["topCardId"] = null
+        };
+        state["nextUid"] = nextUid + 1;
+
+        if (battlefield is null)
+        {
+            state = UpdatePlayer(state, playerId, player =>
+            {
+                player["base"]!.AsArray().Add(token);
+                return player;
+            });
+        }
+        else
+        {
+            battlefield["units"]!.AsArray().Add(token);
+        }
+
+        return AddLog(state, $"{PlayerName(state, playerId)} created a token.");
+    }
+
+    private static JsonObject? AttachCard(JsonObject state, int playerId, int? handIndex, string? targetUnitId)
+    {
+        if (handIndex is null || string.IsNullOrWhiteSpace(targetUnitId))
+        {
+            return null;
+        }
+
+        var player = FindPlayer(state, playerId);
+        var target = FindUnit(state, targetUnitId);
+        if (player is null || target is null)
+        {
+            return null;
+        }
+
+        var hand = player["hand"]!.AsArray();
+        if (handIndex.Value < 0 || handIndex.Value >= hand.Count)
+        {
+            return null;
+        }
+
+        var card = hand[handIndex.Value]!.AsObject();
+        var attached = Clone(card);
+        var uid = $"attached-{state["nextUid"]?.GetValue<int>() ?? 1}";
+        attached["uid"] = uid;
+        attached["ownerId"] = playerId;
+        attached["controllerId"] = playerId;
+        attached["location"] = new JsonObject { ["type"] = "attached", ["battlefieldId"] = null, ["attachedToUid"] = targetUnitId };
+        attached["exhausted"] = false;
+        attached["attachedUnitId"] = targetUnitId;
+        attached["isToken"] = false;
+        attached["isFaceDown"] = false;
+        attached["rulesTextActive"] = true;
+        attached["attachedCards"] = new JsonArray();
+        attached["topCardId"] = attached["id"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty;
+        state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+
+        hand.RemoveAt(handIndex.Value);
+
+        var attachedCards = target["attachedCards"] as JsonArray ?? new JsonArray();
+        attachedCards.Add(attached);
+        target["attachedCards"] = attachedCards;
+        RecomputeTopCard(target);
+        return AddLog(state, $"{PlayerName(state, playerId)} attached {card["name"]?.GetValue<string>() ?? "a card"}.");
+    }
+
+    private static JsonObject? DetachCard(JsonObject state, int playerId, string? attachedCardUid)
+    {
+        if (string.IsNullOrWhiteSpace(attachedCardUid))
+        {
+            return null;
+        }
+
+        var detached = RemoveAttachedCard(state, attachedCardUid);
+        if (detached is null || detached["ownerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        detached["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null, ["attachedToUid"] = null };
+        detached["attachedUnitId"] = null;
+        state = PutObjectInOwnerZone(state, detached, "baseGear");
+        return AddLog(state, $"{PlayerName(state, playerId)} detached a card.");
+    }
+
+    private static JsonObject? BanishObject(JsonObject state, int playerId, string? objectUid)
+    {
+        if (string.IsNullOrWhiteSpace(objectUid))
+        {
+            return null;
+        }
+
+        var removed = RemoveObjectByUid(state, objectUid);
+        if (removed is null || removed["controllerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        state = MoveObjectAndAttachmentsToOwnerZone(state, removed, "banished");
+        return AddLog(state, $"{PlayerName(state, playerId)} banished an object.");
+    }
+
+    private static JsonObject? SetFaceDown(JsonObject state, int playerId, string? objectUid, bool faceDown)
+    {
+        if (string.IsNullOrWhiteSpace(objectUid))
+        {
+            return null;
+        }
+
+        var obj = FindObjectByUid(state, objectUid);
+        if (obj is null || obj["controllerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        obj["isFaceDown"] = faceDown;
+        obj["rulesTextActive"] = !faceDown;
+        return AddLog(state, $"{PlayerName(state, playerId)} {(faceDown ? "turned an object facedown" : "turned an object faceup")}.");
+    }
+
+    private static JsonObject? MoveUnits(JsonObject state, int playerId, IReadOnlyList<string> unitIds, string? battlefieldId, string? destination)
+    {
+        if (unitIds.Count == 0 || unitIds.Distinct(StringComparer.Ordinal).Count() != unitIds.Count)
+        {
+            return null;
+        }
+
+        var player = FindPlayer(state, playerId);
         if (player is null)
         {
             return null;
         }
 
-        var base_ = player["base"]!.AsArray();
-        var unitNode = base_.FirstOrDefault(node => node!["uid"]?.GetValue<string>() == unitId);
-        if (unitNode is null)
+        var movingUnits = unitIds.Select(unitId => FindMovableUnit(state, playerId, unitId)).ToArray();
+        if (movingUnits.Any(unit => unit is null))
         {
             return null;
         }
 
-        var unit = unitNode.AsObject();
-        if (unit["ownerId"]?.GetValue<int>() != playerId || unit["exhausted"]?.GetValue<bool>() != false)
+        var moves = movingUnits.Select(unit => unit!).ToArray();
+        if (moves.Any(move => move.Unit["ownerId"]?.GetValue<int>() != playerId || move.Unit["exhausted"]?.GetValue<bool>() != false))
         {
             return null;
         }
 
-        var battlefield = state["battlefields"]!.AsArray()
+        if (IsBaseDestination(destination, battlefieldId))
+        {
+            if (moves.Any(move => move.Origin == MoveOrigin.Base))
+            {
+                return null;
+            }
+
+            foreach (var move in moves)
+            {
+                RemoveUnit(move.Source, move.UnitId);
+                var moved = Clone(move.Unit);
+                moved["exhausted"] = true;
+                player["base"]!.AsArray().Add(moved);
+                state = CollectTriggeredAbilities(state, "unit-moved", new JsonObject
+                {
+                    ["playerId"] = playerId,
+                    ["sourceUid"] = moved["uid"]?.GetValue<string>(),
+                    ["zone"] = "base",
+                    ["battlefieldId"] = null
+                });
+            }
+
+            var unitLabel = moves.Length == 1 ? moves[0].Unit["name"]?.GetValue<string>() ?? "a unit" : $"{moves.Length} units";
+            return AddLog(state, $"{PlayerName(state, playerId)} moved {unitLabel} to their base.");
+        }
+
+        if (string.IsNullOrWhiteSpace(battlefieldId) || moves.Any(move => move.Origin == MoveOrigin.Battlefield && !HasKeyword(move.Unit, KeywordKind.Ganking)))
+        {
+            return null;
+        }
+
+        var battlefield = FindBattlefield(state, battlefieldId);
+        if (battlefield is null || !CanMoveToBattlefield(state, playerId, battlefield))
+        {
+            return null;
+        }
+
+        foreach (var move in moves)
+        {
+            RemoveUnit(move.Source, move.UnitId);
+            var moved = Clone(move.Unit);
+            moved["exhausted"] = true;
+            battlefield["units"]!.AsArray().Add(moved);
+            state = CollectTriggeredAbilities(state, "unit-moved", new JsonObject
+            {
+                ["playerId"] = playerId,
+                ["sourceUid"] = moved["uid"]?.GetValue<string>(),
+                ["zone"] = "battlefield",
+                ["battlefieldId"] = battlefieldId
+            });
+        }
+
+        var movedLabel = moves.Length == 1 ? moves[0].Unit["name"]?.GetValue<string>() ?? "a unit" : $"{moves.Length} units";
+        state = AddLog(state, $"{PlayerName(state, playerId)} moved {movedLabel} to {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+        return UpdateBattlefieldAfterMovement(state, playerId, battlefield);
+    }
+
+    private static bool IsBaseDestination(string? destination, string? battlefieldId)
+    {
+        return string.Equals(destination, "base", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(battlefieldId, "base", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static MovableUnit? FindMovableUnit(JsonObject state, int playerId, string unitId)
+    {
+        var player = FindPlayer(state, playerId);
+        if (player is null)
+        {
+            return null;
+        }
+
+        var baseUnits = player["base"]!.AsArray();
+        var baseUnit = baseUnits
             .Select(node => node!.AsObject())
-            .FirstOrDefault(candidate => candidate["id"]?.GetValue<string>() == battlefieldId);
-        if (battlefield is null)
+            .FirstOrDefault(unit => string.Equals(unit["uid"]?.GetValue<string>(), unitId, StringComparison.Ordinal));
+        if (baseUnit is not null)
         {
-            return null;
+            return new MovableUnit(unitId, baseUnit, baseUnits, MoveOrigin.Base);
         }
 
-        base_.Remove(unitNode);
-        var moved = Clone(unit);
-        moved["exhausted"] = true;
-        battlefield["units"]!.AsArray().Add(moved);
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var units = battlefield["units"]!.AsArray();
+            var unit = units
+                .Select(node => node!.AsObject())
+                .FirstOrDefault(candidate =>
+                    string.Equals(candidate["uid"]?.GetValue<string>(), unitId, StringComparison.Ordinal) &&
+                    candidate["ownerId"]?.GetValue<int>() == playerId);
+            if (unit is not null)
+            {
+                return new MovableUnit(unitId, unit, units, MoveOrigin.Battlefield);
+            }
+        }
 
-        state = AddLog(state, $"{PlayerName(state, playerId)} moved {unit["name"]?.GetValue<string>() ?? "a unit"} to {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+        return null;
+    }
 
-        var owners = battlefield["units"]!.AsArray()
-            .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
-            .Where(owner => owner is not null)
-            .Select(owner => owner!.Value)
+    private static void RemoveUnit(JsonArray source, string unitId)
+    {
+        for (var index = 0; index < source.Count; index++)
+        {
+            if (string.Equals(source[index]?["uid"]?.GetValue<string>(), unitId, StringComparison.Ordinal))
+            {
+                source.RemoveAt(index);
+                return;
+            }
+        }
+    }
+
+    private static bool CanMoveToBattlefield(JsonObject state, int playerId, JsonObject battlefield)
+    {
+        var controllerId = battlefield["controllerId"]?.GetValue<int?>();
+        if (controllerId is not null && controllerId.Value != playerId && AreTeammates(state, playerId, controllerId.Value))
+        {
+            return false;
+        }
+
+        var otherOwners = UnitOwnerIds(battlefield)
+            .Where(ownerId => ownerId != playerId)
             .Distinct()
             .ToArray();
+        if (otherOwners.Length >= 2)
+        {
+            return false;
+        }
 
-        if (owners.Length == 2)
+        if (PlayerCount(state) <= 2 || !BattlefieldHasStagedOrActiveCombat(state, battlefield))
+        {
+            return true;
+        }
+
+        return IsCombatParticipantAtBattlefield(state, playerId, battlefield) ||
+            battlefield["units"]!.AsArray().Any(unit => unit!["ownerId"]?.GetValue<int>() == playerId);
+    }
+
+    private static JsonObject UpdateBattlefieldAfterMovement(JsonObject state, int playerId, JsonObject battlefield)
+    {
+        var teams = battlefield["units"]!.AsArray()
+            .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
+            .Where(owner => owner is not null)
+            .Select(owner => TeamIdForPlayer(state, owner!.Value))
+            .Distinct()
+            .ToArray();
+        var movingTeamId = TeamIdForPlayer(state, playerId);
+        var opposingTeams = teams.Where(teamId => teamId != movingTeamId).ToArray();
+
+        if (opposingTeams.Length == 1)
         {
             battlefield["controllerId"] = null;
             battlefield["stagedCombat"] = true;
@@ -1271,7 +2218,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AddLog(state, $"{PlayerName(state, playerId)} contested {battlefield["name"]?.GetValue<string>() ?? "a battlefield"} and staged combat.");
         }
 
-        if (owners.Length == 1)
+        if (opposingTeams.Length == 0)
         {
             battlefield["controllerId"] = playerId;
             battlefield["contestedByPlayerId"] = null;
@@ -1282,6 +2229,42 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
+    private static int[] UnitOwnerIds(JsonObject battlefield)
+    {
+        return battlefield["units"]!.AsArray()
+            .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
+            .Where(owner => owner is not null)
+            .Select(owner => owner!.Value)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static bool BattlefieldHasStagedOrActiveCombat(JsonObject state, JsonObject battlefield)
+    {
+        var battlefieldId = battlefield["id"]?.GetValue<string>() ?? string.Empty;
+        if (battlefield["stagedCombat"]?.GetValue<bool>() == true)
+        {
+            return true;
+        }
+
+        return state["activeCombat"] is JsonObject activeCombat &&
+            string.Equals(activeCombat["battlefieldId"]?.GetValue<string>(), battlefieldId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCombatParticipantAtBattlefield(JsonObject state, int playerId, JsonObject battlefield)
+    {
+        var battlefieldId = battlefield["id"]?.GetValue<string>() ?? string.Empty;
+        if (state["activeCombat"] is JsonObject activeCombat &&
+            string.Equals(activeCombat["battlefieldId"]?.GetValue<string>(), battlefieldId, StringComparison.OrdinalIgnoreCase) &&
+            (activeCombat["attackerPlayerId"]?.GetValue<int>() == playerId || activeCombat["defenderPlayerId"]?.GetValue<int>() == playerId))
+        {
+            return true;
+        }
+
+        return battlefield["contestedByPlayerId"]?.GetValue<int?>() == playerId ||
+            UnitOwnerIds(battlefield).Contains(playerId);
+    }
+
     private static JsonObject RunFeprUntilChoiceRequired(JsonObject state)
     {
         return RunOutstandingTasks(state);
@@ -1290,6 +2273,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private static JsonObject RunOutstandingTasks(JsonObject state)
     {
         if (state["stage"]?.GetValue<string>() != "playing" || state["chainWindow"] is not null || PendingBurnOut(state) is not null)
+        {
+            return state;
+        }
+
+        state = RunAbilityQueues(state);
+        if (state["chainWindow"] is not null)
         {
             return state;
         }
@@ -1325,6 +2314,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 .Select(owner => owner!.Value)
                 .Distinct()
                 .ToArray();
+            var teams = owners.Select(owner => TeamIdForPlayer(state, owner)).Distinct().ToArray();
             var contestedBy = battlefield["contestedByPlayerId"]?.GetValue<int?>();
 
             if (owners.Length == 0)
@@ -1341,7 +2331,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 continue;
             }
 
-            if (owners.Length == 2)
+            if (teams.Length == 2)
             {
                 battlefield["controllerId"] = null;
                 battlefield["stagedShowdown"] = true;
@@ -1402,18 +2392,25 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ?? 0;
         var defenderPlayerId = battlefield["units"]!.AsArray()
             .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
-            .Where(owner => owner is not null && owner.Value != attackerPlayerId)
+            .Where(owner => owner is not null && !IsFriendlyPlayer(state, attackerPlayerId, owner.Value))
             .Select(owner => owner!.Value)
             .Distinct()
+            .Cast<int?>()
             .FirstOrDefault();
+        if (defenderPlayerId is null)
+        {
+            battlefield["stagedCombat"] = false;
+            battlefield["stagedShowdown"] = false;
+            return state;
+        }
 
         battlefield["stagedShowdown"] = false;
         battlefield["stagedCombat"] = false;
         foreach (var unit in battlefield["units"]!.AsArray().Select(node => node!.AsObject()))
         {
             var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
-            unit["attacker"] = ownerId == attackerPlayerId;
-            unit["defender"] = ownerId == defenderPlayerId;
+            unit["attacker"] = IsFriendlyPlayer(state, attackerPlayerId, ownerId);
+            unit["defender"] = IsFriendlyPlayer(state, defenderPlayerId.Value, ownerId);
         }
 
         state["activeShowdown"] = new JsonObject
@@ -1425,14 +2422,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             ["battlefieldId"] = battlefieldId,
             ["attackerPlayerId"] = attackerPlayerId,
-            ["defenderPlayerId"] = defenderPlayerId,
+            ["defenderPlayerId"] = defenderPlayerId.Value,
             ["damageStep"] = false
         };
         state["focusPlayerId"] = attackerPlayerId;
         state["priorityPlayerId"] = attackerPlayerId;
         state["activePlayer"] = attackerPlayerId;
         state["hasPassedFocusByPlayer"] = new JsonObject();
-        return AddLog(state, $"{PlayerName(state, attackerPlayerId)} challenges {PlayerName(state, defenderPlayerId)} to a combat showdown at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+        state = QueueCombatDesignationTriggers(state, battlefield, attackerPlayerId, defenderPlayerId.Value);
+        return AddLog(state, $"{PlayerName(state, attackerPlayerId)} challenges {PlayerName(state, defenderPlayerId.Value)} to a combat showdown at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
     }
 
     private static JsonObject CloseShowdown(JsonObject state)
@@ -1517,20 +2515,20 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var units = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
-        var unitOwners = units.Select(unit => unit["ownerId"]?.GetValue<int>())
+        var unitTeams = units.Select(unit => unit["ownerId"]?.GetValue<int>())
             .Where(owner => owner is not null)
-            .Select(owner => owner!.Value)
+            .Select(owner => TeamIdForPlayer(state, owner!.Value))
             .Distinct()
             .ToArray();
-        if (unitOwners.Length != 2 ||
-            !unitOwners.Contains(attackerPlayerId.Value) ||
-            !unitOwners.Contains(defenderPlayerId.Value))
+        if (unitTeams.Length != 2 ||
+            !unitTeams.Contains(TeamIdForPlayer(state, attackerPlayerId.Value)) ||
+            !unitTeams.Contains(TeamIdForPlayer(state, defenderPlayerId.Value)))
         {
             return null;
         }
 
-        var attackers = units.Where(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value).ToArray();
-        var defenders = units.Where(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value).ToArray();
+        var attackers = units.Where(unit => IsFriendlyUnit(state, attackerPlayerId.Value, unit)).ToArray();
+        var defenders = units.Where(unit => IsFriendlyUnit(state, defenderPlayerId.Value, unit)).ToArray();
         if (attackers.Length == 0 || defenders.Length == 0)
         {
             return null;
@@ -1554,7 +2552,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var ownUnits = isAttacker ? attackers : defenders;
         var opposingUnits = isAttacker ? defenders : attackers;
-        if (!ValidateDamageAssignments(ownUnits, opposingUnits, ownAssignments))
+        if (!ValidateDamageAssignments(state, ownUnits, opposingUnits, ownAssignments))
         {
             return null;
         }
@@ -1574,30 +2572,58 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AddLog(state, $"{PlayerName(state, playerId)} assigned combat damage at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
         }
 
-        if (!ValidateDamageAssignments(attackers, defenders, attackerAssignments) ||
-            !ValidateDamageAssignments(defenders, attackers, defenderAssignments))
+        if (!ValidateDamageAssignments(state, attackers, defenders, attackerAssignments) ||
+            !ValidateDamageAssignments(state, defenders, attackers, defenderAssignments))
         {
             return null;
         }
 
+        var sourceMap = new JsonObject();
         foreach (var unit in defenders)
         {
             var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
-            unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + attackerAssignments.GetValueOrDefault(uid);
+            var assignedDamage = attackerAssignments.GetValueOrDefault(uid);
+            if (assignedDamage > 0)
+            {
+                sourceMap[uid] = ToArray(attackers.Select(unit => unit["uid"]?.GetValue<string>() ?? string.Empty).Where(uid => !string.IsNullOrWhiteSpace(uid)));
+                DealDamage(unit, assignedDamage);
+            }
         }
 
         foreach (var unit in attackers)
         {
             var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
-            unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + defenderAssignments.GetValueOrDefault(uid);
+            var assignedDamage = defenderAssignments.GetValueOrDefault(uid);
+            if (assignedDamage > 0)
+            {
+                sourceMap[uid] = ToArray(defenders.Select(unit => unit["uid"]?.GetValue<string>() ?? string.Empty).Where(uid => !string.IsNullOrWhiteSpace(uid)));
+                DealDamage(unit, assignedDamage);
+            }
         }
+
+        activeCombat["damageSourcesByUnitId"] = sourceMap;
 
         state = RunCombatCleanup(state, battlefield);
 
         var remainingUnits = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
 
-        var attackerHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value);
-        var defenderHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value);
+        var attackerHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, attackerPlayerId.Value, unit));
+        var defenderHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, defenderPlayerId.Value, unit));
+        if (attackerHasUnits && defenderHasUnits)
+        {
+            state = RecallAttackers(state, battlefield, attackerPlayerId.Value);
+            remainingUnits = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
+            attackerHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, attackerPlayerId.Value, unit));
+            defenderHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, defenderPlayerId.Value, unit));
+        }
+
+        state["lastCombat"] = new JsonObject
+        {
+            ["battlefieldId"] = battlefieldId,
+            ["attackerPlayerId"] = attackerPlayerId.Value,
+            ["defenderPlayerId"] = defenderPlayerId.Value,
+            ["damageSourcesByUnitId"] = sourceMap.DeepClone()
+        };
 
         battlefield["stagedCombat"] = false;
         battlefield["stagedShowdown"] = false;
@@ -1611,6 +2637,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         if (attackerHasUnits && defenderHasUnits)
         {
+            state["lastCombat"]!["result"] = "no-result";
             battlefield["stagedCombat"] = true;
             battlefield["contestedByPlayerId"] = attackerPlayerId.Value;
             battlefield["controllerId"] = null;
@@ -1619,16 +2646,23 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         if (attackerHasUnits)
         {
+            state["lastCombat"]!["result"] = "attacker-won";
+            state["lastCombat"]!["winningPlayerId"] = attackerPlayerId.Value;
+            state["lastCombat"]!["losingPlayerId"] = defenderPlayerId.Value;
             battlefield["controllerId"] = attackerPlayerId.Value;
             state = ScoreBattlefield(state, new ScoreRequest(attackerPlayerId.Value, battlefieldId, ScoreSource.Conquer));
         }
         else if (defenderHasUnits)
         {
+            state["lastCombat"]!["result"] = "defender-won";
+            state["lastCombat"]!["winningPlayerId"] = defenderPlayerId.Value;
+            state["lastCombat"]!["losingPlayerId"] = attackerPlayerId.Value;
             battlefield["controllerId"] = defenderPlayerId.Value;
             state = ScoreBattlefield(state, new ScoreRequest(defenderPlayerId.Value, battlefieldId, ScoreSource.Conquer));
         }
         else
         {
+            state["lastCombat"]!["result"] = "no-result";
             battlefield["controllerId"] = null;
         }
 
@@ -1648,7 +2682,30 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
-    private static bool ValidateDamageAssignments(IReadOnlyList<JsonObject> assigningUnits, IReadOnlyList<JsonObject> opposingUnits, IReadOnlyDictionary<string, int> assignments)
+    private static JsonObject RecallAttackers(JsonObject state, JsonObject battlefield, int attackerPlayerId)
+    {
+        var units = battlefield["units"]!.AsArray();
+        for (var index = units.Count - 1; index >= 0; index--)
+        {
+            var unit = units[index]!.AsObject();
+            if (unit["ownerId"]?.GetValue<int>() != attackerPlayerId)
+            {
+                continue;
+            }
+
+            var recalled = Clone(unit);
+            units.RemoveAt(index);
+            state = UpdatePlayer(state, attackerPlayerId, player =>
+            {
+                player["base"]!.AsArray().Add(recalled);
+                return player;
+            });
+        }
+
+        return state;
+    }
+
+    private static bool ValidateDamageAssignments(JsonObject state, IReadOnlyList<JsonObject> assigningUnits, IReadOnlyList<JsonObject> opposingUnits, IReadOnlyDictionary<string, int> assignments)
     {
         if (assignments.Values.Any(amount => amount < 0))
         {
@@ -1664,23 +2721,78 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return false;
         }
 
-        var requiredTotal = assigningUnits.Sum(CurrentCombatMight);
+        var requiredTotal = assigningUnits.Sum(unit => CurrentCombatMight(state, unit));
         if (assignments.Values.Sum() != requiredTotal)
         {
             return false;
         }
 
         var positiveAssignments = assignments.Where(pair => pair.Value > 0).ToArray();
+        foreach (var (uid, amount) in positiveAssignments)
+        {
+            var assignedUnit = opposingById[uid];
+            var assignedPriority = DamageAssignmentPriority(assignedUnit);
+            foreach (var candidate in opposingUnits)
+            {
+                var candidateUid = candidate["uid"]?.GetValue<string>() ?? string.Empty;
+                if (candidateUid == uid || !CanTakeDamage(candidate))
+                {
+                    continue;
+                }
+
+                var candidatePriority = DamageAssignmentPriority(candidate);
+                if (candidatePriority < assignedPriority && assignments.GetValueOrDefault(candidateUid) < LethalDamage(state, candidate))
+                {
+                    return false;
+                }
+            }
+        }
+
+        var tankUnits = opposingUnits.Where(unit => HasKeyword(unit, KeywordKind.Tank)).ToArray();
+        if (tankUnits.Length > 0)
+        {
+            var allTanksLethal = tankUnits.All(unit =>
+            {
+                var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+                return assignments.GetValueOrDefault(uid) >= LethalDamage(state, unit);
+            });
+            if (!allTanksLethal && opposingUnits.Any(unit => !HasKeyword(unit, KeywordKind.Tank) && assignments.GetValueOrDefault(unit["uid"]?.GetValue<string>() ?? string.Empty) > 0))
+            {
+                return false;
+            }
+        }
+
+        var backlineUnits = opposingUnits.Where(unit => HasKeyword(unit, KeywordKind.Backline)).ToArray();
+        if (backlineUnits.Length > 0)
+        {
+            var frontlineUnits = opposingUnits.Where(unit => !HasKeyword(unit, KeywordKind.Backline)).ToArray();
+            var allFrontlineLethal = frontlineUnits.All(unit =>
+            {
+                var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+                return assignments.GetValueOrDefault(uid) >= LethalDamage(state, unit);
+            });
+            if (!allFrontlineLethal && backlineUnits.Any(unit => assignments.GetValueOrDefault(unit["uid"]?.GetValue<string>() ?? string.Empty) > 0))
+            {
+                return false;
+            }
+        }
+
         var nonLethalPositiveCount = 0;
-        var allOpposingUnitsAssignedLethal = opposingUnits.All(unit =>
+        var damageableOpposingUnits = opposingUnits.Where(CanTakeDamage).ToArray();
+        var allOpposingUnitsAssignedLethal = damageableOpposingUnits.All(unit =>
         {
             var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
-            return assignments.GetValueOrDefault(uid) >= LethalDamage(unit);
+            return assignments.GetValueOrDefault(uid) >= LethalDamage(state, unit);
         });
 
         foreach (var (uid, amount) in positiveAssignments)
         {
-            var lethal = LethalDamage(opposingById[uid]);
+            var lethal = LethalDamage(state, opposingById[uid]);
+            if (!CanTakeDamage(opposingById[uid]))
+            {
+                nonLethalPositiveCount += 1;
+                continue;
+            }
             if (amount < lethal)
             {
                 nonLethalPositiveCount += 1;
@@ -1759,26 +2871,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
         for (var i = units.Count - 1; i >= 0; i--)
         {
             var unit = units[i]!.AsObject();
-            if ((unit["damage"]?.GetValue<int>() ?? 0) < LethalDamage(unit))
+            if ((unit["damage"]?.GetValue<int>() ?? 0) < LethalDamage(state, unit))
             {
                 continue;
             }
 
-            var killed = Clone(unit);
-            killed.Remove("uid");
-            killed.Remove("ownerId");
-            killed.Remove("exhausted");
-            killed.Remove("damage");
-            killed.Remove("attachedMight");
-            killed.Remove("attacker");
-            killed.Remove("defender");
             var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
-            state = UpdatePlayer(state, ownerId, player =>
-            {
-                player["trash"]!.AsArray().Add(killed);
-                return player;
-            });
+            state = ResolveDeathknell(state, ownerId, unit);
             units.RemoveAt(i);
+            state = MoveObjectAndAttachmentsToOwnerZone(state, unit, "trash");
         }
     }
 
@@ -1795,20 +2896,53 @@ public sealed class DefaultRulesEngine : IRulesEngine
             for (var i = units.Count - 1; i >= 0; i--)
             {
                 var unit = units[i]!.AsObject();
-                if ((unit["damage"]?.GetValue<int>() ?? 0) < LethalDamage(unit))
+                if ((unit["damage"]?.GetValue<int>() ?? 0) < LethalDamage(state, unit))
                 {
                     continue;
                 }
 
-                var killed = Clone(unit);
-                killed.Remove("uid");
-                killed.Remove("ownerId");
-                killed.Remove("exhausted");
-                killed.Remove("damage");
-                killed.Remove("attachedMight");
-                killed.Remove("attacker");
-                killed.Remove("defender");
-                player["trash"]!.AsArray().Add(killed);
+                var ownerId = unit["ownerId"]?.GetValue<int>() ?? player["id"]?.GetValue<int>() ?? -1;
+                state = ResolveDeathknell(state, ownerId, unit);
+                units.RemoveAt(i);
+                state = MoveObjectAndAttachmentsToOwnerZone(state, unit, "trash");
+            }
+        }
+
+        return state;
+    }
+
+    private static JsonObject KillTemporaryPermanents(JsonObject state, int playerId)
+    {
+        var player = FindPlayer(state, playerId);
+        if (player is not null)
+        {
+            var baseUnits = player["base"]!.AsArray();
+            for (var i = baseUnits.Count - 1; i >= 0; i--)
+            {
+                var unit = baseUnits[i]!.AsObject();
+                if (!HasKeyword(unit, KeywordKind.Temporary))
+                {
+                    continue;
+                }
+
+                player["trash"]!.AsArray().Add(TrashSnapshot(unit));
+                state = ResolveDeathknell(state, playerId, unit);
+                baseUnits.RemoveAt(i);
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var units = battlefield["units"]!.AsArray();
+            for (var i = units.Count - 1; i >= 0; i--)
+            {
+                var unit = units[i]!.AsObject();
+                if (unit["ownerId"]?.GetValue<int>() != playerId || !HasKeyword(unit, KeywordKind.Temporary))
+                {
+                    continue;
+                }
+
+                state = MoveKilledPermanentToTrash(state, playerId, unit);
                 units.RemoveAt(i);
             }
         }
@@ -1816,19 +2950,669 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
-    private static int CurrentMight(JsonObject unit)
+    private static JsonObject TrashSnapshot(JsonObject permanent)
     {
-        return (unit["might"]?.GetValue<int>() ?? 0) + (unit["attachedMight"]?.GetValue<int>() ?? 0);
+        var killed = Clone(permanent);
+        killed.Remove("uid");
+        killed.Remove("ownerId");
+        killed.Remove("exhausted");
+        killed.Remove("damage");
+        killed.Remove("attachedMight");
+        killed.Remove("attacker");
+        killed.Remove("defender");
+        return killed;
     }
 
-    private static int CurrentCombatMight(JsonObject unit)
+    private static JsonObject MoveKilledPermanentToTrash(JsonObject state, int ownerId, JsonObject permanent)
     {
-        return Math.Max(0, CurrentMight(unit));
+        state = ResolveDeathknell(state, ownerId, permanent);
+        return MoveObjectAndAttachmentsToOwnerZone(state, permanent, "trash");
     }
 
-    private static int LethalDamage(JsonObject unit)
+    private static JsonObject ResolveDeathknell(JsonObject state, int ownerId, JsonObject permanent)
     {
-        return Math.Max(1, CurrentMight(unit));
+        foreach (var keyword in Keywords(permanent).Where(keyword => KeywordKindName(keyword) == KeywordKind.Deathknell))
+        {
+            var text = keyword["text"]?.GetValue<string>() ?? permanent["text"]?.GetValue<string>() ?? string.Empty;
+            if (TryReadInstructionAmount(text, "draw") is { } drawAmount)
+            {
+                state = DrawCards(state, ownerId, drawAmount);
+            }
+        }
+
+        return state;
+    }
+
+    private static int CurrentMight(JsonObject state, JsonObject unit)
+    {
+        var might = ContinuousEffectLayerResolver.EvaluateUnit(unit).Might + PassiveMightBonus(state, unit);
+        if (unit["defender"]?.GetValue<bool>() == true)
+        {
+            might += KeywordValue(unit, KeywordKind.Shield);
+        }
+
+        return might;
+    }
+
+    private static int CurrentCombatMight(JsonObject state, JsonObject unit)
+    {
+        if (unit["stunned"]?.GetValue<bool>() == true)
+        {
+            return 0;
+        }
+
+        var might = CurrentMight(state, unit);
+        if (unit["attacker"]?.GetValue<bool>() == true)
+        {
+            might += KeywordValue(unit, KeywordKind.Assault);
+        }
+
+        return Math.Max(0, might);
+    }
+
+    private static int LethalDamage(JsonObject state, JsonObject unit)
+    {
+        return Math.Max(1, CurrentMight(state, unit));
+    }
+
+    private static IReadOnlyList<EngineLegalAction> ActivatedAbilityActions(JsonObject state, int playerId)
+    {
+        if (state["stage"]?.GetValue<string>() != "playing" || state["chainWindow"] is not null || PendingBurnOut(state) is not null)
+        {
+            return [];
+        }
+
+        return AbilitySources(state)
+            .Where(source => source.OwnerId == playerId)
+            .SelectMany(source => source.Abilities
+                .Where(ability => AbilityKind(ability) is "activated" or "modal")
+                .Where(ability => CanPayAbilityCost(state, playerId, source.Card, ability))
+                .Select(ability =>
+                {
+                    var abilityId = ability["id"]?.GetValue<string>() ?? string.Empty;
+                    return new EngineLegalAction(
+                        $"activate-ability-{source.Uid}-{abilityId}",
+                        "activate-ability",
+                        ability["label"]?.GetValue<string>() ?? $"Activate {source.Name}",
+                        playerId,
+                        new JsonObject
+                        {
+                            ["sourceUid"] = source.Uid,
+                            ["abilityId"] = abilityId
+                        });
+                }))
+            .ToArray();
+    }
+
+    private static JsonObject? ActivateAbility(JsonObject state, int playerId, string? sourceUid, string? abilityId, string? modeId, string? targetUnitId, string? targetLaneId)
+    {
+        if (string.IsNullOrWhiteSpace(sourceUid) || string.IsNullOrWhiteSpace(abilityId))
+        {
+            return null;
+        }
+
+        var source = AbilitySources(state).FirstOrDefault(candidate => candidate.Uid == sourceUid && candidate.OwnerId == playerId);
+        if (source is null)
+        {
+            return null;
+        }
+
+        var ability = source.Abilities.FirstOrDefault(candidate => string.Equals(candidate["id"]?.GetValue<string>(), abilityId, StringComparison.Ordinal));
+        if (ability is null || AbilityKind(ability) is not ("activated" or "modal") || !CanPayAbilityCost(state, playerId, source.Card, ability))
+        {
+            return null;
+        }
+
+        var effect = SelectAbilityEffect(ability, modeId);
+        if (effect is null)
+        {
+            return null;
+        }
+
+        state = PayAbilityCost(state, playerId, source.Uid, ability);
+        state = EnqueueAbilityEffect(state, source, ability, effect, targetUnitId, targetLaneId);
+        OpenChainWindow(state, playerId, playerId, ChainItemSourceValue(ChainItemSource.PlayedCard));
+        return AddLog(state, $"{PlayerName(state, playerId)} activated {ability["label"]?.GetValue<string>() ?? source.Name}.");
+    }
+
+    private static JsonObject CollectTriggeredAbilities(JsonObject state, string eventName, JsonObject eventPayload)
+    {
+        state = FireDelayedAbilities(state, eventName, eventPayload, delayedKind: "delayed-triggered");
+        var queue = state["pendingTriggeredAbilities"] as JsonArray ?? new JsonArray();
+        state["pendingTriggeredAbilities"] = queue;
+
+        foreach (var source in AbilitySources(state))
+        {
+            foreach (var ability in source.Abilities.Where(ability => AbilityKind(ability) == "triggered" && AbilityEvent(ability) == eventName))
+            {
+                queue.Add(PendingAbility(source, ability, eventPayload));
+                AppendAbilityEvent(state, "trigger-collected", source, ability, eventName);
+            }
+        }
+
+        return state;
+    }
+
+    private static JsonObject RunAbilityQueues(JsonObject state)
+    {
+        var queue = state["pendingTriggeredAbilities"] as JsonArray;
+        if (queue is null || queue.Count == 0 || state["chainWindow"] is not null)
+        {
+            return state;
+        }
+
+        var stack = state["effectStack"]!.AsArray();
+        while (queue.Count > 0)
+        {
+            var pending = queue[0]!.AsObject();
+            queue.RemoveAt(0);
+            var effect = pending["effect"]?.AsObject();
+            if (effect is null)
+            {
+                continue;
+            }
+
+            var item = new JsonObject
+            {
+                ["id"] = $"ability-stack-{state["nextUid"]?.GetValue<int>() ?? 1}",
+                ["card"] = pending["source"]?.DeepClone() ?? new JsonObject(),
+                ["cardId"] = pending["sourceCardId"]?.GetValue<string>() ?? string.Empty,
+                ["cardName"] = pending["sourceName"]?.GetValue<string>() ?? "an ability",
+                ["kind"] = "ability",
+                ["playerId"] = pending["playerId"]?.GetValue<int>() ?? 0,
+                ["effect"] = effect.DeepClone(),
+                ["targetUnitId"] = pending["targetUnitId"]?.GetValue<string>(),
+                ["targetLaneId"] = pending["targetLaneId"]?.GetValue<string>()
+            };
+            state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+            stack.Insert(0, item);
+        }
+
+        if (stack.Count > 0)
+        {
+            var priorityPlayerId = stack[0]!["playerId"]?.GetValue<int>() ?? state["turnPlayerId"]?.GetValue<int>() ?? 0;
+            OpenChainWindow(state, priorityPlayerId, priorityPlayerId, ChainItemSourceValue(ChainItemSource.TriggeredAbility));
+        }
+
+        return state;
+    }
+
+    private static ReplacementResult ApplyReplacementAbilities(JsonObject state, string eventName, JsonObject eventPayload)
+    {
+        var amount = eventPayload["amount"]?.GetValue<int>() ?? 0;
+        var prevented = false;
+        ApplyDelayedReplacementAbilities(state, eventName, eventPayload, ref amount, ref prevented);
+        foreach (var source in AbilitySources(state))
+        {
+            foreach (var ability in source.Abilities.Where(ability => AbilityKind(ability) is "replacement" or "delayed-replacement" && AbilityEvent(ability) == eventName))
+            {
+                var effect = ability["effect"]?.AsObject();
+                var effectType = effect?["type"]?.GetValue<string>() ?? "";
+                if (effectType == "prevent")
+                {
+                    prevented = true;
+                }
+                else if (effectType == "modify-amount")
+                {
+                    amount += effect?["amount"]?.GetValue<int>() ?? 0;
+                }
+
+                AppendAbilityEvent(state, "replacement-applied", source, ability, eventName);
+            }
+        }
+
+        return new ReplacementResult(state, Math.Max(0, amount), prevented);
+    }
+
+    private static void ApplyDelayedReplacementAbilities(JsonObject state, string eventName, JsonObject eventPayload, ref int amount, ref bool prevented)
+    {
+        var delayed = state["delayedAbilities"] as JsonArray;
+        if (delayed is null || delayed.Count == 0)
+        {
+            return;
+        }
+
+        for (var i = delayed.Count - 1; i >= 0; i--)
+        {
+            var ability = delayed[i]!.AsObject();
+            if (AbilityKind(ability) != "delayed-replacement" || AbilityEvent(ability) != eventName)
+            {
+                continue;
+            }
+
+            var effect = ability["effect"]?.AsObject();
+            var effectType = effect?["type"]?.GetValue<string>() ?? "";
+            if (effectType == "prevent")
+            {
+                prevented = true;
+            }
+            else if (effectType == "modify-amount")
+            {
+                amount += effect?["amount"]?.GetValue<int>() ?? 0;
+            }
+
+            var source = new AbilitySource(
+                ability["sourceUid"]?.GetValue<string>() ?? $"delayed-{i}",
+                ability["sourceCardId"]?.GetValue<string>() ?? string.Empty,
+                ability["sourceName"]?.GetValue<string>() ?? "Delayed ability",
+                ability["playerId"]?.GetValue<int>() ?? eventPayload["playerId"]?.GetValue<int>() ?? 0,
+                ability,
+                [ability]);
+            AppendAbilityEvent(state, "delayed-fired", source, ability, eventName);
+            if (ability["consume"]?.GetValue<bool>() != false)
+            {
+                delayed.RemoveAt(i);
+            }
+        }
+    }
+
+    private static JsonObject FireDelayedAbilities(JsonObject state, string eventName, JsonObject eventPayload, string delayedKind)
+    {
+        var delayed = state["delayedAbilities"] as JsonArray;
+        if (delayed is null || delayed.Count == 0)
+        {
+            return state;
+        }
+
+        var pendingTriggers = state["pendingTriggeredAbilities"] as JsonArray ?? new JsonArray();
+        state["pendingTriggeredAbilities"] = pendingTriggers;
+        for (var i = delayed.Count - 1; i >= 0; i--)
+        {
+            var ability = delayed[i]!.AsObject();
+            if (AbilityKind(ability) != delayedKind || AbilityEvent(ability) != eventName)
+            {
+                continue;
+            }
+
+            var source = new AbilitySource(
+                ability["sourceUid"]?.GetValue<string>() ?? $"delayed-{i}",
+                ability["sourceCardId"]?.GetValue<string>() ?? string.Empty,
+                ability["sourceName"]?.GetValue<string>() ?? "Delayed ability",
+                ability["playerId"]?.GetValue<int>() ?? eventPayload["playerId"]?.GetValue<int>() ?? 0,
+                ability,
+                [ability]);
+            if (delayedKind == "delayed-triggered")
+            {
+                pendingTriggers.Add(PendingAbility(source, ability, eventPayload));
+            }
+
+            AppendAbilityEvent(state, "delayed-fired", source, ability, eventName);
+            if (ability["consume"]?.GetValue<bool>() != false)
+            {
+                delayed.RemoveAt(i);
+            }
+        }
+
+        return state;
+    }
+
+    private static JsonObject EnqueueAbilityEffect(JsonObject state, AbilitySource source, JsonObject ability, JsonObject effect, string? targetUnitId, string? targetLaneId)
+    {
+        var effectType = effect["type"]?.GetValue<string>() ?? "";
+        if (effectType == "create-delayed-trigger" || effectType == "create-delayed-replacement")
+        {
+            var delayed = state["delayedAbilities"] as JsonArray ?? new JsonArray();
+            state["delayedAbilities"] = delayed;
+            delayed.Add(new JsonObject
+            {
+                ["id"] = $"{ability["id"]?.GetValue<string>() ?? "ability"}-delayed-{state["nextUid"]?.GetValue<int>() ?? 1}",
+                ["kind"] = effectType == "create-delayed-trigger" ? "delayed-triggered" : "delayed-replacement",
+                ["event"] = effect["event"]?.GetValue<string>() ?? "action-applied",
+                ["playerId"] = source.OwnerId,
+                ["sourceUid"] = source.Uid,
+                ["sourceCardId"] = source.CardId,
+                ["sourceName"] = source.Name,
+                ["consume"] = effect["consume"]?.GetValue<bool>() != false,
+                ["effect"] = effect["effect"]?.DeepClone() ?? new JsonObject { ["type"] = "rally", ["amount"] = 0 }
+            });
+            state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+            AppendAbilityEvent(state, "delayed-created", source, ability, effect["event"]?.GetValue<string>() ?? "action-applied");
+            return state;
+        }
+
+        state["effectStack"]!.AsArray().Insert(0, new JsonObject
+        {
+            ["id"] = $"ability-stack-{state["nextUid"]?.GetValue<int>() ?? 1}",
+            ["card"] = Clone(source.Card),
+            ["cardId"] = source.CardId,
+            ["cardName"] = source.Name,
+            ["kind"] = "ability",
+            ["playerId"] = source.OwnerId,
+            ["effect"] = effect.DeepClone(),
+            ["targetUnitId"] = targetUnitId,
+            ["targetLaneId"] = targetLaneId
+        });
+        state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+        return state;
+    }
+
+    private static JsonObject PendingAbility(AbilitySource source, JsonObject ability, JsonObject eventPayload)
+    {
+        return new JsonObject
+        {
+            ["source"] = Clone(source.Card),
+            ["sourceUid"] = source.Uid,
+            ["sourceCardId"] = source.CardId,
+            ["sourceName"] = source.Name,
+            ["abilityId"] = ability["id"]?.GetValue<string>() ?? string.Empty,
+            ["playerId"] = source.OwnerId,
+            ["effect"] = ability["effect"]?.DeepClone() ?? new JsonObject { ["type"] = "rally", ["amount"] = 0 },
+            ["targetUnitId"] = eventPayload["targetUnitId"]?.GetValue<string>(),
+            ["targetLaneId"] = eventPayload["targetLaneId"]?.GetValue<string>()
+        };
+    }
+
+    private static JsonObject? SelectAbilityEffect(JsonObject ability, string? modeId)
+    {
+        if (ability["modes"] is JsonArray modes)
+        {
+            var selectedMode = modes
+                .Select(node => node!.AsObject())
+                .FirstOrDefault(mode => string.Equals(mode["id"]?.GetValue<string>(), modeId, StringComparison.Ordinal))
+                ?? (string.IsNullOrWhiteSpace(modeId) ? modes.FirstOrDefault()?.AsObject() : null);
+            return selectedMode?["effect"]?.AsObject();
+        }
+
+        return ability["effect"]?.AsObject();
+    }
+
+    private static bool CanPayAbilityCost(JsonObject state, int playerId, JsonObject source, JsonObject ability)
+    {
+        var cost = ability["cost"]?.AsObject();
+        if (cost is null)
+        {
+            return true;
+        }
+
+        if (cost["exhaust"]?.GetValue<bool>() == true && source["exhausted"]?.GetValue<bool>() == true)
+        {
+            return false;
+        }
+
+        var runeCost = cost["runes"]?.GetValue<int>() ?? 0;
+        return runeCost <= 0 || FindPlayer(state, playerId) is { } player && CanPay(player, runeCost);
+    }
+
+    private static JsonObject PayAbilityCost(JsonObject state, int playerId, string sourceUid, JsonObject ability)
+    {
+        var cost = ability["cost"]?.AsObject();
+        if (cost is null)
+        {
+            return state;
+        }
+
+        if (cost["exhaust"]?.GetValue<bool>() == true && FindUnit(state, sourceUid) is { } unit)
+        {
+            unit["exhausted"] = true;
+        }
+
+        var runeCost = cost["runes"]?.GetValue<int>() ?? 0;
+        if (runeCost > 0)
+        {
+            state = UpdatePlayer(state, playerId, player =>
+            {
+                PayCost(player, runeCost);
+                return player;
+            });
+        }
+
+        return state;
+    }
+
+    private static IEnumerable<AbilitySource> AbilitySources(JsonObject state)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var ownerId = player["id"]?.GetValue<int>() ?? 0;
+            foreach (var card in player["base"]!.AsArray().Select(node => node!.AsObject()))
+            {
+                if (ReadAbilities(card).Length > 0)
+                {
+                    yield return new AbilitySource(card["uid"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["catalogId"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["name"]?.GetValue<string>() ?? "a card", ownerId, card, ReadAbilities(card));
+                }
+            }
+
+            foreach (var card in player["baseGear"]!.AsArray().Select(node => node!.AsObject()))
+            {
+                if (ReadAbilities(card).Length > 0)
+                {
+                    yield return new AbilitySource(card["uid"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["catalogId"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["name"]?.GetValue<string>() ?? "a card", ownerId, card, ReadAbilities(card));
+                }
+            }
+
+            foreach (var zone in new[] { "champion", "legend" })
+            {
+                if (player[zone] is JsonObject card && ReadAbilities(card).Length > 0)
+                {
+                    yield return new AbilitySource(card["uid"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["catalogId"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["name"]?.GetValue<string>() ?? "a card", ownerId, card, ReadAbilities(card));
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var card in battlefield["units"]!.AsArray().Select(node => node!.AsObject()))
+            {
+                if (ReadAbilities(card).Length > 0)
+                {
+                    yield return new AbilitySource(card["uid"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["catalogId"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty, card["name"]?.GetValue<string>() ?? "a card", card["ownerId"]?.GetValue<int>() ?? 0, card, ReadAbilities(card));
+                }
+            }
+        }
+    }
+
+    private static JsonObject[] ReadAbilities(JsonObject card)
+    {
+        return card["abilities"] is JsonArray abilities
+            ? abilities.Select(node => node!.AsObject()).ToArray()
+            : [];
+    }
+
+    private static string AbilityKind(JsonObject ability)
+    {
+        return ability["kind"]?.GetValue<string>() ?? ability["type"]?.GetValue<string>() ?? string.Empty;
+    }
+
+    private static string AbilityEvent(JsonObject ability)
+    {
+        return ability["event"]?.GetValue<string>() ?? ability["trigger"]?.GetValue<string>() ?? string.Empty;
+    }
+
+    private static void AppendAbilityEvent(JsonObject state, string type, AbilitySource source, JsonObject ability, string eventName)
+    {
+        var events = state["abilityEvents"] as JsonArray ?? new JsonArray();
+        state["abilityEvents"] = events;
+        events.Add(new JsonObject
+        {
+            ["type"] = type,
+            ["event"] = eventName,
+            ["sourceUid"] = source.Uid,
+            ["abilityId"] = ability["id"]?.GetValue<string>() ?? string.Empty,
+            ["playerId"] = source.OwnerId
+        });
+    }
+
+    private static int PassiveMightBonus(JsonObject state, JsonObject unit)
+    {
+        var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+        var bonus = 0;
+        foreach (var source in AbilitySources(state))
+        {
+            foreach (var ability in source.Abilities.Where(ability => AbilityKind(ability) is "passive" or "continuous"))
+            {
+                var effect = ability["effect"]?.AsObject();
+                if (effect?["type"]?.GetValue<string>() != "modify-own-units-might" || source.OwnerId != ownerId)
+                {
+                    continue;
+                }
+
+                bonus += effect["amount"]?.GetValue<int>() ?? 0;
+            }
+        }
+
+        return bonus;
+    }
+
+    private static JsonObject BuildAbilityContributions(JsonObject state)
+    {
+        var contributions = new JsonObject();
+        foreach (var unit in state["players"]!.AsArray().Select(node => node!.AsObject()).SelectMany(player => player["base"]!.AsArray().Select(node => node!.AsObject()))
+            .Concat(state["battlefields"]!.AsArray().Select(node => node!.AsObject()).SelectMany(battlefield => battlefield["units"]!.AsArray().Select(node => node!.AsObject()))))
+        {
+            var uid = unit["uid"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(uid))
+            {
+                continue;
+            }
+
+            contributions[uid] = new JsonObject
+            {
+                ["might"] = PassiveMightBonus(state, unit)
+            };
+        }
+
+        return contributions;
+    }
+
+    private static bool CanTakeDamage(JsonObject unit)
+    {
+        return unit["preventDamage"]?.GetValue<bool>() != true
+            && unit["cannotTakeDamage"]?.GetValue<bool>() != true
+            && !HasKeyword(unit, "PreventDamage");
+    }
+
+    private static void DealDamage(JsonObject unit, int amount)
+    {
+        if (amount <= 0 || !CanTakeDamage(unit))
+        {
+            return;
+        }
+
+        unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + amount;
+    }
+
+    private static int DamageAssignmentPriority(JsonObject unit)
+    {
+        if (HasKeyword(unit, "Tank"))
+        {
+            return -1;
+        }
+
+        return HasKeyword(unit, "Backline") || HasKeyword(unit, "LastDamage") || unit["assignDamageLast"]?.GetValue<bool>() == true
+            ? 1
+            : 0;
+    }
+
+    private static int AdditionalTargetingCost(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
+    {
+        if (string.IsNullOrWhiteSpace(targetUnitId) && string.IsNullOrWhiteSpace(targetLaneId))
+        {
+            return 0;
+        }
+
+        var effect = card["effect"]?.AsObject();
+        var effectType = effect?["type"]?.GetValue<string>() ?? "rally";
+        if (effectType is "draw" or "rally" or "buff")
+        {
+            return 0;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetUnitId))
+        {
+            var target = FindUnit(state, targetUnitId);
+            return target?["ownerId"]?.GetValue<int>() == playerId ? 0 : KeywordValue(target, "Deflect");
+        }
+
+        var battlefield = FindBattlefield(state, targetLaneId!);
+        var targetInLane = battlefield?["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .FirstOrDefault(unit => unit["ownerId"]?.GetValue<int>() != playerId);
+        return targetInLane is null ? 0 : KeywordValue(targetInLane, "Deflect");
+    }
+
+    private static JsonObject QueueCombatDesignationTriggers(JsonObject state, JsonObject battlefield, int attackerPlayerId, int defenderPlayerId)
+    {
+        foreach (var unit in battlefield["units"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+            var trigger = ownerId == attackerPlayerId ? unit["attackTrigger"] : ownerId == defenderPlayerId ? unit["defendTrigger"] : null;
+            if (trigger is not JsonObject effect)
+            {
+                continue;
+            }
+
+            var unitId = unit["uid"]?.GetValue<string>() ?? string.Empty;
+            state["effectStack"]!.AsArray().Add(new JsonObject
+            {
+                ["id"] = $"stack-{state["nextUid"]?.GetValue<int>() ?? 1}",
+                ["card"] = Clone(unit),
+                ["cardId"] = unit["catalogId"]?.GetValue<string>() ?? unit["id"]?.GetValue<string>() ?? string.Empty,
+                ["cardName"] = unit["name"]?.GetValue<string>() ?? "a unit",
+                ["kind"] = "ability",
+                ["playerId"] = ownerId,
+                ["effect"] = effect.DeepClone(),
+                ["targetUnitId"] = unitId,
+                ["targetLaneId"] = battlefield["id"]?.GetValue<string>() ?? string.Empty
+            });
+            state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+        }
+
+        if (state["effectStack"]!.AsArray().Count > 0)
+        {
+            OpenChainWindow(state, attackerPlayerId, attackerPlayerId, ChainItemSourceValue(ChainItemSource.TriggeredAbility));
+        }
+
+        return state;
+    }
+
+    private static bool HasKeyword(JsonObject unit, string keyword)
+    {
+        if (unit[keyword] is JsonValue value && value.TryGetValue<bool>(out var hasKeyword) && hasKeyword)
+        {
+            return true;
+        }
+
+        if (unit["keywords"] is JsonArray keywords && keywords.Any(item => KeywordNodeMatches(item, keyword)))
+        {
+            return true;
+        }
+
+        var text = unit["text"]?.GetValue<string>() ?? string.Empty;
+        return text.Contains($"[{keyword}", StringComparison.OrdinalIgnoreCase)
+            || text.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int KeywordValue(JsonObject? unit, string keyword, int defaultValue = 0)
+    {
+        if (unit is null)
+        {
+            return 0;
+        }
+
+        if (unit[$"{char.ToLowerInvariant(keyword[0])}{keyword[1..]}Value"]?.GetValue<int?>() is { } explicitValue)
+        {
+            return explicitValue;
+        }
+
+        var text = unit["text"]?.GetValue<string>() ?? string.Empty;
+        var match = Regex.Match(text, $@"\b{Regex.Escape(keyword)}\s*(\d+)?", RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            return match.Groups[1].Success ? int.Parse(match.Groups[1].Value) : defaultValue;
+        }
+
+        if (unit["keywords"] is JsonArray keywords)
+        {
+            var keywordObject = keywords
+                .Select(KeywordObjectFromNode)
+                .FirstOrDefault(item => string.Equals(item["kind"]?.GetValue<string>(), keyword, StringComparison.OrdinalIgnoreCase));
+            if (keywordObject is not null)
+            {
+                return keywordObject["value"]?.GetValue<int?>() ?? defaultValue;
+            }
+        }
+
+        return HasKeyword(unit, keyword) ? defaultValue : 0;
     }
 
     private static IReadOnlyList<EngineLegalAction> PlayableCardsFromHand(JsonObject state, int playerId, Func<JsonObject, bool> timingPredicate)
@@ -1841,13 +3625,52 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         return player["hand"]!.AsArray()
             .Select((node, index) => (Card: node!.AsObject(), Index: index))
-            .Where(item => timingPredicate(item.Card) && CanPay(player, item.Card["cost"]?.GetValue<int>() ?? 0))
+            .Where(item => timingPredicate(item.Card) && CanPay(player, ReadCost(item.Card)))
             .Select(item => new EngineLegalAction(
                 $"play-card-{playerId}-{item.Index}",
                 "play-card",
                 $"Play {item.Card["name"]?.GetValue<string>() ?? "card"}",
                 playerId,
                 new JsonObject { ["handIndex"] = item.Index }))
+            .ToArray();
+    }
+
+    private static bool IsPlayableUnitCard(JsonObject card)
+    {
+        return card["kind"]?.GetValue<string>() is "unit" or "champion";
+    }
+
+    private static IReadOnlyList<EngineLegalAction> HideCardsFromHand(JsonObject state, int playerId)
+    {
+        var player = FindPlayer(state, playerId);
+        if (player is null || !CanPay(player, 1))
+        {
+            return [];
+        }
+
+        var controlledBattlefields = state["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Where(battlefield => battlefield["controllerId"]?.GetValue<int>() == playerId)
+            .Where(battlefield => !(battlefield["hiddenCards"] as JsonArray ?? []).Any(card => card?["ownerId"]?.GetValue<int>() == playerId))
+            .ToArray();
+        if (controlledBattlefields.Length == 0)
+        {
+            return [];
+        }
+
+        return player["hand"]!.AsArray()
+            .Select((node, index) => (Card: node!.AsObject(), Index: index))
+            .Where(item => HasKeyword(item.Card, KeywordKind.Hidden))
+            .Select(item => new EngineLegalAction(
+                $"hide-card-{playerId}-{item.Index}",
+                "hide-card",
+                $"Hide {item.Card["name"]?.GetValue<string>() ?? "card"}",
+                playerId,
+                new JsonObject
+                {
+                    ["handIndex"] = item.Index,
+                    ["battlefieldIds"] = ToArray(controlledBattlefields.Select(battlefield => battlefield["id"]?.GetValue<string>() ?? string.Empty))
+                }))
             .ToArray();
     }
 
@@ -1861,7 +3684,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         if (state["chainWindow"] is not null)
         {
-            return IsReactionCard(card);
+            var priorityPlayerId = ChainPriorityPlayerId(state);
+            return IsReactionCard(card) && (priorityPlayerId is null || CanUsePriority(state, playerId, priorityPlayerId.Value));
         }
 
         if (IsShowdownOpen(state))
@@ -1871,12 +3695,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 ?? state["activePlayer"]?.GetValue<int?>()
                 ?? state["turnPlayerId"]?.GetValue<int>()
                 ?? 0;
-            return playerId == focusPlayerId && (IsActionCard(card) || IsReactionCard(card));
+            return CanUsePriority(state, playerId, focusPlayerId) && (IsActionCard(card) || IsReactionCard(card));
         }
 
         var turnPlayerId = state["turnPlayerId"]?.GetValue<int>() ?? 0;
         var turnPhase = state["turnPhase"]?.GetValue<string>() ?? "";
-        return playerId == turnPlayerId && turnPhase == "main";
+        return (playerId == turnPlayerId || IsTeammate(state, playerId, turnPlayerId)) && turnPhase == "main";
     }
 
     private static bool IsShowdownOpen(JsonObject state)
@@ -1912,7 +3736,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return false;
         }
 
-        return (card["text"]?.GetValue<string>() ?? string.Empty).Contains("[Reaction]", StringComparison.Ordinal);
+        return HasKeyword(card, KeywordKind.Reaction) || HasKeyword(card, KeywordKind.QuickDraw);
     }
 
     private static bool IsActionCard(JsonObject card)
@@ -1923,108 +3747,696 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var text = card["text"]?.GetValue<string>() ?? string.Empty;
-        return text.Contains("[Action]", StringComparison.Ordinal)
-            || !text.Contains("[Reaction]", StringComparison.Ordinal);
+        return HasKeyword(card, KeywordKind.Action)
+            || !HasKeyword(card, KeywordKind.Reaction);
     }
 
-    private static bool TargetsAreValid(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
+    private static TargetSelection ValidateTargetSelection(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
     {
         var effect = card["effect"]?.AsObject();
         var effectType = effect?["type"]?.GetValue<string>() ?? "rally";
+        var hasUnitTarget = !string.IsNullOrWhiteSpace(targetUnitId);
+        var hasLaneTarget = !string.IsNullOrWhiteSpace(targetLaneId);
+
+        if (hasUnitTarget && hasLaneTarget)
+        {
+            return TargetSelection.Invalid;
+        }
+
         if (effectType == "draw")
         {
-            return string.IsNullOrWhiteSpace(targetUnitId) && string.IsNullOrWhiteSpace(targetLaneId);
+            return hasUnitTarget || hasLaneTarget
+                ? TargetSelection.Invalid
+                : new TargetSelection(true, null, null, []);
         }
 
         if (effectType == "damage")
         {
-            if (!string.IsNullOrWhiteSpace(targetLaneId))
+            if (hasLaneTarget)
             {
-                return FindBattlefield(state, targetLaneId) is not null;
+                var battlefield = FindBattlefield(state, targetLaneId!);
+                if (battlefield is null)
+                {
+                    return TargetSelection.Invalid;
+                }
+
+                var targets = battlefield["units"]!.AsArray()
+                    .Select(node => node!.AsObject())
+                    .Where(unit => UnitCanBeTargetedByEffect(state, playerId, "damage", unit))
+                    .Select(unit => UnitTargetFrom(state, unit, "damage", targetLaneId!))
+                    .ToArray();
+
+                return targets.Length == 0 && !AllowsZeroTargets(card)
+                    ? TargetSelection.Invalid
+                    : new TargetSelection(true, null, targetLaneId, targets);
             }
 
-            if (!string.IsNullOrWhiteSpace(targetUnitId))
+            if (hasUnitTarget && FindUnit(state, targetUnitId!) is { } unit && UnitCanBeTargetedByEffect(state, playerId, "damage", unit))
             {
-                return FindUnit(state, targetUnitId) is { } unit && unit["ownerId"]?.GetValue<int>() != playerId;
+                return new TargetSelection(true, targetUnitId, null, [UnitTargetFrom(state, unit, "damage", null)]);
             }
 
-            return false;
+            return !hasUnitTarget && AllowsZeroTargets(card)
+                ? new TargetSelection(true, null, null, [])
+                : TargetSelection.Invalid;
         }
 
         if (effectType is "buff" or "rally")
         {
-            return !string.IsNullOrWhiteSpace(targetUnitId)
-                && FindUnit(state, targetUnitId) is { } unit
-                && unit["ownerId"]?.GetValue<int>() == playerId
-                && string.IsNullOrWhiteSpace(targetLaneId);
+            if (hasUnitTarget && FindUnit(state, targetUnitId!) is { } unit && UnitCanBeTargetedByEffect(state, playerId, effectType, unit))
+            {
+                return new TargetSelection(true, targetUnitId, null, [UnitTargetFrom(state, unit, effectType, null)]);
+            }
+
+            return !hasUnitTarget && !hasLaneTarget && AllowsZeroTargets(card)
+                ? new TargetSelection(true, null, null, [])
+                : TargetSelection.Invalid;
         }
 
-        return string.IsNullOrWhiteSpace(targetUnitId) && string.IsNullOrWhiteSpace(targetLaneId);
+        return hasUnitTarget || hasLaneTarget
+            ? TargetSelection.Invalid
+            : new TargetSelection(true, null, null, []);
     }
 
-    private static bool CanPay(JsonObject player, int cost)
+    private static bool AllowsZeroTargets(JsonObject card)
     {
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        return readyRunes.Count + energy >= cost;
+        var text = card["text"]?.GetValue<string>() ?? string.Empty;
+        return text.Contains("up to", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("any number", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void PayCost(JsonObject player, int cost)
+    private static bool CanPay(JsonObject player, ResourceCost cost) => BuildPaymentPlan(player, cost) is not null;
+
+    private static bool CanPay(JsonObject player, int energy) => CanPay(player, new ResourceCost(Math.Max(0, energy), new Dictionary<Domain, int>(), 0));
+
+    private static void PayCost(JsonObject player, int energy) => PayCost(player, new ResourceCost(Math.Max(0, energy), new Dictionary<Domain, int>(), 0));
+
+    private static void PayCost(JsonObject player, ResourceCost cost)
     {
+        var plan = BuildPaymentPlan(player, cost);
+        if (plan is null)
+        {
+            return;
+        }
+
         var ready = player["runes"]!["ready"]!.AsArray();
         var exhausted = player["runes"]!["exhausted"]!.AsArray();
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var energyNeeded = Math.Max(0, cost - energy);
-        for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
+        var runeDeck = player["runeDeck"]!.AsArray();
+        for (var i = ready.Count - 1; i >= 0; i--)
+        {
+            var id = RuneIdFromNode(ready[i]);
+            if (plan.RecycledRuneIds.Contains(id, StringComparer.Ordinal))
+            {
+                runeDeck.Add(ready[i]?.DeepClone());
+                ready.RemoveAt(i);
+            }
+        }
+
+        for (var i = exhausted.Count - 1; i >= 0; i--)
+        {
+            var id = RuneIdFromNode(exhausted[i]);
+            if (plan.RecycledRuneIds.Contains(id, StringComparer.Ordinal))
+            {
+                runeDeck.Add(exhausted[i]?.DeepClone());
+                exhausted.RemoveAt(i);
+            }
+        }
+
+        for (var i = 0; i < plan.ReadyRunesToExhaust && ready.Count > 0; i++)
         {
             exhausted.Add(ready[0]?.DeepClone());
             ready.RemoveAt(0);
         }
 
-        player["runePool"]!["energy"] = energy + energyNeeded - cost;
+        var pool = RunePool(player);
+        pool["energy"] = plan.RemainingEnergy;
+        pool["universalPower"] = plan.RemainingUniversalPower;
+        pool["power"] = ToObject(plan.RemainingPower.ToDictionary(item => item.Key.ToString(), item => item.Value));
     }
 
-    private static JsonObject ApplyDamage(JsonObject state, int playerId, int amount, string? targetUnitId, string? targetLaneId)
+    private static PaymentPlan? BuildPaymentPlan(JsonObject player, ResourceCost cost)
     {
-        JsonObject? target = null;
-        if (!string.IsNullOrWhiteSpace(targetLaneId))
+        var pool = RunePool(player);
+        var remainingPower = ReadPowerPool(pool);
+        var universalPower = pool["universalPower"]?.GetValue<int>() ?? 0;
+        var recycledRuneIds = new List<string>();
+        var boardRunes = BoardRunes(player).ToList();
+        var requiredPower = cost.Power.ToDictionary(item => item.Key, item => Math.Max(0, item.Value));
+
+        foreach (var domain in DomainOrder())
         {
-            target = FindBattlefield(state, targetLaneId)
-                ?["units"]!.AsArray()
-                .Select(node => node!.AsObject())
-                .FirstOrDefault(unit => unit["ownerId"]?.GetValue<int>() != playerId);
-        }
-        else if (!string.IsNullOrWhiteSpace(targetUnitId))
-        {
-            var unit = FindUnit(state, targetUnitId);
-            if (unit?["ownerId"]?.GetValue<int>() != playerId)
+            var required = requiredPower.GetValueOrDefault(domain);
+            if (required <= 0)
             {
-                target = unit;
+                continue;
+            }
+
+            var fromDomain = Math.Min(remainingPower.GetValueOrDefault(domain), required);
+            remainingPower[domain] = remainingPower.GetValueOrDefault(domain) - fromDomain;
+            required -= fromDomain;
+
+            var fromUniversal = Math.Min(universalPower, required);
+            universalPower -= fromUniversal;
+            required -= fromUniversal;
+
+            while (required > 0)
+            {
+                var rune = boardRunes.FirstOrDefault(candidate => candidate.Domain == domain && !recycledRuneIds.Contains(candidate.Id, StringComparer.Ordinal));
+                if (rune is null)
+                {
+                    return null;
+                }
+
+                recycledRuneIds.Add(rune.Id);
+                required -= 1;
             }
         }
 
-        if (target is not null)
+        var anyPowerRequired = cost.UniversalPower;
+        var totalStoredPower = universalPower + remainingPower.Values.Sum();
+        var fromStoredAny = Math.Min(totalStoredPower, anyPowerRequired);
+        anyPowerRequired -= fromStoredAny;
+        SpendAnyPower(remainingPower, ref universalPower, fromStoredAny);
+        while (anyPowerRequired > 0)
         {
-            target["damage"] = (target["damage"]?.GetValue<int>() ?? 0) + amount;
+            var rune = boardRunes.FirstOrDefault(candidate => !recycledRuneIds.Contains(candidate.Id, StringComparer.Ordinal));
+            if (rune is null)
+            {
+                return null;
+            }
+
+            recycledRuneIds.Add(rune.Id);
+            anyPowerRequired -= 1;
+        }
+
+        var energy = pool["energy"]?.GetValue<int>() ?? 0;
+        var energyFromPool = Math.Min(energy, cost.Energy);
+        var energyNeeded = cost.Energy - energyFromPool;
+        var readyRunesAvailableForEnergy = player["runes"]!["ready"]!.AsArray()
+            .Select(RuneResourceFromNode)
+            .Where(rune => rune is not null)
+            .Select(rune => rune!)
+            .Count(rune => !recycledRuneIds.Contains(rune.Id, StringComparer.Ordinal));
+        if (readyRunesAvailableForEnergy < energyNeeded)
+        {
+            return null;
+        }
+
+        return new PaymentPlan(
+            energyNeeded,
+            energy - energyFromPool,
+            Math.Max(0, universalPower),
+            remainingPower.ToDictionary(item => item.Key, item => Math.Max(0, item.Value)),
+            recycledRuneIds);
+    }
+
+    private static void SpendAnyPower(Dictionary<Domain, int> power, ref int universalPower, int amount)
+    {
+        var fromUniversal = Math.Min(universalPower, amount);
+        universalPower -= fromUniversal;
+        amount -= fromUniversal;
+        foreach (var domain in DomainOrder())
+        {
+            if (amount <= 0)
+            {
+                return;
+            }
+
+            var fromDomain = Math.Min(power.GetValueOrDefault(domain), amount);
+            power[domain] = power.GetValueOrDefault(domain) - fromDomain;
+            amount -= fromDomain;
+        }
+    }
+
+    private static ResourceCost ReadCost(JsonObject card)
+    {
+        if (card["cost"] is JsonObject costObject)
+        {
+            return new ResourceCost(
+                Math.Max(0, costObject["energy"]?.GetValue<int>() ?? 0),
+                ReadPowerCost(costObject["power"]),
+                Math.Max(0, costObject["universalPower"]?.GetValue<int>() ?? 0));
+        }
+
+        return new ResourceCost(Math.Max(0, card["cost"]?.GetValue<int>() ?? 0), new Dictionary<Domain, int>(), 0);
+    }
+
+    private static Dictionary<Domain, int> ReadPowerCost(JsonNode? node)
+    {
+        var result = new Dictionary<Domain, int>();
+        if (node is JsonObject powerObject)
+        {
+            foreach (var (key, value) in powerObject)
+            {
+                if (TryReadDomain(key, out var domain))
+                {
+                    result[domain] = Math.Max(0, value?.GetValue<int>() ?? 0);
+                }
+            }
+        }
+        else if (node is JsonArray powerArray)
+        {
+            foreach (var item in powerArray)
+            {
+                if (TryReadDomain(item?.GetValue<string>(), out var domain))
+                {
+                    result[domain] = result.GetValueOrDefault(domain) + 1;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static JsonObject RunePool(JsonObject player)
+    {
+        if (player["runePool"] is not JsonObject pool)
+        {
+            pool = EmptyRunePool();
+            player["runePool"] = pool;
+        }
+
+        pool["energy"] ??= 0;
+        pool["universalPower"] ??= 0;
+        pool["power"] ??= new JsonObject();
+        return pool;
+    }
+
+    private static Dictionary<Domain, int> ReadPowerPool(JsonObject pool)
+    {
+        var power = new Dictionary<Domain, int>();
+        if (pool["power"] is JsonObject powerObject)
+        {
+            foreach (var (key, value) in powerObject)
+            {
+                if (TryReadDomain(key, out var domain))
+                {
+                    power[domain] = Math.Max(0, value?.GetValue<int>() ?? 0);
+                }
+            }
+        }
+
+        return power;
+    }
+
+    private static IReadOnlyList<RuneResource> BoardRunes(JsonObject player)
+    {
+        return player["runes"]!["ready"]!.AsArray()
+            .Concat(player["runes"]!["exhausted"]!.AsArray())
+            .Select(RuneResourceFromNode)
+            .Where(rune => rune is not null)
+            .Select(rune => rune!)
+            .Where(rune => !string.IsNullOrWhiteSpace(rune.Id))
+            .ToArray();
+    }
+
+    private static RuneResource? RuneResourceFromNode(JsonNode? node)
+    {
+        if (node is JsonObject rune)
+        {
+            return new RuneResource(
+                rune["id"]?.GetValue<string>() ?? string.Empty,
+                TryReadDomain(rune["domain"]?.GetValue<string>(), out var domain) ? domain : Domain.Fury);
+        }
+
+        if (node is JsonValue value && value.TryGetValue<string>(out var id))
+        {
+            return new RuneResource(id, Domain.Fury);
+        }
+
+        return null;
+    }
+
+    private static string RuneIdFromNode(JsonNode? node)
+    {
+        if (node is JsonObject rune)
+        {
+            return rune["id"]?.GetValue<string>() ?? string.Empty;
+        }
+
+        return node is JsonValue value && value.TryGetValue<string>(out var id) ? id : string.Empty;
+    }
+
+    private static JsonObject EmptyRunePool() => new()
+    {
+        ["energy"] = 0,
+        ["power"] = new JsonObject(),
+        ["universalPower"] = 0
+    };
+
+    private static bool TryReadDomain(string? value, out Domain domain) =>
+        Enum.TryParse(value, true, out domain);
+
+    private static IReadOnlyList<Domain> DomainOrder() =>
+        [Domain.Fury, Domain.Calm, Domain.Mind, Domain.Body, Domain.Chaos, Domain.Order];
+
+    private static JsonObject ApplyDamage(JsonObject state, int playerId, int amount, IReadOnlyList<EffectTarget> targets)
+    {
+        foreach (var target in targets)
+        {
+            var unit = FindLegalResolvedTarget(state, playerId, "damage", target);
+            if (unit is null)
+            {
+                continue;
+            }
+
+            unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + amount;
         }
 
         return state;
     }
 
-    private static JsonObject ApplyUnitMod(JsonObject state, string? targetUnitId, Func<JsonObject, JsonObject> modify)
+    private static JsonObject ApplyUnitMod(JsonObject state, int playerId, IReadOnlyList<EffectTarget> targets, Func<JsonObject, JsonObject> modify)
     {
-        if (string.IsNullOrWhiteSpace(targetUnitId))
+        foreach (var target in targets)
+        {
+            var unit = FindLegalResolvedTarget(state, playerId, target.EffectType, target);
+            if (unit is not null)
+            {
+                modify(unit);
+            }
+        }
+
+        return state;
+    }
+
+    private static JsonObject? FindObjectByUid(JsonObject state, string uid)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var zoneName in new[] { "base", "baseGear" })
+            {
+                var found = FindObjectInArray(player[zoneName]!.AsArray(), uid);
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var found = FindObjectInArray(battlefield["units"]!.AsArray(), uid);
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? FindObjectInArray(JsonArray objects, string uid)
+    {
+        foreach (var node in objects)
+        {
+            var obj = node!.AsObject();
+            if (obj["uid"]?.GetValue<string>() == uid)
+            {
+                return obj;
+            }
+
+            if (obj["attachedCards"] is JsonArray attachedCards)
+            {
+                var found = FindObjectInArray(attachedCards, uid);
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveObjectByUid(JsonObject state, string uid)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var zoneName in new[] { "base", "baseGear" })
+            {
+                var removed = RemoveObjectFromArray(player[zoneName]!.AsArray(), uid);
+                if (removed is not null)
+                {
+                    return removed;
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var removed = RemoveObjectFromArray(battlefield["units"]!.AsArray(), uid);
+            if (removed is not null)
+            {
+                return removed;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveAttachedCard(JsonObject state, string uid)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var zoneName in new[] { "base", "baseGear" })
+            {
+                var removed = RemoveAttachedCardFromArray(player[zoneName]!.AsArray(), uid);
+                if (removed is not null)
+                {
+                    return removed;
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var removed = RemoveAttachedCardFromArray(battlefield["units"]!.AsArray(), uid);
+            if (removed is not null)
+            {
+                return removed;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveAttachedCardFromArray(JsonArray objects, string uid)
+    {
+        foreach (var node in objects)
+        {
+            var obj = node!.AsObject();
+            if (obj["attachedCards"] is not JsonArray attachedCards)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < attachedCards.Count; i++)
+            {
+                var attached = attachedCards[i]!.AsObject();
+                if (attached["uid"]?.GetValue<string>() == uid)
+                {
+                    attachedCards.RemoveAt(i);
+                    RecomputeTopCard(obj);
+                    return attached;
+                }
+
+                if (attached["attachedCards"] is JsonArray nestedCards &&
+                    RemoveObjectFromArray(nestedCards, uid) is { } nested)
+                {
+                    RecomputeTopCard(attached);
+                    RecomputeTopCard(obj);
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveObjectFromArray(JsonArray objects, string uid)
+    {
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var obj = objects[i]!.AsObject();
+            if (obj["uid"]?.GetValue<string>() == uid)
+            {
+                objects.RemoveAt(i);
+                return obj;
+            }
+
+            if (obj["attachedCards"] is JsonArray attachedCards)
+            {
+                var removed = RemoveObjectFromArray(attachedCards, uid);
+                if (removed is not null)
+                {
+                    RecomputeTopCard(obj);
+                    return removed;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject MoveObjectAndAttachmentsToOwnerZone(JsonObject state, JsonObject obj, string zoneName)
+    {
+        if (obj["attachedCards"] is JsonArray attachedCards)
+        {
+            while (attachedCards.Count > 0)
+            {
+                var attached = attachedCards[0]!.AsObject();
+                attachedCards.RemoveAt(0);
+                state = MoveObjectAndAttachmentsToOwnerZone(state, attached, zoneName);
+            }
+        }
+
+        obj["attachedCards"] = new JsonArray();
+        RecomputeTopCard(obj);
+        obj["location"] = new JsonObject { ["type"] = zoneName == "banished" ? "banished" : "trash", ["battlefieldId"] = null, ["attachedToUid"] = null };
+        obj["attachedUnitId"] = null;
+        return PutObjectInOwnerZone(state, obj, zoneName);
+    }
+
+    private static JsonObject PutObjectInOwnerZone(JsonObject state, JsonObject obj, string zoneName)
+    {
+        if (obj["isToken"]?.GetValue<bool>() == true)
         {
             return state;
         }
 
-        var unit = FindUnit(state, targetUnitId);
-        if (unit is not null)
+        var ownerId = obj["ownerId"]?.GetValue<int>() ?? -1;
+        return UpdatePlayer(state, ownerId, player =>
         {
-            modify(unit);
+            if (player[zoneName] is not JsonArray zone)
+            {
+                zone = new JsonArray();
+                player[zoneName] = zone;
+            }
+
+            zone.Add(obj);
+            return player;
+        });
+    }
+
+    private static void RecomputeTopCard(JsonObject obj)
+    {
+        if (obj["attachedCards"] is JsonArray attachedCards && attachedCards.Count > 0)
+        {
+            var top = attachedCards[attachedCards.Count - 1]!.AsObject();
+            obj["topCardId"] = top["topCardId"]?.GetValue<string>() ?? top["id"]?.GetValue<string>();
+            return;
         }
 
-        return state;
+        obj["topCardId"] = obj["isToken"]?.GetValue<bool>() == true
+            ? null
+            : obj["id"]?.GetValue<string>();
+    }
+
+    private static JsonObject? FindLegalResolvedTarget(JsonObject state, int playerId, string effectType, EffectTarget target)
+    {
+        var resolved = FindUnitWithPublicZone(state, target.UnitId);
+        return resolved is not null
+            && UnitCanBeTargetedByEffect(state, playerId, effectType, resolved.Value.Unit)
+            && UnitIsStillInTargetedPublicZone(resolved.Value.ZoneType, resolved.Value.BattlefieldId, target)
+                ? resolved.Value.Unit
+                : null;
+    }
+
+    private static bool UnitCanBeTargetedByEffect(JsonObject state, int playerId, string effectType, JsonObject unit)
+    {
+        return effectType switch
+        {
+            "damage" => IsEnemyUnit(state, playerId, unit),
+            "buff" or "rally" => IsFriendlyUnit(state, playerId, unit),
+            _ => false
+        };
+    }
+
+    private static bool UnitIsStillInTargetedPublicZone(string zoneType, string? battlefieldId, EffectTarget target)
+    {
+        return string.Equals(zoneType, target.ZoneType, StringComparison.Ordinal)
+            && string.Equals(battlefieldId, target.BattlefieldId, StringComparison.Ordinal);
+    }
+
+    private static EffectTarget UnitTargetFrom(JsonObject state, JsonObject unit, string effectType, string? selectedBattlefieldId)
+    {
+        var unitId = unit["uid"]?.GetValue<string>() ?? string.Empty;
+        var zone = FindUnitWithPublicZone(state, unitId);
+        return new EffectTarget(
+            UnitId: unitId,
+            EffectType: effectType,
+            ZoneType: selectedBattlefieldId is not null ? "battlefield" : zone?.ZoneType ?? "base",
+            BattlefieldId: selectedBattlefieldId ?? zone?.BattlefieldId);
+    }
+
+    private static (JsonObject Unit, string ZoneType, string? BattlefieldId)? FindUnitWithPublicZone(JsonObject state, string unitId)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var unit = player["base"]!.AsArray()
+                .Select(node => node!.AsObject())
+                .FirstOrDefault(candidate => candidate["uid"]?.GetValue<string>() == unitId);
+            if (unit is not null)
+            {
+                return (unit, "base", null);
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var unit = battlefield["units"]!.AsArray()
+                .Select(node => node!.AsObject())
+                .FirstOrDefault(candidate => candidate["uid"]?.GetValue<string>() == unitId);
+            if (unit is not null)
+            {
+                return (unit, "battlefield", battlefield["id"]?.GetValue<string>());
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject TargetToJson(EffectTarget target)
+    {
+        return new JsonObject
+        {
+            ["type"] = "unit",
+            ["unitId"] = target.UnitId,
+            ["effectType"] = target.EffectType,
+            ["zoneType"] = target.ZoneType,
+            ["battlefieldId"] = target.BattlefieldId
+        };
+    }
+
+    private static IReadOnlyList<EffectTarget> ReadStackTargets(JsonObject item, string? legacyTargetUnitId, string? legacyTargetLaneId)
+    {
+        var effectType = item["effect"]?["type"]?.GetValue<string>() ?? "rally";
+        if (item["targets"] is JsonArray targets)
+        {
+            return targets
+                .Select(node => node?.AsObject())
+                .Where(target => target is not null && target["type"]?.GetValue<string>() == "unit")
+                .Select(target => new EffectTarget(
+                    UnitId: target!["unitId"]?.GetValue<string>() ?? string.Empty,
+                    EffectType: string.IsNullOrWhiteSpace(target["effectType"]?.GetValue<string>()) ? effectType : target["effectType"]!.GetValue<string>(),
+                    ZoneType: target["zoneType"]?.GetValue<string>() ?? "base",
+                    BattlefieldId: target["battlefieldId"]?.GetValue<string>()))
+                .Where(target => !string.IsNullOrWhiteSpace(target.UnitId))
+                .ToArray();
+        }
+
+        if (!string.IsNullOrWhiteSpace(legacyTargetUnitId))
+        {
+            return [new EffectTarget(legacyTargetUnitId, effectType, "base", null)];
+        }
+
+        if (!string.IsNullOrWhiteSpace(legacyTargetLaneId))
+        {
+            return [];
+        }
+
+        return [];
     }
 
     private static JsonObject? FindPlayer(JsonObject state, int playerId)
@@ -2143,8 +4555,77 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static EngineMatchState ToEngineState(string matchId, string mode, int sequenceNumber, JsonObject state, IReadOnlyList<EngineSeatConfig> seats)
     {
+        state["abilityContributions"] = BuildAbilityContributions(state);
         var players = seats.Select(seat => new EnginePlayerState(seat.PlayerId, seat.UserId, ReadPlayerPoints(state, seat.PlayerId), false)).ToArray();
         return new EngineMatchState(matchId, mode, state["stage"]?.GetValue<string>() ?? "mulligan", sequenceNumber, state, players);
+    }
+
+    private static EngineSeatConfig[] ActiveSeats(JsonObject state, IReadOnlyList<EnginePlayerState> previousPlayers)
+    {
+        var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        return state["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Select(player =>
+            {
+                var playerId = player["id"]!.GetValue<int>();
+                var previous = previousPlayers.FirstOrDefault(candidate => candidate.PlayerId == playerId);
+                return new EngineSeatConfig(
+                    playerId,
+                    previous?.UserId ?? $"player-{playerId}",
+                    player["name"]?.GetValue<string>() ?? $"Player {playerId + 1}",
+                    playerId >= 0 && playerId < teamIds.Length ? teamIds[playerId] : null);
+            })
+            .ToArray();
+    }
+
+    private static int TeamIdForPlayer(int[] teamIds, int playerId)
+    {
+        return playerId >= 0 && playerId < teamIds.Length ? teamIds[playerId] : playerId;
+    }
+
+    private static int? NextAvailablePlayerId(int[] order, int playerId, Func<int, bool> isAvailable)
+    {
+        if (order.Length == 0)
+        {
+            return null;
+        }
+
+        var index = Array.IndexOf(order, playerId);
+        var start = index < 0 ? 0 : index + 1;
+        for (var offset = 0; offset < order.Length; offset++)
+        {
+            var candidate = order[(start + offset) % order.Length];
+            if (isAvailable(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static void RemoveObjectProperty(JsonNode? node, int playerId)
+    {
+        if (node is JsonObject obj)
+        {
+            obj.Remove(playerId.ToString());
+        }
+    }
+
+    private static void RemoveArrayValue(JsonNode? node, int playerId)
+    {
+        if (node is not JsonArray array)
+        {
+            return;
+        }
+
+        for (var i = array.Count - 1; i >= 0; i--)
+        {
+            if (array[i]?.GetValue<int>() == playerId)
+            {
+                array.RemoveAt(i);
+            }
+        }
     }
 
     private static int ReadPlayerPoints(JsonObject state, int playerId)
@@ -2174,12 +4655,13 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 ["tags"] = ToArray(definition.Tags),
                 ["domain"] = definition.Domain.ToString(),
                 ["domains"] = ToArray(definition.Domains.Select(domain => domain.ToString())),
-                ["cost"] = definition.Cost,
+                ["cost"] = CostNode(definition.Cost, definition.PowerCost),
                 ["might"] = definition.Might,
                 ["text"] = definition.Text,
                 ["image"] = definition.Image,
                 ["cardType"] = definition.CardType,
                 ["supertype"] = definition.Supertype,
+                ["keywords"] = ToArray(KeywordCatalog.For(definition).Select(ToKeywordObject)),
                 ["effect"] = new JsonObject { ["type"] = definition.Effect.Type.ToString().ToLowerInvariant(), ["amount"] = definition.Effect.Amount }
             };
         }
@@ -2199,6 +4681,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["image"] = "*",
             ["cardType"] = "Unit",
             ["supertype"] = null,
+            ["keywords"] = new JsonArray(),
             ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
         };
     }
@@ -2208,11 +4691,24 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return string.Join(' ', id.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
     }
 
-    private static int[] OrderedPlayerIds(int playerCount, int firstPlayerId)
+    private static int[] OrderedPlayerIds(int playerCount, int firstPlayerId, IReadOnlyList<int>? teamIds = null, string? mode = null)
     {
         var ids = Enumerable.Range(0, playerCount).ToArray();
         var first = firstPlayerId >= 0 && firstPlayerId < playerCount ? firstPlayerId : 0;
-        return ids.Skip(first).Concat(ids.Take(first)).ToArray();
+        var clockwise = ids.Skip(first).Concat(ids.Take(first)).ToArray();
+        if (mode != "teams-2v2" || teamIds is null || teamIds.Count < playerCount)
+        {
+            return clockwise;
+        }
+
+        var firstTeam = teamIds[first];
+        var opponent = clockwise.FirstOrDefault(id => teamIds[id] != firstTeam, -1);
+        var teammate = clockwise.FirstOrDefault(id => id != first && teamIds[id] == firstTeam, -1);
+        var opponentTeammate = opponent >= 0
+            ? clockwise.FirstOrDefault(id => id != opponent && teamIds[id] == teamIds[opponent], -1)
+            : -1;
+        var alternated = new[] { first, opponent, teammate, opponentTeammate }.Where(id => id >= 0).Distinct().ToArray();
+        return alternated.Length == playerCount ? alternated : clockwise;
     }
 
     private static List<T> Shuffle<T>(List<T> items, int seed)
@@ -2261,6 +4757,53 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return array;
     }
 
+    private static JsonNode CostNode(int energy, IReadOnlyList<Domain> powerCost)
+    {
+        if (powerCost.Count == 0)
+        {
+            return JsonValue.Create(energy)!;
+        }
+
+        var power = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var domain in powerCost)
+        {
+            var key = domain.ToString();
+            power[key] = power.GetValueOrDefault(key) + 1;
+        }
+
+        return new JsonObject
+        {
+            ["energy"] = Math.Max(0, energy),
+            ["power"] = ToObject(power),
+            ["universalPower"] = 0
+        };
+    }
+
+    private static JsonObject ToKeywordObject(CardKeywordDefinition keyword)
+    {
+        var obj = new JsonObject
+        {
+            ["kind"] = keyword.Kind.ToString(),
+            ["behavior"] = keyword.Behavior.ToString()
+        };
+        if (keyword.Value is not null)
+        {
+            obj["value"] = keyword.Value.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword.Cost))
+        {
+            obj["cost"] = keyword.Cost;
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword.Text))
+        {
+            obj["text"] = keyword.Text;
+        }
+
+        return obj;
+    }
+
     private static JsonObject ToObject(IReadOnlyDictionary<string, int> values)
     {
         var obj = new JsonObject();
@@ -2292,6 +4835,38 @@ public sealed class DefaultRulesEngine : IRulesEngine
         };
     }
 
+    private static string[] ReadUnitIds(IReadOnlyDictionary<string, object?>? payload)
+    {
+        var unitIds = ReadStringArray(payload, "unitIds");
+        if (unitIds.Length > 0)
+        {
+            return unitIds;
+        }
+
+        var unitId = ReadString(payload, "unitId");
+        return string.IsNullOrWhiteSpace(unitId) ? [] : [unitId];
+    }
+
+    private static string[] ReadStringArray(IReadOnlyDictionary<string, object?>? payload, string key)
+    {
+        if (payload is null || !payload.TryGetValue(key, out var value) || value is null)
+        {
+            return [];
+        }
+
+        return value switch
+        {
+            JsonElement element when element.ValueKind == JsonValueKind.Array => element.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString())
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => text!)
+                .ToArray(),
+            IEnumerable<string> values => values.Where(text => !string.IsNullOrWhiteSpace(text)).ToArray(),
+            _ => []
+        };
+    }
+
     private static string? ReadString(IReadOnlyDictionary<string, object?>? payload, string key)
     {
         if (payload is null || !payload.TryGetValue(key, out var value) || value is null)
@@ -2307,6 +4882,114 @@ public sealed class DefaultRulesEngine : IRulesEngine
         };
     }
 
+    private static bool? ReadBool(IReadOnlyDictionary<string, object?>? payload, string key)
+    {
+        if (payload is null || !payload.TryGetValue(key, out var value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            JsonElement element when element.ValueKind is JsonValueKind.True or JsonValueKind.False => element.GetBoolean(),
+            bool boolValue => boolValue,
+            string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static bool HasKeyword(JsonObject card, KeywordKind kind) =>
+        KeywordValue(card, kind, countPresence: true) > 0;
+
+    private static int KeywordValue(JsonObject card, KeywordKind kind, bool countPresence = false)
+    {
+        var propertyName = kind.ToString();
+        var explicitValue = card[$"{char.ToLowerInvariant(propertyName[0])}{propertyName[1..]}Value"]?.GetValue<int?>();
+        var matching = Keywords(card).Where(keyword => KeywordKindName(keyword) == kind).ToArray();
+        if (matching.Length == 0)
+        {
+            return explicitValue is null ? 0 : countPresence ? 1 : explicitValue.Value;
+        }
+
+        if (countPresence)
+        {
+            return matching.Length;
+        }
+
+        if (explicitValue is not null)
+        {
+            return explicitValue.Value;
+        }
+
+        return kind switch
+        {
+            KeywordKind.Assault or KeywordKind.Deflect or KeywordKind.Shield or KeywordKind.Hunt => matching.Sum(keyword => keyword["value"]?.GetValue<int>() ?? 1),
+            _ => matching.Length
+        };
+    }
+
+    private static IReadOnlyList<JsonObject> Keywords(JsonObject card)
+    {
+        if (card["keywords"] is JsonArray keywords && keywords.Count > 0)
+        {
+            return keywords.Select(KeywordObjectFromNode).ToArray();
+        }
+
+        return KeywordCatalog.Parse(card["text"]?.GetValue<string>())
+            .Select(ToKeywordObject)
+            .ToArray();
+    }
+
+    private static KeywordKind? KeywordKindName(JsonObject keyword)
+    {
+        var value = keyword["kind"]?.GetValue<string>() ?? string.Empty;
+        return Enum.TryParse<KeywordKind>(value, ignoreCase: true, out var kind) ? kind : null;
+    }
+
+    private static bool KeywordNodeMatches(JsonNode? node, string keyword)
+    {
+        var keywordObject = KeywordObjectFromNode(node);
+        return string.Equals(keywordObject["kind"]?.GetValue<string>(), keyword, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static JsonObject KeywordObjectFromNode(JsonNode? node)
+    {
+        if (node is JsonObject keyword)
+        {
+            return keyword;
+        }
+
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            var parsed = KeywordCatalog.Parse(text).FirstOrDefault();
+            return parsed is null
+                ? new JsonObject { ["kind"] = text, ["behavior"] = KeywordBehavior.Passive.ToString() }
+                : ToKeywordObject(parsed);
+        }
+
+        return new JsonObject { ["kind"] = string.Empty, ["behavior"] = KeywordBehavior.Passive.ToString() };
+    }
+
+    private static int? TryReadInstructionAmount(string text, string instruction)
+    {
+        var words = text.Split([' ', '.', ',', '[', ']'], StringSplitOptions.RemoveEmptyEntries);
+        var instructionIndex = Array.FindIndex(words, word => string.Equals(word, instruction, StringComparison.OrdinalIgnoreCase));
+        if (instructionIndex < 0)
+        {
+            return null;
+        }
+
+        for (var i = instructionIndex + 1; i < words.Length; i++)
+        {
+            if (int.TryParse(words[i], out var amount))
+            {
+                return amount;
+            }
+        }
+
+        return 1;
+    }
+
     private static ScoreSource ScoreSourceFrom(string? source)
     {
         return string.Equals(source, "hold", StringComparison.OrdinalIgnoreCase) ? ScoreSource.Hold : ScoreSource.Conquer;
@@ -2317,15 +5000,68 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return source == ScoreSource.Hold ? "hold" : "conquer";
     }
 
+    private static string ChainItemStatusValue(ChainItemStatus status)
+    {
+        return status == ChainItemStatus.Finalized ? "finalized" : "pending";
+    }
+
+    private static string ChainItemSourceValue(ChainItemSource source)
+    {
+        return source switch
+        {
+            ChainItemSource.TriggeredAbility => "triggered",
+            ChainItemSource.AddCreated => "add-created",
+            _ => "played-card"
+        };
+    }
+
     private enum ScoreSource
     {
         Conquer,
         Hold
     }
 
+    private enum MoveOrigin
+    {
+        Base,
+        Battlefield
+    }
+
+    private sealed record MovableUnit(string UnitId, JsonObject Unit, JsonArray Source, MoveOrigin Origin);
+
+    private sealed record AbilitySource(string Uid, string CardId, string Name, int OwnerId, JsonObject Card, IReadOnlyList<JsonObject> Abilities);
+
+    private sealed record ReplacementResult(JsonObject State, int Amount, bool Prevented);
+
     private sealed record ScoreRequest(int PlayerId, string BattlefieldId, ScoreSource Source);
 
     private sealed record ScoreOutcome(int PlayerId, string BattlefieldId, ScoreSource Source, int PointsAwarded, string? SkippedReason);
+
+    private sealed record ResourceCost(int Energy, IReadOnlyDictionary<Domain, int> Power, int UniversalPower);
+
+    private sealed record PaymentPlan(
+        int ReadyRunesToExhaust,
+        int RemainingEnergy,
+        int RemainingUniversalPower,
+        IReadOnlyDictionary<Domain, int> RemainingPower,
+        IReadOnlyList<string> RecycledRuneIds);
+
+    private sealed record RuneResource(string Id, Domain Domain);
+
+    private sealed record TargetSelection(
+        bool IsValid,
+        string? LegacyTargetUnitId,
+        string? LegacyTargetLaneId,
+        IReadOnlyList<EffectTarget> Targets)
+    {
+        public static TargetSelection Invalid { get; } = new(false, null, null, []);
+    }
+
+    private sealed record EffectTarget(
+        string UnitId,
+        string EffectType,
+        string ZoneType,
+        string? BattlefieldId);
 
     private static class ScoreRules
     {
