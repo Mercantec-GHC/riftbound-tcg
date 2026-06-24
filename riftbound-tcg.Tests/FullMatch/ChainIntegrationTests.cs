@@ -50,7 +50,7 @@ public class ChainIntegrationTests
 
         // Resolve top (reaction from player 1 — draws 1).
         var res1 = EffectResolver.ResolveTop(stack, players, [])!;
-        Assert.That(res1.ResolvedItem, Is.EqualTo(reactionItem));
+        Assert.That(res1.ResolvedItem, Is.EqualTo(reactionItem with { Status = ChainItemStatus.Finalized }));
         Assert.That(res1.UpdatedPlayers.Single(p => p.Id == 1).HandCardIds, Has.Count.EqualTo(1));
         Assert.That(res1.RemainingStack, Has.Count.EqualTo(1));
 
@@ -62,7 +62,7 @@ public class ChainIntegrationTests
 
         // Resolve original spell (draw 2 for player 0).
         var res2 = EffectResolver.ResolveTop(res1.RemainingStack, res1.UpdatedPlayers, [])!;
-        Assert.That(res2.ResolvedItem, Is.EqualTo(originalItem));
+        Assert.That(res2.ResolvedItem, Is.EqualTo(originalItem with { Status = ChainItemStatus.Finalized }));
         Assert.That(res2.UpdatedPlayers.Single(p => p.Id == 0).HandCardIds, Has.Count.EqualTo(2));
         Assert.That(res2.RemainingStack, Is.Empty);
     }

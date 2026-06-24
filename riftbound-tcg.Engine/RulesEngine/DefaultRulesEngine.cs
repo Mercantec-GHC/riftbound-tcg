@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using riftbound_tcg.Core.Cards;
+using riftbound_tcg.Core.Effects;
 
 namespace riftbound_tcg.Engine.RulesEngine;
 
@@ -915,11 +916,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             state = PutResolvedGearIntoBase(state, playerId, card);
             if (state["effectStack"]!.AsArray().Count > 0)
             {
-                OpenChainWindow(state, playerId, playerId);
+                OpenChainWindow(state, playerId, playerId, ChainItemSourceValue(ChainItemSource.AddCreated));
             }
             else
             {
-                CloseChainWindow(state, playerId);
+                CloseChainWindow(state, playerId, passesFocusOnClose: false);
             }
 
             return AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a gear"} to base.");
@@ -935,11 +936,13 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["playerId"] = playerId,
             ["effect"] = card["effect"]?.DeepClone(),
             ["targetUnitId"] = targetUnitId,
-            ["targetLaneId"] = targetLaneId
+            ["targetLaneId"] = targetLaneId,
+            ["status"] = ChainItemStatusValue(ChainItemStatus.Pending),
+            ["source"] = ChainItemSourceValue(ChainItemSource.PlayedCard)
         };
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
         state["effectStack"]!.AsArray().Insert(0, stackItem);
-        OpenChainWindow(state, playerId, playerId);
+        OpenChainWindow(state, playerId, playerId, ChainItemSourceValue(ChainItemSource.PlayedCard));
         return AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a spell"} to the chain.");
     }
 
@@ -971,12 +974,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
             if (stack.Count > 0)
             {
                 var nextPriority = stack[0]!["playerId"]?.GetValue<int>() ?? playerId;
-                OpenChainWindow(state, nextPriority, nextPriority);
+                var nextSource = stack[0]!["source"]?.GetValue<string>() ?? ChainItemSourceValue(ChainItemSource.PlayedCard);
+                OpenChainWindow(state, nextPriority, nextPriority, nextSource);
             }
             else
             {
                 var startedBy = chainWindow["startedByPlayerId"]?.GetValue<int>() ?? playerId;
-                CloseChainWindow(state, startedBy);
+                var passesFocusOnClose = chainWindow["passesFocusOnClose"]?.GetValue<bool>() ?? true;
+                CloseChainWindow(state, startedBy, passesFocusOnClose);
             }
         }
         else
@@ -1023,28 +1028,39 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
-    private static void OpenChainWindow(JsonObject state, int priorityPlayerId, int startedByPlayerId)
+    private static void OpenChainWindow(JsonObject state, int priorityPlayerId, int startedByPlayerId, string source)
     {
         state["chainWindow"] = new JsonObject
         {
             ["priorityPlayerId"] = priorityPlayerId,
             ["startedByPlayerId"] = startedByPlayerId,
+            ["source"] = source,
+            ["passesFocusOnClose"] = source == ChainItemSourceValue(ChainItemSource.PlayedCard),
             ["passedByPlayer"] = new JsonObject()
         };
         state["priorityPlayerId"] = priorityPlayerId;
         state["activePlayer"] = priorityPlayerId;
     }
 
-    private static void CloseChainWindow(JsonObject state, int startedByPlayerId)
+    private static void CloseChainWindow(JsonObject state, int startedByPlayerId, bool passesFocusOnClose)
     {
         state["chainWindow"] = null;
         state["priorityPlayerId"] = null;
-        if (state["activeShowdown"] is not null && !CombatDamageRequired(state))
+        if (passesFocusOnClose && state["activeShowdown"] is not null && !CombatDamageRequired(state))
         {
             var nextFocus = NextPlayerId(state, startedByPlayerId);
             state["focusPlayerId"] = nextFocus;
             state["activePlayer"] = nextFocus;
             state["hasPassedFocusByPlayer"] = new JsonObject();
+        }
+        else if (state["activeShowdown"] is not null && !CombatDamageRequired(state))
+        {
+            var focusPlayerId = state["focusPlayerId"]?.GetValue<int?>()
+                ?? state["activePlayer"]?.GetValue<int?>()
+                ?? state["turnPlayerId"]?.GetValue<int>()
+                ?? 0;
+            state["focusPlayerId"] = focusPlayerId;
+            state["activePlayer"] = focusPlayerId;
         }
         else
         {
@@ -1067,6 +1083,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var item = stack[0]!.AsObject();
+        item["status"] = ChainItemStatusValue(ChainItemStatus.Finalized);
         stack.RemoveAt(0);
 
         var playerId = item["playerId"]?.GetValue<int>() ?? 0;
@@ -2315,6 +2332,21 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private static string ScoreSourceValue(ScoreSource source)
     {
         return source == ScoreSource.Hold ? "hold" : "conquer";
+    }
+
+    private static string ChainItemStatusValue(ChainItemStatus status)
+    {
+        return status == ChainItemStatus.Finalized ? "finalized" : "pending";
+    }
+
+    private static string ChainItemSourceValue(ChainItemSource source)
+    {
+        return source switch
+        {
+            ChainItemSource.TriggeredAbility => "triggered",
+            ChainItemSource.AddCreated => "add-created",
+            _ => "played-card"
+        };
     }
 
     private enum ScoreSource

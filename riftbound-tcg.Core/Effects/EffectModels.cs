@@ -9,6 +9,26 @@ public sealed record StackItem(
     int PlayerId,
     CardEffectDefinition Effect,
     string? TargetUnitId,
-    string? TargetLaneId);
+    string? TargetLaneId,
+    ChainItemStatus Status = ChainItemStatus.Pending,
+    ChainItemSource Source = ChainItemSource.PlayedCard);
 
-public sealed record ChainWindow(IReadOnlyDictionary<int, bool> PassedByPlayer);
+public enum ChainItemStatus
+{
+    Pending,
+    Finalized
+}
+
+public enum ChainItemSource
+{
+    PlayedCard,
+    TriggeredAbility,
+    AddCreated
+}
+
+public sealed record ChainWindow(
+    IReadOnlyDictionary<int, bool> PassedByPlayer,
+    int? PriorityPlayerId = null,
+    int? StartedByPlayerId = null,
+    ChainItemSource Source = ChainItemSource.PlayedCard,
+    bool PassesFocusOnClose = true);

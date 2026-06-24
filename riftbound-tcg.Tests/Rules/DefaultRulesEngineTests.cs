@@ -662,6 +662,87 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void reaction_added_to_chain_gets_newest_controller_priority_and_resolves_lifo()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("draw-two", "Draw Two", "spell", "[Action] Draw 2.", "draw", 2, cost: 0));
+        PutCardInHand(state, 1, Card("quick-draw", "Quick Draw", "spell", "[Reaction] Draw 1.", "draw", 1, cost: 0));
+        FindPlayer(state, 0)["deck"] = new JsonArray(
+            Card("p0-a", "P0 A", "unit", "", "rally", 0, cost: 0),
+            Card("p0-b", "P0 B", "unit", "", "rally", 0, cost: 0));
+        FindPlayer(state, 1)["deck"] = new JsonArray(Card("p1-a", "P1 A", "unit", "", "rally", 0, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterTurnPlayerPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        var reaction = engine.ApplyAction(afterTurnPlayerPass.State, new EngineGameAction(1, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterTurnPlayerPass.State.SequenceNumber);
+
+        Assert.That(reaction.Accepted, Is.True);
+        var reactionWindow = reaction.State.State["chainWindow"]!.AsObject();
+        Assert.That(reactionWindow["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(reaction.State.State["effectStack"]!.AsArray().Select(item => item!["cardName"]!.GetValue<string>()), Is.EqualTo(new[] { "Quick Draw", "Draw Two" }));
+        Assert.That(reaction.State.State["effectStack"]![0]!["status"]!.GetValue<string>(), Is.EqualTo("pending"));
+
+        var afterReactionPass = engine.ApplyAction(reaction.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), reaction.State.SequenceNumber);
+        var afterOriginalControllerPass = engine.ApplyAction(afterReactionPass.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), afterReactionPass.State.SequenceNumber);
+
+        Assert.That(FindPlayer(afterOriginalControllerPass.State, 1)["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("p1-a"));
+        Assert.That(afterOriginalControllerPass.State.State["effectStack"]!.AsArray().Select(item => item!["cardName"]!.GetValue<string>()), Is.EqualTo(new[] { "Draw Two" }));
+        Assert.That(afterOriginalControllerPass.State.State["chainWindow"]!["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+
+        var afterOriginalFirstPass = engine.ApplyAction(afterOriginalControllerPass.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), afterOriginalControllerPass.State.SequenceNumber);
+        var resolved = engine.ApplyAction(afterOriginalFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterOriginalFirstPass.State.SequenceNumber);
+
+        Assert.That(resolved.State.State["effectStack"]!.AsArray(), Is.Empty);
+        Assert.That(FindPlayer(resolved.State, 0)["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Is.EquivalentTo(new[] { "p0-a", "p0-b" }));
+    }
+
+    [TestCase("triggered")]
+    [TestCase("add-created")]
+    public void non_focus_passing_chain_sources_keep_current_focus_after_resolution(string source)
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["deck"] = new JsonArray(Card("drawn", "Drawn", "unit", "", "rally", 0, cost: 0));
+        state.State["activeShowdown"] = new JsonObject { ["battlefieldId"] = "test-field", ["kind"] = "non-combat" };
+        state.State["focusPlayerId"] = 0;
+        state.State["priorityPlayerId"] = 0;
+        state.State["activePlayer"] = 0;
+        state.State["hasPassedFocusByPlayer"] = new JsonObject();
+        state.State["effectStack"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "stack-test",
+            ["card"] = Card("trigger-draw", "Trigger Draw", "spell", "", "draw", 1, cost: 0),
+            ["cardId"] = "trigger-draw",
+            ["cardName"] = "Trigger Draw",
+            ["kind"] = "spell",
+            ["playerId"] = 0,
+            ["effect"] = new JsonObject { ["type"] = "draw", ["amount"] = 1 },
+            ["targetUnitId"] = null,
+            ["targetLaneId"] = null,
+            ["status"] = "pending",
+            ["source"] = source
+        });
+        state.State["chainWindow"] = new JsonObject
+        {
+            ["priorityPlayerId"] = 0,
+            ["startedByPlayerId"] = 0,
+            ["source"] = source,
+            ["passesFocusOnClose"] = false,
+            ["passedByPlayer"] = new JsonObject()
+        };
+
+        var afterFirstPass = engine.ApplyAction(state, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), state.SequenceNumber);
+        var resolved = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+
+        Assert.That(resolved.Accepted, Is.True);
+        Assert.That(resolved.State.State["chainWindow"], Is.Null);
+        Assert.That(resolved.State.State["focusPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(resolved.State.State["activePlayer"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(FindPlayer(resolved.State, 0)["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("drawn"));
+    }
+
+    [Test]
     public void cleanup_after_spell_damage_kills_lethal_units()
     {
         var engine = new DefaultRulesEngine();
