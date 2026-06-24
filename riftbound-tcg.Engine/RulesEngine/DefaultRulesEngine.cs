@@ -307,10 +307,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 nextState = combatResult;
                 break;
             case "concede":
-                var winner = state.Players.First(player => player.PlayerId != action.PlayerId).PlayerId;
-                nextState["stage"] = "game-over";
-                nextState["winner"] = winner;
-                nextState = AddLog(nextState, $"{PlayerName(nextState, action.PlayerId)} conceded.");
+                nextState = Concede(nextState, action.PlayerId);
                 break;
             default:
                 return Reject(state, $"Action '{action.ActionType}' is not supported.");
@@ -322,8 +319,215 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         var resultPayload = BuildResultPayload(nextState);
         nextState.Remove("__scoreOutcomes");
-        var next = ToEngineState(state.MatchId, state.Mode, state.SequenceNumber + 1, nextState, state.Players.Select(player => new EngineSeatConfig(player.PlayerId, player.UserId, PlayerName(nextState, player.PlayerId), null)).ToArray());
+        var next = ToEngineState(state.MatchId, state.Mode, state.SequenceNumber + 1, nextState, ActiveSeats(nextState, state.Players));
         return new EngineActionResult(true, "accepted", $"Accepted {action.ActionType}.", next, GetLegalActions(next, action.PlayerId), resultPayload);
+    }
+
+    private static JsonObject Concede(JsonObject state, int playerId)
+    {
+        var concedingPlayerName = PlayerName(state, playerId);
+        var mode = state["mode"]?.GetValue<string>() ?? "duel-1v1";
+        var activePlayerIds = ActivePlayerIds(state);
+
+        if (mode == "teams-2v2")
+        {
+            var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+            var losingTeamId = TeamIdForPlayer(teamIds, playerId);
+            var winningTeamId = activePlayerIds
+                .Where(id => TeamIdForPlayer(teamIds, id) != losingTeamId)
+                .Select(id => TeamIdForPlayer(teamIds, id))
+                .FirstOrDefault();
+            var winningPlayerId = activePlayerIds.FirstOrDefault(id => TeamIdForPlayer(teamIds, id) == winningTeamId);
+
+            foreach (var removedPlayerId in activePlayerIds.Where(id => TeamIdForPlayer(teamIds, id) == losingTeamId).ToArray())
+            {
+                state = RemovePlayerFromContinuingGame(state, removedPlayerId);
+            }
+
+            state["stage"] = "game-over";
+            state["winner"] = winningPlayerId;
+            state["winningTeamId"] = winningTeamId;
+            return AddLog(state, $"{concedingPlayerName} conceded. Team {losingTeamId + 1} loses the match.");
+        }
+
+        var remainingAfterConcede = activePlayerIds.Where(id => id != playerId).ToArray();
+        if (mode == "duel-1v1" || remainingAfterConcede.Length == 1)
+        {
+            var winner = remainingAfterConcede.FirstOrDefault();
+            state = RemovePlayerFromContinuingGame(state, playerId);
+            state["stage"] = "game-over";
+            state["winner"] = winner;
+            state["winningTeamId"] = null;
+            return AddLog(state, $"{concedingPlayerName} conceded.");
+        }
+
+        state = RemovePlayerFromContinuingGame(state, playerId);
+        return AddLog(state, $"{concedingPlayerName} conceded and was removed from the game.");
+    }
+
+    private static JsonObject RemovePlayerFromContinuingGame(JsonObject state, int playerId)
+    {
+        var oldOrder = state["turnOrder"]!.Deserialize<int[]>(JsonOptions) ?? [];
+        var nextAfterRemoved = NextAvailablePlayerId(oldOrder, playerId, id => id != playerId && FindPlayer(state, id) is not null);
+
+        RemovePlayerObjects(state, playerId);
+        RemovePlayerState(state, playerId);
+
+        var activePlayerIds = ActivePlayerIds(state);
+        state["turnOrder"] = ToArray(oldOrder.Where(activePlayerIds.Contains));
+        if (activePlayerIds.Length == 0)
+        {
+            state["turnPlayerId"] = null;
+            state["activePlayer"] = null;
+            state["priorityPlayerId"] = null;
+            state["focusPlayerId"] = null;
+            return state;
+        }
+
+        nextAfterRemoved = nextAfterRemoved is not null && activePlayerIds.Contains(nextAfterRemoved.Value)
+            ? nextAfterRemoved
+            : activePlayerIds[0];
+
+        if (state["firstPlayerId"]?.GetValue<int?>() == playerId)
+        {
+            state["firstPlayerId"] = activePlayerIds[0];
+        }
+
+        if (state["turnPlayerId"]?.GetValue<int?>() == playerId)
+        {
+            state["turnPlayerId"] = nextAfterRemoved;
+            state["turnPhase"] = "awaken";
+            state["scoredBattlefieldIdsThisTurn"] = new JsonObject();
+        }
+
+        if (state["activePlayer"]?.GetValue<int?>() == playerId)
+        {
+            state["activePlayer"] = state["turnPlayerId"]?.GetValue<int?>() ?? nextAfterRemoved;
+        }
+
+        ReassignPriorityAndFocus(state, playerId, activePlayerIds);
+        NormalizeMulliganAfterPlayerRemoval(state, activePlayerIds);
+        return state;
+    }
+
+    private static void RemovePlayerObjects(JsonObject state, int playerId)
+    {
+        var removedBattlefieldId = FindPlayer(state, playerId)?["battlefieldId"]?.GetValue<string>();
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var units = battlefield["units"]!.AsArray();
+            for (var i = units.Count - 1; i >= 0; i--)
+            {
+                if (units[i]!["ownerId"]?.GetValue<int?>() == playerId)
+                {
+                    units.RemoveAt(i);
+                }
+            }
+
+            if (battlefield["controllerId"]?.GetValue<int?>() == playerId)
+            {
+                battlefield["controllerId"] = null;
+            }
+
+            if (battlefield["contestedByPlayerId"]?.GetValue<int?>() == playerId)
+            {
+                battlefield["contestedByPlayerId"] = null;
+                battlefield["stagedShowdown"] = false;
+                battlefield["stagedCombat"] = false;
+            }
+
+            var chosenBy = battlefield["chosenBy"]?.GetValue<int?>();
+            var catalogId = battlefield["catalogId"]?.GetValue<string>();
+            if (chosenBy == playerId || !string.IsNullOrWhiteSpace(removedBattlefieldId) && string.Equals(catalogId, removedBattlefieldId, StringComparison.OrdinalIgnoreCase))
+            {
+                battlefield["catalogId"] = "token-battlefield";
+                battlefield["name"] = "Token Battlefield";
+                battlefield["claim"] = 2;
+                battlefield["chosenBy"] = null;
+            }
+        }
+
+        var stack = state["effectStack"]!.AsArray();
+        for (var i = stack.Count - 1; i >= 0; i--)
+        {
+            if (stack[i]!["playerId"]?.GetValue<int?>() == playerId)
+            {
+                stack.RemoveAt(i);
+            }
+        }
+
+        if (state["activeCombat"] is JsonObject activeCombat
+            && (activeCombat["attackerPlayerId"]?.GetValue<int?>() == playerId || activeCombat["defenderPlayerId"]?.GetValue<int?>() == playerId))
+        {
+            state["activeCombat"] = null;
+            state["activeShowdown"] = null;
+            state["focusPlayerId"] = null;
+            state["priorityPlayerId"] = null;
+            state["hasPassedFocusByPlayer"] = new JsonObject();
+        }
+
+        if (PendingBurnOut(state)?["playerId"]?.GetValue<int?>() == playerId)
+        {
+            state["pendingBurnOut"] = null;
+        }
+    }
+
+    private static void RemovePlayerState(JsonObject state, int playerId)
+    {
+        var players = state["players"]!.AsArray();
+        for (var i = players.Count - 1; i >= 0; i--)
+        {
+            if (players[i]!["id"]?.GetValue<int?>() == playerId)
+            {
+                players.RemoveAt(i);
+            }
+        }
+
+        RemoveObjectProperty(state["hasPassedFocusByPlayer"], playerId);
+        RemoveObjectProperty(state["scoredBattlefieldIdsThisTurn"], playerId);
+        RemoveObjectProperty(state["firstTurnCompletedByPlayer"], playerId);
+        RemoveArrayValue(state["mulliganConfirmedPlayerIds"], playerId);
+        RemoveObjectProperty(state["chainWindow"]?["passedByPlayer"], playerId);
+    }
+
+    private static void ReassignPriorityAndFocus(JsonObject state, int removedPlayerId, int[] activePlayerIds)
+    {
+        if (state["chainWindow"] is JsonObject chainWindow)
+        {
+            var currentPriority = chainWindow["priorityPlayerId"]?.GetValue<int?>()
+                ?? state["priorityPlayerId"]?.GetValue<int?>();
+            if (currentPriority == removedPlayerId || currentPriority is null || !activePlayerIds.Contains(currentPriority.Value))
+            {
+                var nextPriority = NextPlayerId(state, removedPlayerId);
+                chainWindow["priorityPlayerId"] = nextPriority;
+                state["priorityPlayerId"] = nextPriority;
+                state["activePlayer"] = nextPriority;
+            }
+        }
+
+        var focusPlayerId = state["focusPlayerId"]?.GetValue<int?>();
+        if (state["activeShowdown"] is not null && (focusPlayerId == removedPlayerId || focusPlayerId is null || !activePlayerIds.Contains(focusPlayerId.Value)))
+        {
+            var nextFocus = NextPlayerId(state, removedPlayerId);
+            state["focusPlayerId"] = nextFocus;
+            state["priorityPlayerId"] = nextFocus;
+            state["activePlayer"] = nextFocus;
+        }
+    }
+
+    private static void NormalizeMulliganAfterPlayerRemoval(JsonObject state, int[] activePlayerIds)
+    {
+        if (state["stage"]?.GetValue<string>() != "mulligan")
+        {
+            return;
+        }
+
+        var confirmed = state["mulliganConfirmedPlayerIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        if (activePlayerIds.Length > 0 && activePlayerIds.All(confirmed.Contains))
+        {
+            state["stage"] = "playing";
+            state["activePlayer"] = state["turnPlayerId"]?.GetValue<int?>() ?? activePlayerIds[0];
+        }
     }
 
     private static JsonObject ConfirmMulligan(JsonObject state, int playerId, IReadOnlyList<int> handIndexes)
@@ -2345,6 +2549,81 @@ public sealed class DefaultRulesEngine : IRulesEngine
     {
         var players = seats.Select(seat => new EnginePlayerState(seat.PlayerId, seat.UserId, ReadPlayerPoints(state, seat.PlayerId), false)).ToArray();
         return new EngineMatchState(matchId, mode, state["stage"]?.GetValue<string>() ?? "mulligan", sequenceNumber, state, players);
+    }
+
+    private static EngineSeatConfig[] ActiveSeats(JsonObject state, IReadOnlyList<EnginePlayerState> previousPlayers)
+    {
+        var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        return state["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Select(player =>
+            {
+                var playerId = player["id"]!.GetValue<int>();
+                var previous = previousPlayers.FirstOrDefault(candidate => candidate.PlayerId == playerId);
+                return new EngineSeatConfig(
+                    playerId,
+                    previous?.UserId ?? $"player-{playerId}",
+                    player["name"]?.GetValue<string>() ?? $"Player {playerId + 1}",
+                    playerId >= 0 && playerId < teamIds.Length ? teamIds[playerId] : null);
+            })
+            .ToArray();
+    }
+
+    private static int[] ActivePlayerIds(JsonObject state)
+    {
+        return state["players"]!.AsArray()
+            .Select(node => node!.AsObject()["id"]!.GetValue<int>())
+            .ToArray();
+    }
+
+    private static int TeamIdForPlayer(int[] teamIds, int playerId)
+    {
+        return playerId >= 0 && playerId < teamIds.Length ? teamIds[playerId] : playerId;
+    }
+
+    private static int? NextAvailablePlayerId(int[] order, int playerId, Func<int, bool> isAvailable)
+    {
+        if (order.Length == 0)
+        {
+            return null;
+        }
+
+        var index = Array.IndexOf(order, playerId);
+        var start = index < 0 ? 0 : index + 1;
+        for (var offset = 0; offset < order.Length; offset++)
+        {
+            var candidate = order[(start + offset) % order.Length];
+            if (isAvailable(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static void RemoveObjectProperty(JsonNode? node, int playerId)
+    {
+        if (node is JsonObject obj)
+        {
+            obj.Remove(playerId.ToString());
+        }
+    }
+
+    private static void RemoveArrayValue(JsonNode? node, int playerId)
+    {
+        if (node is not JsonArray array)
+        {
+            return;
+        }
+
+        for (var i = array.Count - 1; i >= 0; i--)
+        {
+            if (array[i]?.GetValue<int>() == playerId)
+            {
+                array.RemoveAt(i);
+            }
+        }
     }
 
     private static int ReadPlayerPoints(JsonObject state, int playerId)
