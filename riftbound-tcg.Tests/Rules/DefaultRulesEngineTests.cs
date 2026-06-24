@@ -554,7 +554,158 @@ public class DefaultRulesEngineTests
             afterPlay.State.SequenceNumber);
 
         Assert.That(result.Accepted, Is.False);
+        Assert.That(result.ResultMessage, Does.Contain("legal shared destination"));
         Assert.That(result.State.SequenceNumber, Is.EqualTo(afterPlay.State.SequenceNumber));
+    }
+
+    [Test]
+    public void an_unexhausted_battlefield_unit_can_move_back_to_base()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        Assert.That(afterPlay.Accepted, Is.True);
+
+        var player = FindPlayer(afterPlay.State, 0);
+        var unit = player["base"]!.AsArray().Single()!.AsObject();
+        unit["exhausted"] = false;
+        var unitId = unit["uid"]!.GetValue<string>();
+
+        var afterMoveOut = engine.ApplyAction(
+            afterPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["battlefieldId"] = battlefieldId }),
+            afterPlay.State.SequenceNumber);
+        Assert.That(afterMoveOut.Accepted, Is.True);
+
+        var battlefieldUnit = afterMoveOut.State.State["battlefields"]![0]!["units"]!.AsArray().Single()!.AsObject();
+        battlefieldUnit["exhausted"] = false;
+
+        var result = engine.ApplyAction(
+            afterMoveOut.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = unitId, ["destination"] = "base" }),
+            afterMoveOut.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["battlefields"]![0]!["units"]!.AsArray(), Is.Empty);
+
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["base"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(resultPlayer["base"]!.AsArray()[0]!["uid"]!.GetValue<string>(), Is.EqualTo(unitId));
+        Assert.That(resultPlayer["base"]!.AsArray()[0]!["exhausted"]!.GetValue<bool>(), Is.True);
+    }
+
+    [Test]
+    public void multiple_unexhausted_base_units_can_move_simultaneously_to_one_battlefield()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterSecondPlay = engine.ApplyAction(afterFirstPlay.State, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+
+        var player = FindPlayer(afterSecondPlay.State, 0);
+        var unitIds = player["base"]!.AsArray().Select(unit =>
+        {
+            unit!["exhausted"] = false;
+            return unit["uid"]!.GetValue<string>();
+        }).ToArray();
+
+        var result = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitIds"] = unitIds, ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Is.Empty);
+
+        var resultBattlefield = result.State.State["battlefields"]![0]!.AsObject();
+        Assert.That(resultBattlefield["units"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()), Is.EquivalentTo(unitIds));
+        Assert.That(resultBattlefield["units"]!.AsArray(), Has.All.Matches<JsonNode?>(unit => unit!["exhausted"]!.GetValue<bool>()));
+    }
+
+    [Test]
+    public void simultaneous_move_rejects_if_any_selected_unit_is_exhausted()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var battlefieldId = state.State["battlefields"]![0]!["id"]!.GetValue<string>();
+
+        var afterFirstPlay = engine.ApplyAction(state, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterSecondPlay = engine.ApplyAction(afterFirstPlay.State, new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }), afterFirstPlay.State.SequenceNumber);
+        Assert.That(afterSecondPlay.Accepted, Is.True);
+
+        var player = FindPlayer(afterSecondPlay.State, 0);
+        var units = player["base"]!.AsArray();
+        units[0]!["exhausted"] = false;
+        units[1]!["exhausted"] = true;
+        var unitIds = units.Select(unit => unit!["uid"]!.GetValue<string>()).ToArray();
+
+        var result = engine.ApplyAction(
+            afterSecondPlay.State,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitIds"] = unitIds, ["battlefieldId"] = battlefieldId }),
+            afterSecondPlay.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(result.State.State["battlefields"]![0]!["units"]!.AsArray(), Is.Empty);
+    }
+
+    [Test]
+    public void team_player_cannot_move_to_a_battlefield_controlled_by_their_teammate()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(TeamConfig(), TeamDecks(), 123);
+        state.State["stage"] = "playing";
+        state.State["turnPhase"] = "main";
+        state.State["turnPlayerId"] = 0;
+        state.State["activePlayer"] = 0;
+
+        var player = FindPlayer(state, 0);
+        player["base"]!.AsArray().Add(Unit("team-mover", 0, exhausted: false));
+
+        var teammateControlledBattlefield = state.State["battlefields"]![0]!.AsObject();
+        teammateControlledBattlefield["controllerId"] = 2;
+        var battlefieldId = teammateControlledBattlefield["id"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = "team-mover", ["battlefieldId"] = battlefieldId }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(teammateControlledBattlefield["units"]!.AsArray(), Is.Empty);
+    }
+
+    [Test]
+    public void multiplayer_player_cannot_move_to_a_battlefield_already_occupied_by_two_other_players()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(MultiplayerConfig(), MultiplayerDecks(), 123);
+        state.State["stage"] = "playing";
+        state.State["turnPhase"] = "main";
+        state.State["turnPlayerId"] = 0;
+        state.State["activePlayer"] = 0;
+
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("ffa-mover", 0, exhausted: false));
+
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("first-other", 1, exhausted: true));
+        battlefield["units"]!.AsArray().Add(Unit("second-other", 2, exhausted: true));
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "move-unit", new Dictionary<string, object?> { ["unitId"] = "ffa-mover", ["battlefieldId"] = battlefieldId }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(battlefield["units"]!.AsArray(), Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -1250,6 +1401,31 @@ public class DefaultRulesEngineTests
             0);
     }
 
+    private static EngineMatchConfig MultiplayerConfig()
+    {
+        return new EngineMatchConfig(
+            "match-demo-ffa",
+            "ffa-3",
+            Enumerable.Range(0, 3).Select(id => new EngineSeatConfig(id, $"user-demo-{id}", $"Demo {id}", id)).ToArray(),
+            ["skybridge", "emberfield", "mistfield"],
+            0);
+    }
+
+    private static EngineMatchConfig TeamConfig()
+    {
+        return new EngineMatchConfig(
+            "match-demo-teams",
+            "teams-2v2",
+            [
+                new EngineSeatConfig(0, "user-demo-001", "Demo One", 0),
+                new EngineSeatConfig(1, "user-demo-002", "Demo Two", 1),
+                new EngineSeatConfig(2, "user-demo-003", "Demo Three", 0),
+                new EngineSeatConfig(3, "user-demo-004", "Demo Four", 1)
+            ],
+            ["skybridge", "emberfield", "mistfield"],
+            0);
+    }
+
     private static IReadOnlyList<EnginePlayerDeck> Decks()
     {
         return
@@ -1280,4 +1456,32 @@ public class DefaultRulesEngineTests
             new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["emberfield"], ["rune-b", "rune-b", "rune-b"], Enumerable.Range(0, 12).Select(i => $"unit-b{i}").ToArray())
         ];
     }
+
+    private static IReadOnlyList<EnginePlayerDeck> MultiplayerDecks() =>
+        Enumerable.Range(0, 3)
+            .Select(id => new EnginePlayerDeck($"deck-{id}", $"legend-{id}", $"champion-{id}", [$"field-{id}"], [$"rune-{id}", $"rune-{id}", $"rune-{id}"], [$"unit-{id}-a", $"unit-{id}-b", $"unit-{id}-c", $"unit-{id}-d"]))
+            .ToArray();
+
+    private static IReadOnlyList<EnginePlayerDeck> TeamDecks() =>
+        Enumerable.Range(0, 4)
+            .Select(id => new EnginePlayerDeck($"deck-{id}", $"legend-{id}", $"champion-{id}", [$"field-{id}"], [$"rune-{id}", $"rune-{id}", $"rune-{id}"], [$"unit-{id}-a", $"unit-{id}-b", $"unit-{id}-c", $"unit-{id}-d"]))
+            .ToArray();
+
+    private static JsonObject Unit(string uid, int ownerId, bool exhausted) =>
+        new()
+        {
+            ["id"] = $"{uid}-card",
+            ["catalogId"] = $"{uid}-card",
+            ["uid"] = uid,
+            ["name"] = uid,
+            ["kind"] = "unit",
+            ["ownerId"] = ownerId,
+            ["cost"] = 1,
+            ["might"] = 1,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["exhausted"] = exhausted,
+            ["attacker"] = false,
+            ["defender"] = false
+        };
 }
