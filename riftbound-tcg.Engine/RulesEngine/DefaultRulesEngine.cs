@@ -15,7 +15,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
     public EngineMatchState CreateInitialState(EngineMatchConfig config, IReadOnlyList<EnginePlayerDeck> playerDecks, int seed, IReadOnlyDictionary<string, CardDefinition>? catalog = null)
     {
         var mode = ModeConfig.For(config.Mode);
-        var turnOrder = OrderedPlayerIds(mode.PlayerCount, config.FirstPlayerId);
+        var teamIdsByPlayer = config.Seats.OrderBy(seat => seat.PlayerId).Select(seat => seat.TeamId ?? seat.PlayerId).ToArray();
+        var turnOrder = OrderedPlayerIds(mode.PlayerCount, config.FirstPlayerId, teamIdsByPlayer, config.Mode);
         var players = config.Seats
             .OrderBy(seat => seat.PlayerId)
             .Select(seat =>
@@ -80,9 +81,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["winner"] = null,
             ["winningTeamId"] = null,
             ["turnOrder"] = ToArray(turnOrder),
-            ["teamIds"] = ToArray(config.Seats.OrderBy(seat => seat.PlayerId).Select(seat => seat.TeamId ?? seat.PlayerId).ToArray()),
+            ["teamIds"] = ToArray(teamIdsByPlayer),
             ["hasPassedFocusByPlayer"] = new JsonObject(),
             ["scoredBattlefieldIdsThisTurn"] = new JsonObject(),
+            ["teamScoreBlockedBattlefieldIdsThisTurn"] = new JsonObject(),
+            ["teamFinalPointExemptBattlefieldIdsThisTurn"] = new JsonObject(),
             ["firstTurnCompletedByPlayer"] = new JsonObject(),
             ["mulliganConfirmedPlayerIds"] = new JsonArray(),
             ["activeShowdown"] = null,
@@ -107,7 +110,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     public IReadOnlyList<EngineLegalAction> GetLegalActions(EngineMatchState state, int playerId)
     {
-        if (state.Players.All(player => player.PlayerId != playerId))
+        if (state.Players.All(player => player.PlayerId != playerId) || !ActivePlayerIds(state.State).Contains(playerId))
         {
             return [];
         }
@@ -152,6 +155,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 actions.Add(new("pass-chain-window", "pass-chain-window", "Pass priority", playerId));
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsReactionCard(card)));
             }
+            else if (CanUsePriority(state.State, playerId, chainPriorityPlayerId.Value))
+            {
+                actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsReactionCard(card)));
+            }
 
             return actions;
         }
@@ -185,6 +192,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 }
             }
         }
+        else if (stage == "playing" && !IsShowdownOpen(state.State) && IsTeammate(state.State, playerId, turnPlayerId) && turnPhase == "main")
+        {
+            actions.AddRange(PlayableCardsFromHand(state.State, playerId, IsSpellOrGear));
+        }
 
         if (stage == "playing" && IsShowdownOpen(state.State) && !CombatDamageRequired(state.State))
         {
@@ -196,6 +207,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 actions.Add(new("pass-focus", "pass-focus", "Pass focus", playerId));
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsSpellOrGear(card) && (IsActionCard(card) || IsReactionCard(card))));
                 actions.AddRange(ActivatedAbilityActions(state.State, playerId));
+            }
+            else if (CanUsePriority(state.State, playerId, focusPlayerId))
+            {
+                actions.AddRange(PlayableCardsFromHand(state.State, playerId, card => IsSpellOrGear(card) && (IsActionCard(card) || IsReactionCard(card))));
             }
         }
 
@@ -772,7 +787,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         else if (currentPhase == "beginning")
         {
             state = KillTemporaryPermanents(state, playerId);
-
+            MarkTeamBeginningPhaseRestrictions(state, playerId);
             foreach (var battlefieldId in ControlledBattlefieldIds(state, playerId))
             {
                 state = ScoreBattlefield(state, new ScoreRequest(playerId, battlefieldId, ScoreSource.Hold));
@@ -827,6 +842,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var next = order[(currentIndex + 1) % order.Length];
         state["firstTurnCompletedByPlayer"]![current.ToString()] = true;
         state["scoredBattlefieldIdsThisTurn"] = new JsonObject();
+        state["teamScoreBlockedBattlefieldIdsThisTurn"] = new JsonObject();
+        state["teamFinalPointExemptBattlefieldIdsThisTurn"] = new JsonObject();
         state["turnPlayerId"] = next;
         state["activePlayer"] = next;
         state["turnPhase"] = "awaken";
@@ -885,6 +902,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "already-scored-this-turn"));
         }
 
+        var scoringTeamId = TeamIdForPlayer(state, request.PlayerId);
+        if (BlockedBattlefieldIdsForTeam(state, scoringTeamId).Contains(request.BattlefieldId, StringComparer.OrdinalIgnoreCase))
+        {
+            return AppendScoreOutcome(state, new ScoreOutcome(request.PlayerId, request.BattlefieldId, request.Source, 0, "teammate-controlled-at-beginning"));
+        }
+
         var scoredNow = alreadyScored.Append(request.BattlefieldId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var scored = state["scoredBattlefieldIdsThisTurn"]!.AsObject();
         scored[request.PlayerId.ToString()] = ToArray(scoredNow);
@@ -892,12 +915,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
         if (request.Source == ScoreSource.Conquer)
         {
             var victoryScore = ScoreRules.VictoryScore(state);
-            var currentPoints = ReadPlayerPoints(state, request.PlayerId);
+            var currentPoints = TeamPoints(state, scoringTeamId);
             var allBattlefieldIds = state["battlefields"]!.AsArray()
                 .Select(node => node!["id"]?.GetValue<string>() ?? string.Empty)
                 .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Where(id => !FinalPointExemptBattlefieldIdsForTeam(state, scoringTeamId).Contains(id, StringComparer.OrdinalIgnoreCase))
                 .ToArray();
-            var hasScoredEveryBattlefield = allBattlefieldIds.All(id => scoredNow.Contains(id, StringComparer.OrdinalIgnoreCase));
+            var teamScoredNow = ScoredBattlefieldIdsForTeam(state, scoringTeamId).Append(request.BattlefieldId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var hasScoredEveryBattlefield = allBattlefieldIds.All(id => teamScoredNow.Contains(id, StringComparer.OrdinalIgnoreCase));
             if (currentPoints >= victoryScore - 1 && !hasScoredEveryBattlefield)
             {
                 state = DrawCards(state, request.PlayerId, 1);
@@ -943,6 +968,47 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["amount"] = awardedPoints
         });
         return CheckWinners(state);
+    }
+
+    private static void MarkTeamBeginningPhaseRestrictions(JsonObject state, int playerId)
+    {
+        if (!IsTeamMode(state))
+        {
+            return;
+        }
+
+        var teamId = TeamIdForPlayer(state, playerId);
+        var teammateIds = TeammatePlayerIds(state, playerId);
+        if (teammateIds.Length == 0)
+        {
+            return;
+        }
+
+        var blocked = BlockedBattlefieldIdsForTeam(state, teamId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var exempt = FinalPointExemptBattlefieldIdsForTeam(state, teamId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var battlefieldId = battlefield["id"]?.GetValue<string>() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(battlefieldId))
+            {
+                continue;
+            }
+
+            if (battlefield["controllerId"]?.GetValue<int?>() is { } controllerId && teammateIds.Contains(controllerId))
+            {
+                blocked.Add(battlefieldId);
+            }
+
+            if (battlefield["units"]!.AsArray().Any(unit => teammateIds.Contains(unit!["ownerId"]?.GetValue<int>() ?? -1)))
+            {
+                exempt.Add(battlefieldId);
+            }
+        }
+
+        var blockedByTeam = state["teamScoreBlockedBattlefieldIdsThisTurn"]!.AsObject();
+        blockedByTeam[teamId.ToString()] = ToArray(blocked);
+        var exemptByTeam = state["teamFinalPointExemptBattlefieldIdsThisTurn"]!.AsObject();
+        exemptByTeam[teamId.ToString()] = ToArray(exempt);
     }
 
     private static string[] ControlledBattlefieldIds(JsonObject state, int playerId)
@@ -999,12 +1065,13 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private static JsonObject CheckWinners(JsonObject state)
     {
         var victoryScore = ScoreRules.VictoryScore(state);
-        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        foreach (var teamId in ActivePlayerIds(state).Select(id => TeamIdForPlayer(state, id)).Distinct())
         {
-            if ((player["points"]?.GetValue<int>() ?? 0) < victoryScore) continue;
+            if (TeamPoints(state, teamId) < victoryScore) continue;
             state["stage"] = "game-over";
-            state["winner"] = player["id"]!.GetValue<int>();
-            return AddLog(state, $"{player["name"]?.GetValue<string>() ?? "Player"} wins the match.");
+            state["winningTeamId"] = teamId;
+            state["winner"] = ActivePlayerIds(state).First(id => TeamIdForPlayer(state, id) == teamId);
+            return AddLog(state, IsTeamMode(state) ? $"Team {teamId} wins the match." : $"{PlayerName(state, state["winner"]!.GetValue<int>())} wins the match.");
         }
 
         return state;
@@ -1161,18 +1228,84 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static int[] OpponentPlayerIds(JsonObject state, int playerId)
     {
-        var players = state["players"]!.AsArray()
-            .Select(player => player!["id"]!.GetValue<int>())
-            .Where(id => id != playerId)
-            .ToArray();
-        var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
-        if (teamIds.Length == 0 || playerId < 0 || playerId >= teamIds.Length)
-        {
-            return players;
-        }
+        return ActivePlayerIds(state).Where(id => id != playerId && !IsFriendlyPlayer(state, playerId, id)).ToArray();
+    }
 
-        var teamId = teamIds[playerId];
-        return players.Where(id => id < 0 || id >= teamIds.Length || teamIds[id] != teamId).ToArray();
+    private static int[] TeammatePlayerIds(JsonObject state, int playerId)
+    {
+        return ActivePlayerIds(state).Where(id => id != playerId && IsFriendlyPlayer(state, playerId, id)).ToArray();
+    }
+
+    private static int[] ActivePlayerIds(JsonObject state)
+    {
+        return state["turnOrder"]?.Deserialize<int[]>(JsonOptions)
+            ?? state["players"]!.AsArray().Select(player => player!["id"]!.GetValue<int>()).ToArray();
+    }
+
+    private static bool IsTeamMode(JsonObject state)
+    {
+        var activeTeams = ActivePlayerIds(state).Select(id => TeamIdForPlayer(state, id)).Distinct().Count();
+        return ActivePlayerIds(state).Length > activeTeams;
+    }
+
+    private static bool CanUsePriority(JsonObject state, int playerId, int priorityPlayerId)
+    {
+        return playerId == priorityPlayerId || IsTeammate(state, playerId, priorityPlayerId);
+    }
+
+    private static bool IsTeammate(JsonObject state, int playerId, int otherPlayerId)
+    {
+        return playerId != otherPlayerId && IsFriendlyPlayer(state, playerId, otherPlayerId);
+    }
+
+    private static bool IsFriendlyPlayer(JsonObject state, int playerId, int otherPlayerId)
+    {
+        return TeamIdForPlayer(state, playerId) == TeamIdForPlayer(state, otherPlayerId);
+    }
+
+    private static bool IsFriendlyUnit(JsonObject state, int playerId, JsonObject unit)
+    {
+        var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+        return ownerId >= 0 && IsFriendlyPlayer(state, playerId, ownerId);
+    }
+
+    private static bool IsEnemyUnit(JsonObject state, int playerId, JsonObject unit)
+    {
+        var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+        return ownerId >= 0 && !IsFriendlyPlayer(state, playerId, ownerId);
+    }
+
+    private static int TeamIdForPlayer(JsonObject state, int playerId)
+    {
+        var teamIds = state["teamIds"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        return playerId >= 0 && playerId < teamIds.Length ? teamIds[playerId] : playerId;
+    }
+
+    private static int TeamPoints(JsonObject state, int teamId)
+    {
+        return state["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Where(player => TeamIdForPlayer(state, player["id"]!.GetValue<int>()) == teamId)
+            .Sum(player => player["points"]?.GetValue<int>() ?? 0);
+    }
+
+    private static string[] ScoredBattlefieldIdsForTeam(JsonObject state, int teamId)
+    {
+        return ActivePlayerIds(state)
+            .Where(id => TeamIdForPlayer(state, id) == teamId)
+            .SelectMany(id => ScoredBattlefieldIds(state, id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string[] BlockedBattlefieldIdsForTeam(JsonObject state, int teamId)
+    {
+        return state["teamScoreBlockedBattlefieldIdsThisTurn"]?[teamId.ToString()]?.Deserialize<string[]>(JsonOptions) ?? [];
+    }
+
+    private static string[] FinalPointExemptBattlefieldIdsForTeam(JsonObject state, int teamId)
+    {
+        return state["teamFinalPointExemptBattlefieldIdsThisTurn"]?[teamId.ToString()]?.Deserialize<string[]>(JsonOptions) ?? [];
     }
 
     private static bool AreTeammates(JsonObject state, int firstPlayerId, int secondPlayerId)
@@ -2061,12 +2194,16 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static JsonObject UpdateBattlefieldAfterMovement(JsonObject state, int playerId, JsonObject battlefield)
     {
-        var opposingOwners = UnitOwnerIds(battlefield)
-            .Where(ownerId => ownerId != playerId && !AreTeammates(state, playerId, ownerId))
+        var teams = battlefield["units"]!.AsArray()
+            .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
+            .Where(owner => owner is not null)
+            .Select(owner => TeamIdForPlayer(state, owner!.Value))
             .Distinct()
             .ToArray();
+        var movingTeamId = TeamIdForPlayer(state, playerId);
+        var opposingTeams = teams.Where(teamId => teamId != movingTeamId).ToArray();
 
-        if (opposingOwners.Length == 1)
+        if (opposingTeams.Length == 1)
         {
             battlefield["controllerId"] = null;
             battlefield["stagedCombat"] = true;
@@ -2075,7 +2212,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AddLog(state, $"{PlayerName(state, playerId)} contested {battlefield["name"]?.GetValue<string>() ?? "a battlefield"} and staged combat.");
         }
 
-        if (opposingOwners.Length == 0)
+        if (opposingTeams.Length == 0)
         {
             battlefield["controllerId"] = playerId;
             battlefield["contestedByPlayerId"] = null;
@@ -2171,6 +2308,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 .Select(owner => owner!.Value)
                 .Distinct()
                 .ToArray();
+            var teams = owners.Select(owner => TeamIdForPlayer(state, owner)).Distinct().ToArray();
             var contestedBy = battlefield["contestedByPlayerId"]?.GetValue<int?>();
 
             if (owners.Length == 0)
@@ -2187,7 +2325,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 continue;
             }
 
-            if (owners.Length == 2)
+            if (teams.Length == 2)
             {
                 battlefield["controllerId"] = null;
                 battlefield["stagedShowdown"] = true;
@@ -2248,18 +2386,25 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ?? 0;
         var defenderPlayerId = battlefield["units"]!.AsArray()
             .Select(node => node!.AsObject()["ownerId"]?.GetValue<int>())
-            .Where(owner => owner is not null && owner.Value != attackerPlayerId)
+            .Where(owner => owner is not null && !IsFriendlyPlayer(state, attackerPlayerId, owner.Value))
             .Select(owner => owner!.Value)
             .Distinct()
+            .Cast<int?>()
             .FirstOrDefault();
+        if (defenderPlayerId is null)
+        {
+            battlefield["stagedCombat"] = false;
+            battlefield["stagedShowdown"] = false;
+            return state;
+        }
 
         battlefield["stagedShowdown"] = false;
         battlefield["stagedCombat"] = false;
         foreach (var unit in battlefield["units"]!.AsArray().Select(node => node!.AsObject()))
         {
             var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
-            unit["attacker"] = ownerId == attackerPlayerId;
-            unit["defender"] = ownerId == defenderPlayerId;
+            unit["attacker"] = IsFriendlyPlayer(state, attackerPlayerId, ownerId);
+            unit["defender"] = IsFriendlyPlayer(state, defenderPlayerId.Value, ownerId);
         }
 
         state["activeShowdown"] = new JsonObject
@@ -2271,7 +2416,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             ["battlefieldId"] = battlefieldId,
             ["attackerPlayerId"] = attackerPlayerId,
-            ["defenderPlayerId"] = defenderPlayerId,
+            ["defenderPlayerId"] = defenderPlayerId.Value,
             ["damageStep"] = false
         };
         state["focusPlayerId"] = attackerPlayerId;
@@ -2279,7 +2424,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         state["activePlayer"] = attackerPlayerId;
         state["hasPassedFocusByPlayer"] = new JsonObject();
         state = QueueCombatDesignationTriggers(state, battlefield, attackerPlayerId, defenderPlayerId);
-        return AddLog(state, $"{PlayerName(state, attackerPlayerId)} challenges {PlayerName(state, defenderPlayerId)} to a combat showdown at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+        return AddLog(state, $"{PlayerName(state, attackerPlayerId)} challenges {PlayerName(state, defenderPlayerId.Value)} to a combat showdown at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
     }
 
     private static JsonObject CloseShowdown(JsonObject state)
@@ -2364,20 +2509,20 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var units = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
-        var unitOwners = units.Select(unit => unit["ownerId"]?.GetValue<int>())
+        var unitTeams = units.Select(unit => unit["ownerId"]?.GetValue<int>())
             .Where(owner => owner is not null)
-            .Select(owner => owner!.Value)
+            .Select(owner => TeamIdForPlayer(state, owner!.Value))
             .Distinct()
             .ToArray();
-        if (unitOwners.Length != 2 ||
-            !unitOwners.Contains(attackerPlayerId.Value) ||
-            !unitOwners.Contains(defenderPlayerId.Value))
+        if (unitTeams.Length != 2 ||
+            !unitTeams.Contains(TeamIdForPlayer(state, attackerPlayerId.Value)) ||
+            !unitTeams.Contains(TeamIdForPlayer(state, defenderPlayerId.Value)))
         {
             return null;
         }
 
-        var attackers = units.Where(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value).ToArray();
-        var defenders = units.Where(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value).ToArray();
+        var attackers = units.Where(unit => IsFriendlyUnit(state, attackerPlayerId.Value, unit)).ToArray();
+        var defenders = units.Where(unit => IsFriendlyUnit(state, defenderPlayerId.Value, unit)).ToArray();
         if (attackers.Length == 0 || defenders.Length == 0)
         {
             return null;
@@ -2456,14 +2601,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var remainingUnits = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
 
-        var attackerHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value);
-        var defenderHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value);
+        var attackerHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, attackerPlayerId.Value, unit));
+        var defenderHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, defenderPlayerId.Value, unit));
         if (attackerHasUnits && defenderHasUnits)
         {
             state = RecallAttackers(state, battlefield, attackerPlayerId.Value);
             remainingUnits = battlefield["units"]!.AsArray().Select(node => node!.AsObject()).ToArray();
-            attackerHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == attackerPlayerId.Value);
-            defenderHasUnits = remainingUnits.Any(unit => unit["ownerId"]?.GetValue<int>() == defenderPlayerId.Value);
+            attackerHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, attackerPlayerId.Value, unit));
+            defenderHasUnits = remainingUnits.Any(unit => IsFriendlyUnit(state, defenderPlayerId.Value, unit));
         }
 
         state["lastCombat"] = new JsonObject
@@ -3516,7 +3661,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         if (state["chainWindow"] is not null)
         {
-            return IsReactionCard(card);
+            var priorityPlayerId = ChainPriorityPlayerId(state);
+            return IsReactionCard(card) && (priorityPlayerId is null || CanUsePriority(state, playerId, priorityPlayerId.Value));
         }
 
         if (IsShowdownOpen(state))
@@ -3526,12 +3672,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 ?? state["activePlayer"]?.GetValue<int?>()
                 ?? state["turnPlayerId"]?.GetValue<int>()
                 ?? 0;
-            return playerId == focusPlayerId && (IsActionCard(card) || IsReactionCard(card));
+            return CanUsePriority(state, playerId, focusPlayerId) && (IsActionCard(card) || IsReactionCard(card));
         }
 
         var turnPlayerId = state["turnPlayerId"]?.GetValue<int>() ?? 0;
         var turnPhase = state["turnPhase"]?.GetValue<string>() ?? "";
-        return playerId == turnPlayerId && turnPhase == "main";
+        return (playerId == turnPlayerId || IsTeammate(state, playerId, turnPlayerId)) && turnPhase == "main";
     }
 
     private static bool IsShowdownOpen(JsonObject state)
@@ -4150,12 +4296,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static bool UnitCanBeTargetedByEffect(JsonObject state, int playerId, string effectType, JsonObject unit)
     {
-        _ = state;
-        var ownerId = unit["ownerId"]?.GetValue<int>();
         return effectType switch
         {
-            "damage" => ownerId is not null && ownerId.Value != playerId,
-            "buff" or "rally" => ownerId == playerId,
+            "damage" => IsEnemyUnit(state, playerId, unit),
+            "buff" or "rally" => IsFriendlyUnit(state, playerId, unit),
             _ => false
         };
     }
@@ -4505,11 +4649,24 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return string.Join(' ', id.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
     }
 
-    private static int[] OrderedPlayerIds(int playerCount, int firstPlayerId)
+    private static int[] OrderedPlayerIds(int playerCount, int firstPlayerId, IReadOnlyList<int>? teamIds = null, string? mode = null)
     {
         var ids = Enumerable.Range(0, playerCount).ToArray();
         var first = firstPlayerId >= 0 && firstPlayerId < playerCount ? firstPlayerId : 0;
-        return ids.Skip(first).Concat(ids.Take(first)).ToArray();
+        var clockwise = ids.Skip(first).Concat(ids.Take(first)).ToArray();
+        if (mode != "teams-2v2" || teamIds is null || teamIds.Count < playerCount)
+        {
+            return clockwise;
+        }
+
+        var firstTeam = teamIds[first];
+        var opponent = clockwise.FirstOrDefault(id => teamIds[id] != firstTeam, -1);
+        var teammate = clockwise.FirstOrDefault(id => id != first && teamIds[id] == firstTeam, -1);
+        var opponentTeammate = opponent >= 0
+            ? clockwise.FirstOrDefault(id => id != opponent && teamIds[id] == teamIds[opponent], -1)
+            : -1;
+        var alternated = new[] { first, opponent, teammate, opponentTeammate }.Where(id => id >= 0).Distinct().ToArray();
+        return alternated.Length == playerCount ? alternated : clockwise;
     }
 
     private static List<T> Shuffle<T>(List<T> items, int seed)
