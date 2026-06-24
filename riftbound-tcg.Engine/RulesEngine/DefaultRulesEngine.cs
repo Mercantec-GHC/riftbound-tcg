@@ -33,6 +33,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     ["deck"] = ToArray(library),
                     ["hand"] = ToArray(hand),
                     ["trash"] = new JsonArray(),
+                    ["banished"] = new JsonArray(),
                     ["base"] = new JsonArray(),
                     ["baseGear"] = new JsonArray(),
                     ["champion"] = string.IsNullOrWhiteSpace(deck.ChampionId) ? null : Card(deck.ChampionId, $"champion-{seat.PlayerId}", catalog),
@@ -163,6 +164,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             {
                 actions.Add(new("play-unit", "play-unit", "Play unit", playerId));
                 actions.Add(new("move-unit", "move-unit", "Move unit", playerId));
+                actions.Add(new("create-token", "create-token", "Create token", playerId));
+                actions.Add(new("attach-card", "attach-card", "Attach card", playerId));
+                actions.Add(new("detach-card", "detach-card", "Detach card", playerId));
+                actions.Add(new("banish-object", "banish-object", "Banish object", playerId));
+                actions.Add(new("set-facedown", "set-facedown", "Set facedown", playerId));
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, IsSpellOrGear));
 
                 if (CanSummonChampion(state.State, playerId))
@@ -269,6 +275,51 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 }
 
                 nextState = moveUnitResult;
+                break;
+            case "create-token":
+                var createTokenResult = CreateToken(nextState, action.PlayerId, ReadString(action.Payload, "cardId"), ReadString(action.Payload, "name"), ReadString(action.Payload, "battlefieldId"));
+                if (createTokenResult is null)
+                {
+                    return Reject(state, "Invalid create-token action: target base or battlefield must exist.");
+                }
+
+                nextState = createTokenResult;
+                break;
+            case "attach-card":
+                var attachCardResult = AttachCard(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "targetUnitId"));
+                if (attachCardResult is null)
+                {
+                    return Reject(state, "Invalid attach-card action: choose one of your cards in hand and an existing unit.");
+                }
+
+                nextState = attachCardResult;
+                break;
+            case "detach-card":
+                var detachCardResult = DetachCard(nextState, action.PlayerId, ReadString(action.Payload, "attachedCardUid"));
+                if (detachCardResult is null)
+                {
+                    return Reject(state, "Invalid detach-card action: only attached cards you own can be detached.");
+                }
+
+                nextState = detachCardResult;
+                break;
+            case "banish-object":
+                var banishObjectResult = BanishObject(nextState, action.PlayerId, ReadString(action.Payload, "objectUid"));
+                if (banishObjectResult is null)
+                {
+                    return Reject(state, "Invalid banish-object action: object must exist and be controlled by you.");
+                }
+
+                nextState = banishObjectResult;
+                break;
+            case "set-facedown":
+                var setFaceDownResult = SetFaceDown(nextState, action.PlayerId, ReadString(action.Payload, "objectUid"), ReadBool(action.Payload, "faceDown") ?? true);
+                if (setFaceDownResult is null)
+                {
+                    return Reject(state, "Invalid set-facedown action: object must exist and be controlled by you.");
+                }
+
+                nextState = setFaceDownResult;
                 break;
             case "play-card":
                 var playCardResult = PlayCard(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "targetUnitId"), ReadString(action.Payload, "targetLaneId"));
@@ -1103,11 +1154,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var unit = Clone(champion);
         unit["uid"] = $"unit-{state["nextUid"]?.GetValue<int>() ?? 1}";
         unit["ownerId"] = playerId;
+        unit["controllerId"] = playerId;
+        unit["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null, ["attachedToUid"] = null };
         unit["exhausted"] = true;
         unit["damage"] = 0;
         unit["attachedMight"] = 0;
         unit["attacker"] = false;
         unit["defender"] = false;
+        unit["isToken"] = false;
+        unit["isFaceDown"] = false;
+        unit["rulesTextActive"] = true;
+        unit["attachedCards"] = new JsonArray();
+        unit["topCardId"] = unit["id"]?.GetValue<string>() ?? champion["id"]?.GetValue<string>() ?? string.Empty;
 
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
 
@@ -1369,9 +1427,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var gear = Clone(card);
         gear["uid"] = $"gear-{state["nextUid"]?.GetValue<int>() ?? 1}";
         gear["ownerId"] = playerId;
-        gear["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null };
+        gear["controllerId"] = playerId;
+        gear["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null, ["attachedToUid"] = null };
         gear["exhausted"] = false;
         gear["attachedUnitId"] = null;
+        gear["isToken"] = false;
+        gear["isFaceDown"] = false;
+        gear["rulesTextActive"] = true;
+        gear["attachedCards"] = new JsonArray();
+        gear["topCardId"] = gear["id"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty;
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
 
         return UpdatePlayer(state, playerId, player =>
@@ -1429,11 +1493,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var unit = Clone(card);
         unit["uid"] = $"unit-{state["nextUid"]?.GetValue<int>() ?? 1}";
         unit["ownerId"] = playerId;
+        unit["controllerId"] = playerId;
+        unit["location"] = new JsonObject { ["type"] = battlefield is null ? "base" : "battlefield", ["battlefieldId"] = battlefield?["id"]?.GetValue<string>(), ["attachedToUid"] = null };
         unit["exhausted"] = true;
         unit["damage"] = 0;
         unit["attachedMight"] = 0;
         unit["attacker"] = false;
         unit["defender"] = false;
+        unit["isToken"] = false;
+        unit["isFaceDown"] = false;
+        unit["rulesTextActive"] = true;
+        unit["attachedCards"] = new JsonArray();
+        unit["topCardId"] = unit["id"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty;
 
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
 
@@ -1459,6 +1530,173 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var destinationLabel = battlefield is null ? "their base" : battlefield["name"]?.GetValue<string>() ?? "a battlefield";
         return AddLog(state, $"{PlayerName(state, playerId)} played {card["name"]?.GetValue<string>() ?? "a unit"} to {destinationLabel}.");
+    }
+
+    private static JsonObject? CreateToken(JsonObject state, int playerId, string? cardId, string? name, string? battlefieldId)
+    {
+        if (FindPlayer(state, playerId) is null)
+        {
+            return null;
+        }
+
+        JsonObject? battlefield = null;
+        if (!string.IsNullOrWhiteSpace(battlefieldId))
+        {
+            battlefield = FindBattlefield(state, battlefieldId);
+            if (battlefield is null)
+            {
+                return null;
+            }
+        }
+
+        var nextUid = state["nextUid"]?.GetValue<int>() ?? 1;
+        var tokenId = string.IsNullOrWhiteSpace(cardId) ? "token-unit" : cardId;
+        var token = new JsonObject
+        {
+            ["id"] = $"{tokenId}-token-{nextUid}",
+            ["catalogId"] = tokenId,
+            ["name"] = string.IsNullOrWhiteSpace(name) ? DisplayName(tokenId) : name,
+            ["kind"] = "unit",
+            ["tags"] = new JsonArray("token"),
+            ["domain"] = "Fury",
+            ["domains"] = new JsonArray("Fury"),
+            ["cost"] = 0,
+            ["might"] = 1,
+            ["text"] = string.Empty,
+            ["image"] = "*",
+            ["cardType"] = "Unit",
+            ["supertype"] = "Token",
+            ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 },
+            ["uid"] = $"token-{nextUid}",
+            ["ownerId"] = playerId,
+            ["controllerId"] = playerId,
+            ["location"] = new JsonObject { ["type"] = battlefield is null ? "base" : "battlefield", ["battlefieldId"] = battlefield?["id"]?.GetValue<string>(), ["attachedToUid"] = null },
+            ["exhausted"] = false,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["attacker"] = false,
+            ["defender"] = false,
+            ["isToken"] = true,
+            ["isFaceDown"] = false,
+            ["rulesTextActive"] = true,
+            ["attachedCards"] = new JsonArray(),
+            ["topCardId"] = null
+        };
+        state["nextUid"] = nextUid + 1;
+
+        if (battlefield is null)
+        {
+            state = UpdatePlayer(state, playerId, player =>
+            {
+                player["base"]!.AsArray().Add(token);
+                return player;
+            });
+        }
+        else
+        {
+            battlefield["units"]!.AsArray().Add(token);
+        }
+
+        return AddLog(state, $"{PlayerName(state, playerId)} created a token.");
+    }
+
+    private static JsonObject? AttachCard(JsonObject state, int playerId, int? handIndex, string? targetUnitId)
+    {
+        if (handIndex is null || string.IsNullOrWhiteSpace(targetUnitId))
+        {
+            return null;
+        }
+
+        var player = FindPlayer(state, playerId);
+        var target = FindUnit(state, targetUnitId);
+        if (player is null || target is null)
+        {
+            return null;
+        }
+
+        var hand = player["hand"]!.AsArray();
+        if (handIndex.Value < 0 || handIndex.Value >= hand.Count)
+        {
+            return null;
+        }
+
+        var card = hand[handIndex.Value]!.AsObject();
+        var attached = Clone(card);
+        var uid = $"attached-{state["nextUid"]?.GetValue<int>() ?? 1}";
+        attached["uid"] = uid;
+        attached["ownerId"] = playerId;
+        attached["controllerId"] = playerId;
+        attached["location"] = new JsonObject { ["type"] = "attached", ["battlefieldId"] = null, ["attachedToUid"] = targetUnitId };
+        attached["exhausted"] = false;
+        attached["attachedUnitId"] = targetUnitId;
+        attached["isToken"] = false;
+        attached["isFaceDown"] = false;
+        attached["rulesTextActive"] = true;
+        attached["attachedCards"] = new JsonArray();
+        attached["topCardId"] = attached["id"]?.GetValue<string>() ?? card["id"]?.GetValue<string>() ?? string.Empty;
+        state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+
+        hand.RemoveAt(handIndex.Value);
+
+        var attachedCards = target["attachedCards"] as JsonArray ?? new JsonArray();
+        attachedCards.Add(attached);
+        target["attachedCards"] = attachedCards;
+        RecomputeTopCard(target);
+        return AddLog(state, $"{PlayerName(state, playerId)} attached {card["name"]?.GetValue<string>() ?? "a card"}.");
+    }
+
+    private static JsonObject? DetachCard(JsonObject state, int playerId, string? attachedCardUid)
+    {
+        if (string.IsNullOrWhiteSpace(attachedCardUid))
+        {
+            return null;
+        }
+
+        var detached = RemoveAttachedCard(state, attachedCardUid);
+        if (detached is null || detached["ownerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        detached["location"] = new JsonObject { ["type"] = "base", ["battlefieldId"] = null, ["attachedToUid"] = null };
+        detached["attachedUnitId"] = null;
+        state = PutObjectInOwnerZone(state, detached, "baseGear");
+        return AddLog(state, $"{PlayerName(state, playerId)} detached a card.");
+    }
+
+    private static JsonObject? BanishObject(JsonObject state, int playerId, string? objectUid)
+    {
+        if (string.IsNullOrWhiteSpace(objectUid))
+        {
+            return null;
+        }
+
+        var removed = RemoveObjectByUid(state, objectUid);
+        if (removed is null || removed["controllerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        state = MoveObjectAndAttachmentsToOwnerZone(state, removed, "banished");
+        return AddLog(state, $"{PlayerName(state, playerId)} banished an object.");
+    }
+
+    private static JsonObject? SetFaceDown(JsonObject state, int playerId, string? objectUid, bool faceDown)
+    {
+        if (string.IsNullOrWhiteSpace(objectUid))
+        {
+            return null;
+        }
+
+        var obj = FindObjectByUid(state, objectUid);
+        if (obj is null || obj["controllerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        obj["isFaceDown"] = faceDown;
+        obj["rulesTextActive"] = !faceDown;
+        return AddLog(state, $"{PlayerName(state, playerId)} {(faceDown ? "turned an object facedown" : "turned an object faceup")}.");
     }
 
     private static JsonObject? MoveUnits(JsonObject state, int playerId, IReadOnlyList<string> unitIds, string? battlefieldId, string? destination)
@@ -2152,21 +2390,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 continue;
             }
 
-            var killed = Clone(unit);
-            killed.Remove("uid");
-            killed.Remove("ownerId");
-            killed.Remove("exhausted");
-            killed.Remove("damage");
-            killed.Remove("attachedMight");
-            killed.Remove("attacker");
-            killed.Remove("defender");
-            var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
-            state = UpdatePlayer(state, ownerId, player =>
-            {
-                player["trash"]!.AsArray().Add(killed);
-                return player;
-            });
             units.RemoveAt(i);
+            state = MoveObjectAndAttachmentsToOwnerZone(state, unit, "trash");
         }
     }
 
@@ -2188,16 +2413,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     continue;
                 }
 
-                var killed = Clone(unit);
-                killed.Remove("uid");
-                killed.Remove("ownerId");
-                killed.Remove("exhausted");
-                killed.Remove("damage");
-                killed.Remove("attachedMight");
-                killed.Remove("attacker");
-                killed.Remove("defender");
-                player["trash"]!.AsArray().Add(killed);
                 units.RemoveAt(i);
+                state = MoveObjectAndAttachmentsToOwnerZone(state, unit, "trash");
             }
         }
 
@@ -2628,6 +2845,219 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return state;
     }
 
+    private static JsonObject? FindObjectByUid(JsonObject state, string uid)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var zoneName in new[] { "base", "baseGear" })
+            {
+                var found = FindObjectInArray(player[zoneName]!.AsArray(), uid);
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var found = FindObjectInArray(battlefield["units"]!.AsArray(), uid);
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? FindObjectInArray(JsonArray objects, string uid)
+    {
+        foreach (var node in objects)
+        {
+            var obj = node!.AsObject();
+            if (obj["uid"]?.GetValue<string>() == uid)
+            {
+                return obj;
+            }
+
+            if (obj["attachedCards"] is JsonArray attachedCards)
+            {
+                var found = FindObjectInArray(attachedCards, uid);
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveObjectByUid(JsonObject state, string uid)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var zoneName in new[] { "base", "baseGear" })
+            {
+                var removed = RemoveObjectFromArray(player[zoneName]!.AsArray(), uid);
+                if (removed is not null)
+                {
+                    return removed;
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var removed = RemoveObjectFromArray(battlefield["units"]!.AsArray(), uid);
+            if (removed is not null)
+            {
+                return removed;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveAttachedCard(JsonObject state, string uid)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            foreach (var zoneName in new[] { "base", "baseGear" })
+            {
+                var removed = RemoveAttachedCardFromArray(player[zoneName]!.AsArray(), uid);
+                if (removed is not null)
+                {
+                    return removed;
+                }
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var removed = RemoveAttachedCardFromArray(battlefield["units"]!.AsArray(), uid);
+            if (removed is not null)
+            {
+                return removed;
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveAttachedCardFromArray(JsonArray objects, string uid)
+    {
+        foreach (var node in objects)
+        {
+            var obj = node!.AsObject();
+            if (obj["attachedCards"] is not JsonArray attachedCards)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < attachedCards.Count; i++)
+            {
+                var attached = attachedCards[i]!.AsObject();
+                if (attached["uid"]?.GetValue<string>() == uid)
+                {
+                    attachedCards.RemoveAt(i);
+                    RecomputeTopCard(obj);
+                    return attached;
+                }
+
+                if (attached["attachedCards"] is JsonArray nestedCards &&
+                    RemoveObjectFromArray(nestedCards, uid) is { } nested)
+                {
+                    RecomputeTopCard(attached);
+                    RecomputeTopCard(obj);
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject? RemoveObjectFromArray(JsonArray objects, string uid)
+    {
+        for (var i = 0; i < objects.Count; i++)
+        {
+            var obj = objects[i]!.AsObject();
+            if (obj["uid"]?.GetValue<string>() == uid)
+            {
+                objects.RemoveAt(i);
+                return obj;
+            }
+
+            if (obj["attachedCards"] is JsonArray attachedCards)
+            {
+                var removed = RemoveObjectFromArray(attachedCards, uid);
+                if (removed is not null)
+                {
+                    RecomputeTopCard(obj);
+                    return removed;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject MoveObjectAndAttachmentsToOwnerZone(JsonObject state, JsonObject obj, string zoneName)
+    {
+        if (obj["attachedCards"] is JsonArray attachedCards)
+        {
+            while (attachedCards.Count > 0)
+            {
+                var attached = attachedCards[0]!.AsObject();
+                attachedCards.RemoveAt(0);
+                state = MoveObjectAndAttachmentsToOwnerZone(state, attached, zoneName);
+            }
+        }
+
+        obj["attachedCards"] = new JsonArray();
+        RecomputeTopCard(obj);
+        obj["location"] = new JsonObject { ["type"] = zoneName == "banished" ? "banished" : "trash", ["battlefieldId"] = null, ["attachedToUid"] = null };
+        obj["attachedUnitId"] = null;
+        return PutObjectInOwnerZone(state, obj, zoneName);
+    }
+
+    private static JsonObject PutObjectInOwnerZone(JsonObject state, JsonObject obj, string zoneName)
+    {
+        if (obj["isToken"]?.GetValue<bool>() == true)
+        {
+            return state;
+        }
+
+        var ownerId = obj["ownerId"]?.GetValue<int>() ?? -1;
+        return UpdatePlayer(state, ownerId, player =>
+        {
+            if (player[zoneName] is not JsonArray zone)
+            {
+                zone = new JsonArray();
+                player[zoneName] = zone;
+            }
+
+            zone.Add(obj);
+            return player;
+        });
+    }
+
+    private static void RecomputeTopCard(JsonObject obj)
+    {
+        if (obj["attachedCards"] is JsonArray attachedCards && attachedCards.Count > 0)
+        {
+            var top = attachedCards[attachedCards.Count - 1]!.AsObject();
+            obj["topCardId"] = top["topCardId"]?.GetValue<string>() ?? top["id"]?.GetValue<string>();
+            return;
+        }
+
+        obj["topCardId"] = obj["isToken"]?.GetValue<bool>() == true
+            ? null
+            : obj["id"]?.GetValue<string>();
+    }
+
     private static JsonObject? FindPlayer(JsonObject state, int playerId)
     {
         return state["players"]!.AsArray()
@@ -3033,6 +3463,21 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             string text when !string.IsNullOrWhiteSpace(text) => text,
             JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
+            _ => null
+        };
+    }
+
+    private static bool? ReadBool(IReadOnlyDictionary<string, object?>? payload, string key)
+    {
+        if (payload is null || !payload.TryGetValue(key, out var value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            JsonElement element when element.ValueKind is JsonValueKind.True or JsonValueKind.False => element.GetBoolean(),
+            bool boolValue => boolValue,
             _ => null
         };
     }
