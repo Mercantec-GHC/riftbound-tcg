@@ -1818,7 +1818,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static int CurrentMight(JsonObject unit)
     {
-        return (unit["might"]?.GetValue<int>() ?? 0) + (unit["attachedMight"]?.GetValue<int>() ?? 0);
+        return ContinuousEffectLayerResolver.EvaluateUnit(unit).Might;
     }
 
     private static int CurrentCombatMight(JsonObject unit)
