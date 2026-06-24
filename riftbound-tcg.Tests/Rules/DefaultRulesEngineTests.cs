@@ -142,24 +142,40 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void both_players_can_mulligan_independently_without_waiting_for_each_other()
+    public void next_player_can_confirm_mulligan_after_previous_player_confirms()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
 
         var actionsForSecondPlayerBeforeFirstConfirms = engine.GetLegalActions(state, 1);
-        Assert.That(actionsForSecondPlayerBeforeFirstConfirms.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+        Assert.That(actionsForSecondPlayerBeforeFirstConfirms.Select(action => action.Type), Has.None.EqualTo("confirm-mulligan"));
 
-        var afterSecondPlayerConfirms = engine.ApplyAction(
+        var afterFirstPlayerConfirms = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?>()),
+            0);
+
+        Assert.That(afterFirstPlayerConfirms.Accepted, Is.True);
+        Assert.That(afterFirstPlayerConfirms.State.Stage, Is.EqualTo("mulligan"));
+
+        var secondPlayerActionsAfter = engine.GetLegalActions(afterFirstPlayerConfirms.State, 1);
+        Assert.That(secondPlayerActionsAfter.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+    }
+
+    [Test]
+    public void out_of_order_mulligan_confirmation_is_rejected()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), 123);
+
+        var result = engine.ApplyAction(
             state,
             new EngineGameAction(1, "confirm-mulligan", new Dictionary<string, object?>()),
             0);
 
-        Assert.That(afterSecondPlayerConfirms.Accepted, Is.True);
-        Assert.That(afterSecondPlayerConfirms.State.Stage, Is.EqualTo("mulligan"));
-
-        var firstPlayerActionsAfter = engine.GetLegalActions(afterSecondPlayerConfirms.State, 0);
-        Assert.That(firstPlayerActionsAfter.Select(action => action.Type), Contains.Item("confirm-mulligan"));
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(result.State.SequenceNumber, Is.EqualTo(0));
+        Assert.That(result.State.Stage, Is.EqualTo("mulligan"));
     }
 
     [Test]
@@ -191,6 +207,37 @@ public class DefaultRulesEngineTests
 
         Assert.That(afterSecond.Accepted, Is.True);
         Assert.That(afterSecond.State.Stage, Is.EqualTo("playing"));
+    }
+
+    [Test]
+    public void mulligan_recycles_returned_cards_to_bottom_in_deterministic_random_order()
+    {
+        var engine = new DefaultRulesEngine();
+        var first = engine.CreateInitialState(Config(), DecksWithLargerLibrary(), 123);
+        var second = engine.CreateInitialState(Config(), DecksWithLargerLibrary(), 123);
+
+        var firstPlayer = FindPlayer(first, 0);
+        var originalHandIds = firstPlayer["hand"]!.AsArray().Select(card => card!["id"]!.GetValue<string>()).ToArray();
+        var returnedIds = new[] { originalHandIds[0], originalHandIds[1] };
+
+        var firstResult = engine.ApplyAction(
+            first,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 1 } }),
+            0);
+        var secondResult = engine.ApplyAction(
+            second,
+            new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?> { ["handIndexes"] = new[] { 0, 1 } }),
+            0);
+
+        Assert.That(firstResult.Accepted, Is.True);
+        Assert.That(secondResult.Accepted, Is.True);
+
+        var firstBottomIds = FindPlayer(firstResult.State, 0)["deck"]!.AsArray().TakeLast(2).Select(card => card!["id"]!.GetValue<string>()).ToArray();
+        var secondBottomIds = FindPlayer(secondResult.State, 0)["deck"]!.AsArray().TakeLast(2).Select(card => card!["id"]!.GetValue<string>()).ToArray();
+
+        Assert.That(firstBottomIds, Is.EquivalentTo(returnedIds));
+        Assert.That(secondBottomIds, Is.EqualTo(firstBottomIds));
+        Assert.That(firstBottomIds, Is.EqualTo(new[] { returnedIds[1], returnedIds[0] }));
     }
 
     [Test]

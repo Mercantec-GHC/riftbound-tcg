@@ -149,7 +149,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return actions;
         }
 
-        if (stage == "mulligan" && !mulliganConfirmedPlayerIds.Contains(playerId))
+        if (stage == "mulligan" && CurrentMulliganPlayerId(state.State, mulliganConfirmedPlayerIds) == playerId)
         {
             actions.Add(new("confirm-mulligan", "confirm-mulligan", "Confirm mulligan", playerId));
         }
@@ -334,12 +334,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             var hand = player["hand"]!.AsArray();
             var deck = player["deck"]!.AsArray();
-            var selected = handIndexes.Distinct().Where(i => i >= 0 && i < hand.Count).OrderDescending().ToArray();
+            var selected = handIndexes.Distinct().Where(i => i >= 0 && i < hand.Count).Order().ToArray();
             var redrawCount = selected.Length;
-            var returned = new List<JsonNode?>();
-            foreach (var handIndex in selected)
+            var returned = selected.Select(handIndex => hand[handIndex]?.DeepClone()).ToList();
+            foreach (var handIndex in selected.OrderDescending())
             {
-                returned.Add(hand[handIndex]?.DeepClone());
                 hand.RemoveAt(handIndex);
             }
 
@@ -350,10 +349,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 deck.RemoveAt(0);
             }
 
-            foreach (var card in returned)
-            {
-                deck.Add(card);
-            }
+            RecycleCardsToMainDeck(state, player, returned);
 
             return player;
         });
@@ -384,6 +380,20 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return state;
+    }
+
+    private static int? CurrentMulliganPlayerId(JsonObject state, IReadOnlyCollection<int> confirmedPlayerIds)
+    {
+        var order = state["turnOrder"]?.Deserialize<int[]>(JsonOptions) ?? [];
+        foreach (var playerId in order)
+        {
+            if (!confirmedPlayerIds.Contains(playerId))
+            {
+                return playerId;
+            }
+        }
+
+        return null;
     }
 
     private static JsonObject EndCurrentTurn(JsonObject state, int playerId)
@@ -753,6 +763,16 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var recycled = trash.Select(card => card?.DeepClone()).Where(card => card is not null).ToList();
         trash.Clear();
+        RecycleCardsToMainDeck(state, player, recycled);
+    }
+
+    private static void RecycleCardsToMainDeck(JsonObject state, JsonObject player, IList<JsonNode?> recycled)
+    {
+        if (recycled.Count == 0)
+        {
+            return;
+        }
+
         ShuffleInPlace(state, recycled);
         var deck = player["deck"]!.AsArray();
         foreach (var card in recycled)
