@@ -29,7 +29,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     ["points"] = 0,
                     ["runes"] = new JsonObject { ["ready"] = new JsonArray(), ["exhausted"] = new JsonArray() },
                     ["runeDeck"] = ToArray(Shuffle(deck.RuneDeckIds.Select((id, index) => Card(id, $"rune-{seat.PlayerId}-{index}", catalog)).ToList(), seed + seat.PlayerId + 47)),
-                    ["runePool"] = new JsonObject { ["energy"] = 0 },
+                    ["runePool"] = EmptyRunePool(),
                     ["deck"] = ToArray(library),
                     ["hand"] = ToArray(hand),
                     ["trash"] = new JsonArray(),
@@ -697,6 +697,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             {
                 state = DrawCards(state, playerId, 1);
             }
+            state = ClearRunePools(state);
         }
         else if (currentPhase == "ending")
         {
@@ -745,6 +746,16 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         state = AddLog(state, $"{PlayerName(state, next)} begins their turn.");
         return AutoAdvanceToDraw(state);
+    }
+
+    private static JsonObject ClearRunePools(JsonObject state)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            player["runePool"] = EmptyRunePool();
+        }
+
+        return state;
     }
 
     private static JsonObject ConquerBattlefield(JsonObject state, int playerId, string battlefieldId)
@@ -1064,11 +1075,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return false;
         }
 
-        var cost = champion["cost"]?.GetValue<int>() ?? 0;
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energyNeeded = Math.Max(0, cost - energy);
-        return readyRunes.Count >= energyNeeded;
+        return CanPay(player, ReadCost(champion));
     }
 
     private static JsonObject? SummonChampion(JsonObject state, int playerId)
@@ -1087,11 +1094,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        var cost = champion["cost"]?.GetValue<int>() ?? 0;
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energyNeeded = Math.Max(0, cost - energy);
-        if (readyRunes.Count < energyNeeded)
+        var cost = ReadCost(champion);
+        if (!CanPay(player, cost))
         {
             return null;
         }
@@ -1109,15 +1113,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         state = UpdatePlayer(state, playerId, p =>
         {
-            var ready = p["runes"]!["ready"]!.AsArray();
-            var exhausted = p["runes"]!["exhausted"]!.AsArray();
-            for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
-            {
-                exhausted.Add(ready[0]?.DeepClone());
-                ready.RemoveAt(0);
-            }
-
-            p["runePool"]!["energy"] = energy + energyNeeded - cost;
+            PayCost(p, cost);
             p["championSummoned"] = true;
             p["base"]!.AsArray().Add(unit);
             return p;
@@ -1156,7 +1152,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        var cost = card["cost"]?.GetValue<int>() ?? 0;
+        var cost = ReadCost(card);
         if (!CanPay(player, cost))
         {
             return null;
@@ -1424,11 +1420,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             }
         }
 
-        var cost = card["cost"]?.GetValue<int>() ?? 0;
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energyNeeded = Math.Max(0, cost - energy);
-        if (readyRunes.Count < energyNeeded)
+        var cost = ReadCost(card);
+        if (!CanPay(player, cost))
         {
             return null;
         }
@@ -1447,16 +1440,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         state = UpdatePlayer(state, playerId, p =>
         {
             p["hand"]!.AsArray().RemoveAt(handIndex.Value);
-
-            var ready = p["runes"]!["ready"]!.AsArray();
-            var exhausted = p["runes"]!["exhausted"]!.AsArray();
-            for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
-            {
-                exhausted.Add(ready[0]?.DeepClone());
-                ready.RemoveAt(0);
-            }
-
-            p["runePool"]!["energy"] = energy + energyNeeded - cost;
+            PayCost(p, cost);
             return p;
         });
 
@@ -2245,7 +2229,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         return player["hand"]!.AsArray()
             .Select((node, index) => (Card: node!.AsObject(), Index: index))
-            .Where(item => timingPredicate(item.Card) && CanPay(player, item.Card["cost"]?.GetValue<int>() ?? 0))
+            .Where(item => timingPredicate(item.Card) && CanPay(player, ReadCost(item.Card)))
             .Select(item => new EngineLegalAction(
                 $"play-card-{playerId}-{item.Index}",
                 "play-card",
@@ -2366,27 +2350,240 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return string.IsNullOrWhiteSpace(targetUnitId) && string.IsNullOrWhiteSpace(targetLaneId);
     }
 
-    private static bool CanPay(JsonObject player, int cost)
-    {
-        var readyRunes = player["runes"]!["ready"]!.AsArray();
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        return readyRunes.Count + energy >= cost;
-    }
+    private static bool CanPay(JsonObject player, ResourceCost cost) => BuildPaymentPlan(player, cost) is not null;
 
-    private static void PayCost(JsonObject player, int cost)
+    private static void PayCost(JsonObject player, ResourceCost cost)
     {
+        var plan = BuildPaymentPlan(player, cost);
+        if (plan is null)
+        {
+            return;
+        }
+
         var ready = player["runes"]!["ready"]!.AsArray();
         var exhausted = player["runes"]!["exhausted"]!.AsArray();
-        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
-        var energyNeeded = Math.Max(0, cost - energy);
-        for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
+        var runeDeck = player["runeDeck"]!.AsArray();
+        for (var i = ready.Count - 1; i >= 0; i--)
+        {
+            var rune = ready[i]!.AsObject();
+            var id = rune["id"]?.GetValue<string>() ?? string.Empty;
+            if (plan.RecycledRuneIds.Contains(id, StringComparer.Ordinal))
+            {
+                runeDeck.Add(rune.DeepClone());
+                ready.RemoveAt(i);
+            }
+        }
+
+        for (var i = exhausted.Count - 1; i >= 0; i--)
+        {
+            var rune = exhausted[i]!.AsObject();
+            var id = rune["id"]?.GetValue<string>() ?? string.Empty;
+            if (plan.RecycledRuneIds.Contains(id, StringComparer.Ordinal))
+            {
+                runeDeck.Add(rune.DeepClone());
+                exhausted.RemoveAt(i);
+            }
+        }
+
+        for (var i = 0; i < plan.ReadyRunesToExhaust && ready.Count > 0; i++)
         {
             exhausted.Add(ready[0]?.DeepClone());
             ready.RemoveAt(0);
         }
 
-        player["runePool"]!["energy"] = energy + energyNeeded - cost;
+        var pool = RunePool(player);
+        pool["energy"] = plan.RemainingEnergy;
+        pool["universalPower"] = plan.RemainingUniversalPower;
+        pool["power"] = ToObject(plan.RemainingPower.ToDictionary(item => item.Key.ToString(), item => item.Value));
     }
+
+    private static PaymentPlan? BuildPaymentPlan(JsonObject player, ResourceCost cost)
+    {
+        var pool = RunePool(player);
+        var remainingPower = ReadPowerPool(pool);
+        var universalPower = pool["universalPower"]?.GetValue<int>() ?? 0;
+        var recycledRuneIds = new List<string>();
+        var boardRunes = BoardRunes(player).ToList();
+        var requiredPower = cost.Power.ToDictionary(item => item.Key, item => Math.Max(0, item.Value));
+
+        foreach (var domain in DomainOrder())
+        {
+            var required = requiredPower.GetValueOrDefault(domain);
+            if (required <= 0)
+            {
+                continue;
+            }
+
+            var fromDomain = Math.Min(remainingPower.GetValueOrDefault(domain), required);
+            remainingPower[domain] = remainingPower.GetValueOrDefault(domain) - fromDomain;
+            required -= fromDomain;
+
+            var fromUniversal = Math.Min(universalPower, required);
+            universalPower -= fromUniversal;
+            required -= fromUniversal;
+
+            while (required > 0)
+            {
+                var rune = boardRunes.FirstOrDefault(candidate => candidate.Domain == domain && !recycledRuneIds.Contains(candidate.Id, StringComparer.Ordinal));
+                if (rune is null)
+                {
+                    return null;
+                }
+
+                recycledRuneIds.Add(rune.Id);
+                required -= 1;
+            }
+        }
+
+        var anyPowerRequired = cost.UniversalPower;
+        var totalStoredPower = universalPower + remainingPower.Values.Sum();
+        var fromStoredAny = Math.Min(totalStoredPower, anyPowerRequired);
+        anyPowerRequired -= fromStoredAny;
+        SpendAnyPower(remainingPower, ref universalPower, fromStoredAny);
+        while (anyPowerRequired > 0)
+        {
+            var rune = boardRunes.FirstOrDefault(candidate => !recycledRuneIds.Contains(candidate.Id, StringComparer.Ordinal));
+            if (rune is null)
+            {
+                return null;
+            }
+
+            recycledRuneIds.Add(rune.Id);
+            anyPowerRequired -= 1;
+        }
+
+        var energy = pool["energy"]?.GetValue<int>() ?? 0;
+        var energyFromPool = Math.Min(energy, cost.Energy);
+        var energyNeeded = cost.Energy - energyFromPool;
+        var readyRunesAvailableForEnergy = player["runes"]!["ready"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Count(rune => !recycledRuneIds.Contains(rune["id"]?.GetValue<string>() ?? string.Empty, StringComparer.Ordinal));
+        if (readyRunesAvailableForEnergy < energyNeeded)
+        {
+            return null;
+        }
+
+        return new PaymentPlan(
+            energyNeeded,
+            energy - energyFromPool,
+            Math.Max(0, universalPower),
+            remainingPower.ToDictionary(item => item.Key, item => Math.Max(0, item.Value)),
+            recycledRuneIds);
+    }
+
+    private static void SpendAnyPower(Dictionary<Domain, int> power, ref int universalPower, int amount)
+    {
+        var fromUniversal = Math.Min(universalPower, amount);
+        universalPower -= fromUniversal;
+        amount -= fromUniversal;
+        foreach (var domain in DomainOrder())
+        {
+            if (amount <= 0)
+            {
+                return;
+            }
+
+            var fromDomain = Math.Min(power.GetValueOrDefault(domain), amount);
+            power[domain] = power.GetValueOrDefault(domain) - fromDomain;
+            amount -= fromDomain;
+        }
+    }
+
+    private static ResourceCost ReadCost(JsonObject card)
+    {
+        if (card["cost"] is JsonObject costObject)
+        {
+            return new ResourceCost(
+                Math.Max(0, costObject["energy"]?.GetValue<int>() ?? 0),
+                ReadPowerCost(costObject["power"]),
+                Math.Max(0, costObject["universalPower"]?.GetValue<int>() ?? 0));
+        }
+
+        return new ResourceCost(Math.Max(0, card["cost"]?.GetValue<int>() ?? 0), new Dictionary<Domain, int>(), 0);
+    }
+
+    private static Dictionary<Domain, int> ReadPowerCost(JsonNode? node)
+    {
+        var result = new Dictionary<Domain, int>();
+        if (node is JsonObject powerObject)
+        {
+            foreach (var (key, value) in powerObject)
+            {
+                if (TryReadDomain(key, out var domain))
+                {
+                    result[domain] = Math.Max(0, value?.GetValue<int>() ?? 0);
+                }
+            }
+        }
+        else if (node is JsonArray powerArray)
+        {
+            foreach (var item in powerArray)
+            {
+                if (TryReadDomain(item?.GetValue<string>(), out var domain))
+                {
+                    result[domain] = result.GetValueOrDefault(domain) + 1;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static JsonObject RunePool(JsonObject player)
+    {
+        if (player["runePool"] is not JsonObject pool)
+        {
+            pool = EmptyRunePool();
+            player["runePool"] = pool;
+        }
+
+        pool["energy"] ??= 0;
+        pool["universalPower"] ??= 0;
+        pool["power"] ??= new JsonObject();
+        return pool;
+    }
+
+    private static Dictionary<Domain, int> ReadPowerPool(JsonObject pool)
+    {
+        var power = new Dictionary<Domain, int>();
+        if (pool["power"] is JsonObject powerObject)
+        {
+            foreach (var (key, value) in powerObject)
+            {
+                if (TryReadDomain(key, out var domain))
+                {
+                    power[domain] = Math.Max(0, value?.GetValue<int>() ?? 0);
+                }
+            }
+        }
+
+        return power;
+    }
+
+    private static IReadOnlyList<RuneResource> BoardRunes(JsonObject player)
+    {
+        return player["runes"]!["ready"]!.AsArray()
+            .Concat(player["runes"]!["exhausted"]!.AsArray())
+            .Select(node => node!.AsObject())
+            .Select(rune => new RuneResource(
+                rune["id"]?.GetValue<string>() ?? string.Empty,
+                TryReadDomain(rune["domain"]?.GetValue<string>(), out var domain) ? domain : Domain.Fury))
+            .Where(rune => !string.IsNullOrWhiteSpace(rune.Id))
+            .ToArray();
+    }
+
+    private static JsonObject EmptyRunePool() => new()
+    {
+        ["energy"] = 0,
+        ["power"] = new JsonObject(),
+        ["universalPower"] = 0
+    };
+
+    private static bool TryReadDomain(string? value, out Domain domain) =>
+        Enum.TryParse(value, true, out domain);
+
+    private static IReadOnlyList<Domain> DomainOrder() =>
+        [Domain.Fury, Domain.Calm, Domain.Mind, Domain.Body, Domain.Chaos, Domain.Order];
 
     private static JsonObject ApplyDamage(JsonObject state, int playerId, int amount, string? targetUnitId, string? targetLaneId)
     {
@@ -2653,7 +2850,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 ["tags"] = ToArray(definition.Tags),
                 ["domain"] = definition.Domain.ToString(),
                 ["domains"] = ToArray(definition.Domains.Select(domain => domain.ToString())),
-                ["cost"] = definition.Cost,
+                ["cost"] = CostNode(definition.Cost, definition.PowerCost),
                 ["might"] = definition.Might,
                 ["text"] = definition.Text,
                 ["image"] = definition.Image,
@@ -2738,6 +2935,28 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return array;
+    }
+
+    private static JsonNode CostNode(int energy, IReadOnlyList<Domain> powerCost)
+    {
+        if (powerCost.Count == 0)
+        {
+            return JsonValue.Create(energy)!;
+        }
+
+        var power = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var domain in powerCost)
+        {
+            var key = domain.ToString();
+            power[key] = power.GetValueOrDefault(key) + 1;
+        }
+
+        return new JsonObject
+        {
+            ["energy"] = Math.Max(0, energy),
+            ["power"] = ToObject(power),
+            ["universalPower"] = 0
+        };
     }
 
     private static JsonObject ToObject(IReadOnlyDictionary<string, int> values)
@@ -2845,6 +3064,17 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private sealed record ScoreRequest(int PlayerId, string BattlefieldId, ScoreSource Source);
 
     private sealed record ScoreOutcome(int PlayerId, string BattlefieldId, ScoreSource Source, int PointsAwarded, string? SkippedReason);
+
+    private sealed record ResourceCost(int Energy, IReadOnlyDictionary<Domain, int> Power, int UniversalPower);
+
+    private sealed record PaymentPlan(
+        int ReadyRunesToExhaust,
+        int RemainingEnergy,
+        int RemainingUniversalPower,
+        IReadOnlyDictionary<Domain, int> RemainingPower,
+        IReadOnlyList<string> RecycledRuneIds);
+
+    private sealed record RuneResource(string Id, Domain Domain);
 
     private static class ScoreRules
     {

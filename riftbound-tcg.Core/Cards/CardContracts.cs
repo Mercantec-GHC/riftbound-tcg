@@ -35,7 +35,10 @@ public sealed record CardDefinition(
     string Image,
     string CardType,
     string? Supertype,
-    CardEffectDefinition Effect);
+    CardEffectDefinition Effect)
+{
+    public IReadOnlyList<Domain> PowerCost { get; init; } = [];
+}
 
 public enum SpellSubtype
 {
