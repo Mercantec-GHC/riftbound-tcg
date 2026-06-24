@@ -632,6 +632,22 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void non_targeted_burn_out_choice_uses_choice_payload_not_target_fields()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ResolveBurnOutUntilChoice(123);
+
+        var chosen = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "choose-burn-out-opponent", new Dictionary<string, object?> { ["opponentPlayerId"] = 1, ["targetUnitId"] = "not-a-target" }),
+            state.SequenceNumber);
+
+        Assert.That(chosen.Accepted, Is.True);
+        Assert.That(chosen.State.State["pendingBurnOut"], Is.Null);
+        Assert.That(PlayerPoints(chosen.State, 1), Is.EqualTo(1));
+    }
+
+    [Test]
     public void burn_out_recycle_order_is_deterministic_for_same_seed()
     {
         var first = ResolveBurnOutUntilChoice(123);
@@ -694,6 +710,96 @@ public class DefaultRulesEngineTests
         var resultBattlefield = resolved.State.State["battlefields"]![0]!.AsObject();
         Assert.That(resultBattlefield["units"]!.AsArray(), Is.Empty);
         Assert.That(FindPlayer(resolved.State, 1)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void targeted_effect_does_not_resolve_when_target_becomes_illegal()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("bolt", "Bolt", "spell", "[Action] Deal 2 to an enemy unit.", "damage", 2, cost: 0));
+        var target = Unit("target-unit", ownerId: 1);
+        state.State["battlefields"]![0]!["units"]!.AsArray().Add(target);
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "target-unit" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var liveTarget = played.State.State["battlefields"]![0]!["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(unit => unit["uid"]!.GetValue<string>() == "target-unit");
+        liveTarget["ownerId"] = 0;
+        var resolved = PassChain(engine, played.State);
+
+        var resultUnit = resolved.State.State["battlefields"]![0]!["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(unit => unit["uid"]!.GetValue<string>() == "target-unit");
+        Assert.That(resultUnit["damage"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void targeted_effect_does_not_follow_unit_that_leaves_and_returns_through_non_board_zone()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("bolt", "Bolt", "spell", "[Action] Deal 2 to an enemy unit.", "damage", 2, cost: 0));
+        var target = Unit("target-unit", ownerId: 1);
+        var battlefieldUnits = state.State["battlefields"]![0]!["units"]!.AsArray();
+        battlefieldUnits.Add(target);
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "target-unit" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var liveBattlefieldUnits = played.State.State["battlefields"]![0]!["units"]!.AsArray();
+        var liveTarget = liveBattlefieldUnits.Single(unit => unit!["uid"]!.GetValue<string>() == "target-unit")!.AsObject();
+        liveBattlefieldUnits.Remove(liveTarget);
+        var returned = liveTarget.DeepClone().AsObject();
+        FindPlayer(played.State, 1)["trash"]!.AsArray().Add(liveTarget.DeepClone());
+        FindPlayer(played.State, 1)["base"]!.AsArray().Add(returned);
+
+        var resolved = PassChain(engine, played.State);
+
+        var baseUnit = FindPlayer(resolved.State, 1)["base"]!.AsArray().Single()!.AsObject();
+        Assert.That(baseUnit["damage"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void lane_targeted_effect_partially_resolves_remaining_legal_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("shockwave", "Shockwave", "spell", "[Action] Deal 1 to enemy units at a battlefield.", "damage", 1, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+        var units = battlefield["units"]!.AsArray();
+        units.Add(Unit("enemy-a", ownerId: 1));
+        units.Add(Unit("enemy-b", ownerId: 1));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetLaneId"] = battlefieldId }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var liveUnits = played.State.State["battlefields"]![0]!["units"]!.AsArray();
+        var removed = liveUnits.Single(unit => unit!["uid"]!.GetValue<string>() == "enemy-a");
+        liveUnits.Remove(removed);
+        var resolved = PassChain(engine, played.State);
+
+        var remaining = resolved.State.State["battlefields"]![0]!["units"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(unit => unit["uid"]!.GetValue<string>() == "enemy-b");
+        Assert.That(remaining["uid"]!.GetValue<string>(), Is.EqualTo("enemy-b"));
+        Assert.That(remaining["damage"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void up_to_targeted_effect_can_be_played_with_zero_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("optional-rally", "Optional Rally", "spell", "[Action] Ready up to one friendly unit.", "rally", 1, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+
+        Assert.That(played.Accepted, Is.True);
+        Assert.That(played.State.State["effectStack"]!.AsArray().Single()!["targets"]!.AsArray(), Is.Empty);
     }
 
     [Test]
@@ -1049,6 +1155,15 @@ public class DefaultRulesEngineTests
         return current;
     }
 
+    private static EngineActionResult PassChain(DefaultRulesEngine engine, EngineMatchState state)
+    {
+        var afterFirstPass = engine.ApplyAction(state, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), state.SequenceNumber);
+        Assert.That(afterFirstPass.Accepted, Is.True);
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+        Assert.That(afterSecondPass.Accepted, Is.True);
+        return afterSecondPass;
+    }
+
     private static JsonObject FindPlayer(EngineMatchState state, int playerId)
     {
         return state.State["players"]!.AsArray()
@@ -1090,6 +1205,26 @@ public class DefaultRulesEngineTests
             ["cardType"] = kind,
             ["supertype"] = null,
             ["effect"] = new JsonObject { ["type"] = effectType, ["amount"] = amount }
+        };
+    }
+
+    private static JsonObject Unit(string uid, int ownerId, int might = 2)
+    {
+        return new JsonObject
+        {
+            ["id"] = $"{uid}-card",
+            ["catalogId"] = $"{uid}-card",
+            ["uid"] = uid,
+            ["name"] = uid,
+            ["kind"] = "unit",
+            ["ownerId"] = ownerId,
+            ["cost"] = 1,
+            ["might"] = might,
+            ["damage"] = 0,
+            ["attachedMight"] = 0,
+            ["exhausted"] = false,
+            ["attacker"] = false,
+            ["defender"] = false
         };
     }
 

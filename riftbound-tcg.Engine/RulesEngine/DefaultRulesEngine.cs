@@ -886,7 +886,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        if (!TargetsAreValid(state, playerId, card, targetUnitId, targetLaneId))
+        var targetSelection = ValidateTargetSelection(state, playerId, card, targetUnitId, targetLaneId);
+        if (!targetSelection.IsValid)
         {
             return null;
         }
@@ -904,10 +905,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return p;
         });
 
-        return FinalizePendingCardPlay(state, playerId, card, targetUnitId, targetLaneId);
+        return FinalizePendingCardPlay(state, playerId, card, targetSelection);
     }
 
-    private static JsonObject FinalizePendingCardPlay(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
+    private static JsonObject FinalizePendingCardPlay(JsonObject state, int playerId, JsonObject card, TargetSelection targetSelection)
     {
         var kind = card["kind"]?.GetValue<string>() ?? string.Empty;
         if (kind == "gear")
@@ -934,8 +935,9 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["kind"] = kind,
             ["playerId"] = playerId,
             ["effect"] = card["effect"]?.DeepClone(),
-            ["targetUnitId"] = targetUnitId,
-            ["targetLaneId"] = targetLaneId
+            ["targetUnitId"] = targetSelection.LegacyTargetUnitId,
+            ["targetLaneId"] = targetSelection.LegacyTargetLaneId,
+            ["targets"] = ToArray(targetSelection.Targets.Select(TargetToJson))
         };
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
         state["effectStack"]!.AsArray().Insert(0, stackItem);
@@ -1075,13 +1077,14 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var amount = effect?["amount"]?.GetValue<int>() ?? 0;
         var targetUnitId = item["targetUnitId"]?.GetValue<string>();
         var targetLaneId = item["targetLaneId"]?.GetValue<string>();
+        var targets = ReadStackTargets(item, targetUnitId, targetLaneId);
 
         state = effectType switch
         {
             "draw" => DrawCards(state, playerId, amount),
-            "damage" => ApplyDamage(state, playerId, amount, targetUnitId, targetLaneId),
-            "buff" => ApplyUnitMod(state, targetUnitId, unit => { unit["attachedMight"] = (unit["attachedMight"]?.GetValue<int>() ?? 0) + amount; return unit; }),
-            "rally" => ApplyUnitMod(state, targetUnitId, unit => { unit["exhausted"] = false; return unit; }),
+            "damage" => ApplyDamage(state, playerId, amount, targets),
+            "buff" => ApplyUnitMod(state, playerId, targets, unit => { unit["attachedMight"] = (unit["attachedMight"]?.GetValue<int>() ?? 0) + amount; return unit; }),
+            "rally" => ApplyUnitMod(state, playerId, targets, unit => { unit["exhausted"] = false; return unit; }),
             _ => state
         };
 
@@ -1927,39 +1930,78 @@ public sealed class DefaultRulesEngine : IRulesEngine
             || !text.Contains("[Reaction]", StringComparison.Ordinal);
     }
 
-    private static bool TargetsAreValid(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
+    private static TargetSelection ValidateTargetSelection(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
     {
         var effect = card["effect"]?.AsObject();
         var effectType = effect?["type"]?.GetValue<string>() ?? "rally";
+        var hasUnitTarget = !string.IsNullOrWhiteSpace(targetUnitId);
+        var hasLaneTarget = !string.IsNullOrWhiteSpace(targetLaneId);
+
+        if (hasUnitTarget && hasLaneTarget)
+        {
+            return TargetSelection.Invalid;
+        }
+
         if (effectType == "draw")
         {
-            return string.IsNullOrWhiteSpace(targetUnitId) && string.IsNullOrWhiteSpace(targetLaneId);
+            return hasUnitTarget || hasLaneTarget
+                ? TargetSelection.Invalid
+                : new TargetSelection(true, null, null, []);
         }
 
         if (effectType == "damage")
         {
-            if (!string.IsNullOrWhiteSpace(targetLaneId))
+            if (hasLaneTarget)
             {
-                return FindBattlefield(state, targetLaneId) is not null;
+                var battlefield = FindBattlefield(state, targetLaneId!);
+                if (battlefield is null)
+                {
+                    return TargetSelection.Invalid;
+                }
+
+                var targets = battlefield["units"]!.AsArray()
+                    .Select(node => node!.AsObject())
+                    .Where(unit => UnitCanBeTargetedByEffect(state, playerId, "damage", unit))
+                    .Select(unit => UnitTargetFrom(state, unit, "damage", targetLaneId!))
+                    .ToArray();
+
+                return targets.Length == 0 && !AllowsZeroTargets(card)
+                    ? TargetSelection.Invalid
+                    : new TargetSelection(true, null, targetLaneId, targets);
             }
 
-            if (!string.IsNullOrWhiteSpace(targetUnitId))
+            if (hasUnitTarget && FindUnit(state, targetUnitId!) is { } unit && UnitCanBeTargetedByEffect(state, playerId, "damage", unit))
             {
-                return FindUnit(state, targetUnitId) is { } unit && unit["ownerId"]?.GetValue<int>() != playerId;
+                return new TargetSelection(true, targetUnitId, null, [UnitTargetFrom(state, unit, "damage", null)]);
             }
 
-            return false;
+            return !hasUnitTarget && AllowsZeroTargets(card)
+                ? new TargetSelection(true, null, null, [])
+                : TargetSelection.Invalid;
         }
 
         if (effectType is "buff" or "rally")
         {
-            return !string.IsNullOrWhiteSpace(targetUnitId)
-                && FindUnit(state, targetUnitId) is { } unit
-                && unit["ownerId"]?.GetValue<int>() == playerId
-                && string.IsNullOrWhiteSpace(targetLaneId);
+            if (hasUnitTarget && FindUnit(state, targetUnitId!) is { } unit && UnitCanBeTargetedByEffect(state, playerId, effectType, unit))
+            {
+                return new TargetSelection(true, targetUnitId, null, [UnitTargetFrom(state, unit, effectType, null)]);
+            }
+
+            return !hasUnitTarget && !hasLaneTarget && AllowsZeroTargets(card)
+                ? new TargetSelection(true, null, null, [])
+                : TargetSelection.Invalid;
         }
 
-        return string.IsNullOrWhiteSpace(targetUnitId) && string.IsNullOrWhiteSpace(targetLaneId);
+        return hasUnitTarget || hasLaneTarget
+            ? TargetSelection.Invalid
+            : new TargetSelection(true, null, null, []);
+    }
+
+    private static bool AllowsZeroTargets(JsonObject card)
+    {
+        var text = card["text"]?.GetValue<string>() ?? string.Empty;
+        return text.Contains("up to", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("any number", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool CanPay(JsonObject player, int cost)
@@ -1984,47 +2026,142 @@ public sealed class DefaultRulesEngine : IRulesEngine
         player["runePool"]!["energy"] = energy + energyNeeded - cost;
     }
 
-    private static JsonObject ApplyDamage(JsonObject state, int playerId, int amount, string? targetUnitId, string? targetLaneId)
+    private static JsonObject ApplyDamage(JsonObject state, int playerId, int amount, IReadOnlyList<EffectTarget> targets)
     {
-        JsonObject? target = null;
-        if (!string.IsNullOrWhiteSpace(targetLaneId))
+        foreach (var target in targets)
         {
-            target = FindBattlefield(state, targetLaneId)
-                ?["units"]!.AsArray()
-                .Select(node => node!.AsObject())
-                .FirstOrDefault(unit => unit["ownerId"]?.GetValue<int>() != playerId);
-        }
-        else if (!string.IsNullOrWhiteSpace(targetUnitId))
-        {
-            var unit = FindUnit(state, targetUnitId);
-            if (unit?["ownerId"]?.GetValue<int>() != playerId)
+            var unit = FindLegalResolvedTarget(state, playerId, "damage", target);
+            if (unit is null)
             {
-                target = unit;
+                continue;
             }
-        }
 
-        if (target is not null)
-        {
-            target["damage"] = (target["damage"]?.GetValue<int>() ?? 0) + amount;
+            unit["damage"] = (unit["damage"]?.GetValue<int>() ?? 0) + amount;
         }
 
         return state;
     }
 
-    private static JsonObject ApplyUnitMod(JsonObject state, string? targetUnitId, Func<JsonObject, JsonObject> modify)
+    private static JsonObject ApplyUnitMod(JsonObject state, int playerId, IReadOnlyList<EffectTarget> targets, Func<JsonObject, JsonObject> modify)
     {
-        if (string.IsNullOrWhiteSpace(targetUnitId))
+        foreach (var target in targets)
         {
-            return state;
-        }
-
-        var unit = FindUnit(state, targetUnitId);
-        if (unit is not null)
-        {
-            modify(unit);
+            var unit = FindLegalResolvedTarget(state, playerId, target.EffectType, target);
+            if (unit is not null)
+            {
+                modify(unit);
+            }
         }
 
         return state;
+    }
+
+    private static JsonObject? FindLegalResolvedTarget(JsonObject state, int playerId, string effectType, EffectTarget target)
+    {
+        var resolved = FindUnitWithPublicZone(state, target.UnitId);
+        return resolved is not null
+            && UnitCanBeTargetedByEffect(state, playerId, effectType, resolved.Value.Unit)
+            && UnitIsStillInTargetedPublicZone(resolved.Value.ZoneType, resolved.Value.BattlefieldId, target)
+                ? resolved.Value.Unit
+                : null;
+    }
+
+    private static bool UnitCanBeTargetedByEffect(JsonObject state, int playerId, string effectType, JsonObject unit)
+    {
+        _ = state;
+        var ownerId = unit["ownerId"]?.GetValue<int>();
+        return effectType switch
+        {
+            "damage" => ownerId is not null && ownerId.Value != playerId,
+            "buff" or "rally" => ownerId == playerId,
+            _ => false
+        };
+    }
+
+    private static bool UnitIsStillInTargetedPublicZone(string zoneType, string? battlefieldId, EffectTarget target)
+    {
+        return string.Equals(zoneType, target.ZoneType, StringComparison.Ordinal)
+            && string.Equals(battlefieldId, target.BattlefieldId, StringComparison.Ordinal);
+    }
+
+    private static EffectTarget UnitTargetFrom(JsonObject state, JsonObject unit, string effectType, string? selectedBattlefieldId)
+    {
+        var unitId = unit["uid"]?.GetValue<string>() ?? string.Empty;
+        var zone = FindUnitWithPublicZone(state, unitId);
+        return new EffectTarget(
+            UnitId: unitId,
+            EffectType: effectType,
+            ZoneType: selectedBattlefieldId is not null ? "battlefield" : zone?.ZoneType ?? "base",
+            BattlefieldId: selectedBattlefieldId ?? zone?.BattlefieldId);
+    }
+
+    private static (JsonObject Unit, string ZoneType, string? BattlefieldId)? FindUnitWithPublicZone(JsonObject state, string unitId)
+    {
+        foreach (var player in state["players"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var unit = player["base"]!.AsArray()
+                .Select(node => node!.AsObject())
+                .FirstOrDefault(candidate => candidate["uid"]?.GetValue<string>() == unitId);
+            if (unit is not null)
+            {
+                return (unit, "base", null);
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var unit = battlefield["units"]!.AsArray()
+                .Select(node => node!.AsObject())
+                .FirstOrDefault(candidate => candidate["uid"]?.GetValue<string>() == unitId);
+            if (unit is not null)
+            {
+                return (unit, "battlefield", battlefield["id"]?.GetValue<string>());
+            }
+        }
+
+        return null;
+    }
+
+    private static JsonObject TargetToJson(EffectTarget target)
+    {
+        return new JsonObject
+        {
+            ["type"] = "unit",
+            ["unitId"] = target.UnitId,
+            ["effectType"] = target.EffectType,
+            ["zoneType"] = target.ZoneType,
+            ["battlefieldId"] = target.BattlefieldId
+        };
+    }
+
+    private static IReadOnlyList<EffectTarget> ReadStackTargets(JsonObject item, string? legacyTargetUnitId, string? legacyTargetLaneId)
+    {
+        var effectType = item["effect"]?["type"]?.GetValue<string>() ?? "rally";
+        if (item["targets"] is JsonArray targets)
+        {
+            return targets
+                .Select(node => node?.AsObject())
+                .Where(target => target is not null && target["type"]?.GetValue<string>() == "unit")
+                .Select(target => new EffectTarget(
+                    UnitId: target!["unitId"]?.GetValue<string>() ?? string.Empty,
+                    EffectType: string.IsNullOrWhiteSpace(target["effectType"]?.GetValue<string>()) ? effectType : target["effectType"]!.GetValue<string>(),
+                    ZoneType: target["zoneType"]?.GetValue<string>() ?? "base",
+                    BattlefieldId: target["battlefieldId"]?.GetValue<string>()))
+                .Where(target => !string.IsNullOrWhiteSpace(target.UnitId))
+                .ToArray();
+        }
+
+        if (!string.IsNullOrWhiteSpace(legacyTargetUnitId))
+        {
+            return [new EffectTarget(legacyTargetUnitId, effectType, "base", null)];
+        }
+
+        if (!string.IsNullOrWhiteSpace(legacyTargetLaneId))
+        {
+            return [];
+        }
+
+        return [];
     }
 
     private static JsonObject? FindPlayer(JsonObject state, int playerId)
@@ -2326,6 +2463,21 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private sealed record ScoreRequest(int PlayerId, string BattlefieldId, ScoreSource Source);
 
     private sealed record ScoreOutcome(int PlayerId, string BattlefieldId, ScoreSource Source, int PointsAwarded, string? SkippedReason);
+
+    private sealed record TargetSelection(
+        bool IsValid,
+        string? LegacyTargetUnitId,
+        string? LegacyTargetLaneId,
+        IReadOnlyList<EffectTarget> Targets)
+    {
+        public static TargetSelection Invalid { get; } = new(false, null, null, []);
+    }
+
+    private sealed record EffectTarget(
+        string UnitId,
+        string EffectType,
+        string ZoneType,
+        string? BattlefieldId);
 
     private static class ScoreRules
     {
