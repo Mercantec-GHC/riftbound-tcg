@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\riftbound-tcg.Core\riftbound-tcg.Core.csproj" />
     <ProjectReference Include="..\riftbound-tcg.Engine\riftbound-tcg.Engine.csproj" />
+    <ProjectReference Include="..\riftbound-tcg.Server\riftbound-tcg.Server.csproj" />
   </ItemGroup>
 
 </Project>

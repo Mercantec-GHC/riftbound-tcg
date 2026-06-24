@@ -463,7 +463,7 @@ public static class GameApiV1
             var userId = AuthService.GetUserId(user);
             if (userId is null) return TypedResults.Unauthorized();
             if (!await store.IsUserSeatedAsync(matchId, userId, cancellationToken)) return TypedResults.NotFound();
-            return await store.GetMatchAsync(matchId, cancellationToken) is { } match
+            return await store.GetMatchAsync(matchId, userId, cancellationToken) is { } match
                 ? TypedResults.Ok(Envelope(match))
                 : TypedResults.NotFound();
         })
@@ -475,7 +475,7 @@ public static class GameApiV1
             var userId = AuthService.GetUserId(user);
             if (userId is null) return TypedResults.Unauthorized();
             if (!await store.IsUserSeatedAsync(matchId, userId, cancellationToken)) return TypedResults.NotFound();
-            return await store.GetMatchAsync(matchId, cancellationToken) is { } match
+            return await store.GetMatchAsync(matchId, userId, cancellationToken) is { } match
                 ? TypedResults.Ok(Envelope(match))
                 : TypedResults.NotFound();
         })
@@ -486,7 +486,7 @@ public static class GameApiV1
         {
             var userId = AuthService.GetUserId(user);
             if (userId is null) return TypedResults.Unauthorized();
-            if (!await store.IsUserSeatedAsync(matchId, userId, cancellationToken)) return TypedResults.NotFound();
+            if (!await store.UserOwnsPlayerSeatAsync(matchId, userId, playerId, cancellationToken)) return TypedResults.NotFound();
             return await store.GetLegalActionsAsync(matchId, playerId, cancellationToken) is { } actions
                 ? TypedResults.Ok(Envelope(actions))
                 : TypedResults.NotFound();

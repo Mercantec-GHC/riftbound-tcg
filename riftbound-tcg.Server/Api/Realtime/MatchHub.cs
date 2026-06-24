@@ -24,7 +24,8 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
         }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, MatchGroupName(matchId), Context.ConnectionAborted);
-        var match = await gameService.GetMatchAsync(matchId, Context.ConnectionAborted);
+        await Groups.AddToGroupAsync(Context.ConnectionId, MatchUserGroupName(matchId, userId), Context.ConnectionAborted);
+        var match = await gameService.GetMatchAsync(matchId, userId, Context.ConnectionAborted);
         if (match is not null)
         {
             await Clients.Caller.SendAsync("match.joined", match, Context.ConnectionAborted);
@@ -34,7 +35,15 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
 
     public Task LeaveMatch(string matchId)
     {
-        return Groups.RemoveFromGroupAsync(Context.ConnectionId, MatchGroupName(matchId), Context.ConnectionAborted);
+        var userId = AuthService.GetUserId(Context.User!);
+        if (userId is null)
+        {
+            return Groups.RemoveFromGroupAsync(Context.ConnectionId, MatchGroupName(matchId), Context.ConnectionAborted);
+        }
+
+        return Task.WhenAll(
+            Groups.RemoveFromGroupAsync(Context.ConnectionId, MatchGroupName(matchId), Context.ConnectionAborted),
+            Groups.RemoveFromGroupAsync(Context.ConnectionId, MatchUserGroupName(matchId, userId), Context.ConnectionAborted));
     }
 
     public async Task SubmitAction(string matchId, SubmitMatchActionRequest action)
@@ -62,12 +71,12 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
             }
 
             await Clients.Group(MatchGroupName(matchId)).SendAsync("match.eventAppended", matchId, result.Event, Context.ConnectionAborted);
-            await Clients.Group(MatchGroupName(matchId)).SendAsync("match.state", matchId, result.State, result.SequenceNumber, Context.ConnectionAborted);
+            await SendPlayerScopedStateAsync(matchId, result.SequenceNumber);
 
-            var match = await gameService.GetMatchAsync(matchId, Context.ConnectionAborted);
+            var match = await gameService.GetMatchAsync(matchId, userId, Context.ConnectionAborted);
             if (match?.Status == "completed")
             {
-                await Clients.Group(MatchGroupName(matchId)).SendAsync("match.completed", matchId, result.State, match.WinnerPlayerId, match.WinningTeamId, Context.ConnectionAborted);
+                await SendPlayerScopedCompletedAsync(matchId, match.WinnerPlayerId, match.WinningTeamId);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -154,6 +163,11 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
         return $"match:{matchId}";
     }
 
+    public static string MatchUserGroupName(string matchId, string userId)
+    {
+        return $"match:{matchId}:user:{userId}";
+    }
+
     public static string TicketGroupName(string ticketId)
     {
         return $"ticket:{ticketId}";
@@ -162,5 +176,35 @@ public sealed class MatchHub(OnlineGameService gameService) : Hub
     public static string LobbyGroupName(string lobbyId)
     {
         return $"lobby:{lobbyId}";
+    }
+
+    private async Task SendPlayerScopedStateAsync(string matchId, int sequenceNumber)
+    {
+        var players = await gameService.ListMatchPlayersAsync(matchId, Context.ConnectionAborted);
+        foreach (var player in players)
+        {
+            var snapshot = await gameService.GetMatchAsync(matchId, player.UserId, Context.ConnectionAborted);
+            if (snapshot is null)
+            {
+                continue;
+            }
+
+            await Clients.Group(MatchUserGroupName(matchId, player.UserId)).SendAsync("match.state", matchId, snapshot.State, sequenceNumber, Context.ConnectionAborted);
+        }
+    }
+
+    private async Task SendPlayerScopedCompletedAsync(string matchId, int? winnerPlayerId, int? winningTeamId)
+    {
+        var players = await gameService.ListMatchPlayersAsync(matchId, Context.ConnectionAborted);
+        foreach (var player in players)
+        {
+            var snapshot = await gameService.GetMatchAsync(matchId, player.UserId, Context.ConnectionAborted);
+            if (snapshot is null)
+            {
+                continue;
+            }
+
+            await Clients.Group(MatchUserGroupName(matchId, player.UserId)).SendAsync("match.completed", matchId, snapshot.State, winnerPlayerId, winningTeamId, Context.ConnectionAborted);
+        }
     }
 }
