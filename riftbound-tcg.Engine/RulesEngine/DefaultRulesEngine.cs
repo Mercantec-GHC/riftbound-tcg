@@ -2828,7 +2828,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
     private static int CurrentMight(JsonObject state, JsonObject unit)
     {
-        var might = (unit["might"]?.GetValue<int>() ?? 0) + (unit["attachedMight"]?.GetValue<int>() ?? 0) + PassiveMightBonus(state, unit);
+        var might = ContinuousEffectLayerResolver.EvaluateUnit(unit).Might + PassiveMightBonus(state, unit);
         if (unit["defender"]?.GetValue<bool>() == true)
         {
             might += KeywordValue(unit, KeywordKind.Shield);
