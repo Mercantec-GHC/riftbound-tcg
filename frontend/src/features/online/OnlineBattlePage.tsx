@@ -561,6 +561,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
   }
 
+  async function summonChampion() {
+    await submitTypedAction('summon-champion', {}, 'Unable to summon champion.')
+  }
+
   async function resolveCombat(payload: ResolveCombatPayload) {
     await submitTypedAction('resolve-combat', payload as unknown as Record<string, unknown>, 'Unable to resolve combat.')
     setCombatModalOpen(false)
@@ -749,6 +753,8 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               onPlayUnit={playUnit}
               canMoveUnit={legalActions.some((action) => action.type === 'move-unit' && action.playerId === playerId)}
               onMoveUnit={moveUnit}
+              canSummonChampion={legalActions.some((action) => action.type === 'summon-champion' && action.playerId === playerId)}
+              onSummonChampion={summonChampion}
               mulliganSelection={
                 isMulliganTurn ? { selectedIndexes: mulliganHandIndexes, onToggle: toggleMulliganHandIndex } : undefined
               }

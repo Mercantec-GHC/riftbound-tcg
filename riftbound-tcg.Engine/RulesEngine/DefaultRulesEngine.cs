@@ -126,6 +126,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
             {
                 actions.Add(new("play-unit", "play-unit", "Play unit", playerId));
                 actions.Add(new("move-unit", "move-unit", "Move unit", playerId));
+
+                if (CanSummonChampion(state.State, playerId))
+                {
+                    actions.Add(new("summon-champion", "summon-champion", "Summon champion", playerId));
+                }
             }
         }
 
@@ -182,6 +187,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 }
 
                 nextState = playUnitResult;
+                break;
+            case "summon-champion":
+                var summonChampionResult = SummonChampion(nextState, action.PlayerId);
+                if (summonChampionResult is null)
+                {
+                    return Reject(state, "Invalid summon-champion action: champion is unavailable or you lack the runes to summon it.");
+                }
+
+                nextState = summonChampionResult;
                 break;
             case "move-unit":
                 var moveUnitResult = MoveUnit(nextState, action.PlayerId, ReadString(action.Payload, "unitId"), ReadString(action.Payload, "battlefieldId"));
@@ -559,6 +573,84 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         return player;
+    }
+
+    private static bool CanSummonChampion(JsonObject state, int playerId)
+    {
+        var player = state["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .FirstOrDefault(candidate => candidate["id"]?.GetValue<int>() == playerId);
+        if (player is null)
+        {
+            return false;
+        }
+
+        var champion = player["champion"] as JsonObject;
+        if (champion is null || player["championSummoned"]?.GetValue<bool>() == true)
+        {
+            return false;
+        }
+
+        var cost = champion["cost"]?.GetValue<int>() ?? 0;
+        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
+        var readyRunes = player["runes"]!["ready"]!.AsArray();
+        var energyNeeded = Math.Max(0, cost - energy);
+        return readyRunes.Count >= energyNeeded;
+    }
+
+    private static JsonObject? SummonChampion(JsonObject state, int playerId)
+    {
+        var player = state["players"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .FirstOrDefault(candidate => candidate["id"]?.GetValue<int>() == playerId);
+        if (player is null)
+        {
+            return null;
+        }
+
+        var champion = player["champion"] as JsonObject;
+        if (champion is null || player["championSummoned"]?.GetValue<bool>() == true)
+        {
+            return null;
+        }
+
+        var cost = champion["cost"]?.GetValue<int>() ?? 0;
+        var energy = player["runePool"]!["energy"]?.GetValue<int>() ?? 0;
+        var readyRunes = player["runes"]!["ready"]!.AsArray();
+        var energyNeeded = Math.Max(0, cost - energy);
+        if (readyRunes.Count < energyNeeded)
+        {
+            return null;
+        }
+
+        var unit = Clone(champion);
+        unit["uid"] = $"unit-{state["nextUid"]?.GetValue<int>() ?? 1}";
+        unit["ownerId"] = playerId;
+        unit["exhausted"] = true;
+        unit["damage"] = 0;
+        unit["attachedMight"] = 0;
+        unit["attacker"] = false;
+        unit["defender"] = false;
+
+        state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+
+        state = UpdatePlayer(state, playerId, p =>
+        {
+            var ready = p["runes"]!["ready"]!.AsArray();
+            var exhausted = p["runes"]!["exhausted"]!.AsArray();
+            for (var i = 0; i < energyNeeded && ready.Count > 0; i++)
+            {
+                exhausted.Add(ready[0]?.DeepClone());
+                ready.RemoveAt(0);
+            }
+
+            p["runePool"]!["energy"] = energy + energyNeeded - cost;
+            p["championSummoned"] = true;
+            p["base"]!.AsArray().Add(unit);
+            return p;
+        });
+
+        return AddLog(state, $"{PlayerName(state, playerId)} summoned {champion["name"]?.GetValue<string>() ?? "their champion"} to their base.");
     }
 
     private static JsonObject? PlayUnit(JsonObject state, int playerId, int? handIndex, string? battlefieldId)
