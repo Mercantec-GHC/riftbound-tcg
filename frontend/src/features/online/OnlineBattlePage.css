@@ -541,6 +541,12 @@
   cursor: grab;
 }
 
+.online-art-card.playable {
+  cursor: pointer;
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px rgba(242, 201, 76, 0.6);
+}
+
 .online-hand-card-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

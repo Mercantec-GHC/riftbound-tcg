@@ -311,6 +311,77 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void champion_can_be_summoned_to_base_when_player_has_enough_runes()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+
+        var player = state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        var championId = player["champion"]!["id"]!.GetValue<string>();
+
+        var legalActions = engine.GetLegalActions(state, 0);
+        Assert.That(legalActions, Has.Some.Matches<EngineLegalAction>(action => action.Type == "summon-champion"));
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "summon-champion", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+
+        var resultPlayer = result.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        Assert.That(resultPlayer["championSummoned"]!.GetValue<bool>(), Is.True);
+        var baseUnits = resultPlayer["base"]!.AsArray();
+        Assert.That(baseUnits, Has.Count.EqualTo(1));
+        Assert.That(baseUnits[0]!["id"]!.GetValue<string>(), Is.EqualTo(championId));
+    }
+
+    [Test]
+    public void champion_cannot_be_summoned_without_enough_ready_runes_to_cover_cost()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+
+        var player = state.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
+        player["runes"]!["ready"]!.AsArray().Clear();
+        player["runePool"]!["energy"] = 0;
+
+        var legalActions = engine.GetLegalActions(state, 0);
+        Assert.That(legalActions, Has.None.Matches<EngineLegalAction>(action => action.Type == "summon-champion"));
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "summon-champion", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+        Assert.That(result.State.SequenceNumber, Is.EqualTo(state.SequenceNumber));
+    }
+
+    [Test]
+    public void champion_cannot_be_summoned_twice()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+
+        var afterSummon = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "summon-champion", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+        Assert.That(afterSummon.Accepted, Is.True);
+
+        var legalActions = engine.GetLegalActions(afterSummon.State, 0);
+        Assert.That(legalActions, Has.None.Matches<EngineLegalAction>(action => action.Type == "summon-champion"));
+
+        var result = engine.ApplyAction(
+            afterSummon.State,
+            new EngineGameAction(0, "summon-champion", new Dictionary<string, object?>()),
+            afterSummon.State.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
+    }
+
+    [Test]
     public void exhausted_runes_and_units_ready_again_when_the_player_reaches_awaken_on_their_next_turn()
     {
         var engine = new DefaultRulesEngine();
