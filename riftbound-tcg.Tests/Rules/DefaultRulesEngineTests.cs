@@ -1253,8 +1253,8 @@ public class DefaultRulesEngineTests
         var battlefield = state.State["battlefields"]![0]!.AsObject();
         var battlefieldId = battlefield["id"]!.GetValue<string>();
         var units = battlefield["units"]!.AsArray();
-        units.Add(Unit("enemy-a", ownerId: 1));
-        units.Add(Unit("enemy-b", ownerId: 1));
+        units.Add(Unit("enemy-a", ownerId: 1, might: 2));
+        units.Add(Unit("enemy-b", ownerId: 1, might: 2));
 
         var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetLaneId"] = battlefieldId }), state.SequenceNumber);
         Assert.That(played.Accepted, Is.True);
@@ -1668,7 +1668,11 @@ public class DefaultRulesEngineTests
     private static EngineMatchState ConfirmAllMulligans(DefaultRulesEngine engine, EngineMatchState state, int playerCount)
     {
         var current = state;
-        for (var playerId = 0; playerId < playerCount; playerId++)
+        var turnOrder = current.State["turnOrder"]!.AsArray()
+            .Select(node => node!.GetValue<int>())
+            .Take(playerCount)
+            .ToArray();
+        foreach (var playerId in turnOrder)
         {
             var result = engine.ApplyAction(
                 current,

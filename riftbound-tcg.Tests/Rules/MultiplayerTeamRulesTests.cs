@@ -172,7 +172,7 @@ public class MultiplayerTeamRulesTests
         Assert.That(first.State.Stage, Is.EqualTo("mulligan"));
         Assert.That(first.State.State["winner"], Is.Null);
         Assert.That(first.State.State["turnOrder"]!.AsArray().Select(node => node!.GetValue<int>()).ToArray(), Is.EqualTo(new[] { 1, 2 }));
-        Assert.That(Player(first.State, 0)["hand"]!.AsArray(), Is.Empty);
+        Assert.That(first.State.State["players"]!.AsArray().Select(node => node!["id"]!.GetValue<int>()), Does.Not.Contain(0));
 
         var second = engine.ApplyAction(first.State, new EngineGameAction(1, "concede", new Dictionary<string, object?>()), first.State.SequenceNumber);
 

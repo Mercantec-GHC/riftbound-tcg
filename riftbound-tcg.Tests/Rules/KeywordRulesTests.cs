@@ -34,8 +34,10 @@ public class KeywordRulesTests
             "",
             "Spell",
             null,
-            new CardEffectDefinition(CardEffectType.Draw, 1),
-            [Keyword(KeywordKind.Reaction)]);
+            new CardEffectDefinition(CardEffectType.Draw, 1))
+        {
+            Keywords = [Keyword(KeywordKind.Reaction)]
+        };
 
         var result = ChainRules.ValidateChainPlay(card, playerId: 1, turnPlayerId: 0, chainWindow: ChainRules.Open());
 
