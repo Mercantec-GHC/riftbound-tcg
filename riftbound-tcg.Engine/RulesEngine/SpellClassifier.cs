@@ -8,7 +8,10 @@ public static class SpellClassifier
     public static SpellSubtype GetSpellSubtype(CardDefinition card)
     {
         if (card.Kind != CardKind.Spell) return SpellSubtype.Action;
-        return card.Text.Contains("[Reaction]", StringComparison.Ordinal) ? SpellSubtype.Reaction : SpellSubtype.Action;
+        return KeywordCatalog.For(card).Any(keyword => keyword.Kind is KeywordKind.Reaction or KeywordKind.QuickDraw)
+            || card.Text.Contains("[Reaction]", StringComparison.Ordinal)
+            ? SpellSubtype.Reaction
+            : SpellSubtype.Action;
     }
 
     // Units, champions, legends, and gear trigger the chain when "When you play me" or

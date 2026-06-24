@@ -22,6 +22,51 @@ public enum CardKind
     Rune
 }
 
+public enum KeywordKind
+{
+    Accelerate,
+    Action,
+    Assault,
+    Deathknell,
+    Deflect,
+    Ganking,
+    Hidden,
+    Legion,
+    Reaction,
+    Shield,
+    Tank,
+    Temporary,
+    Vision,
+    Equip,
+    QuickDraw,
+    Repeat,
+    Weaponmaster,
+    Ambush,
+    Hunt,
+    Level,
+    Unique,
+    Backline
+}
+
+public enum KeywordBehavior
+{
+    Permissive,
+    Passive,
+    Triggered,
+    Activated,
+    OptionalAdditionalCost,
+    MandatoryAdditionalCost,
+    Dependent,
+    DeckConstraint
+}
+
+public sealed record CardKeywordDefinition(
+    KeywordKind Kind,
+    KeywordBehavior Behavior,
+    int? Value = null,
+    string? Cost = null,
+    string? Text = null);
+
 public sealed record CardDefinition(
     string Id,
     string Name,
@@ -35,7 +80,8 @@ public sealed record CardDefinition(
     string Image,
     string CardType,
     string? Supertype,
-    CardEffectDefinition Effect);
+    CardEffectDefinition Effect,
+    IReadOnlyList<CardKeywordDefinition>? Keywords = null);
 
 public enum SpellSubtype
 {
