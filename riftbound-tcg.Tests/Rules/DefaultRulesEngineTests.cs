@@ -368,6 +368,28 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void champion_card_in_hand_can_be_played_to_base_without_summoning_champion_zone()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("main-deck-champion", "Main Deck Champion", "champion", "", "rally", 0, cost: 1));
+
+        var legalActions = engine.GetLegalActions(state, 0);
+        Assert.That(legalActions, Has.Some.Matches<EngineLegalAction>(action => action.Type == "play-unit"));
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0 }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["base"]!.AsArray().Single()!["kind"]!.GetValue<string>(), Is.EqualTo("champion"));
+        Assert.That(resultPlayer["championSummoned"]!.GetValue<bool>(), Is.False);
+        Assert.That(resultPlayer["champion"], Is.Not.Null);
+    }
+
+    [Test]
     public void unit_can_be_played_to_a_battlefield_controlled_by_the_player()
     {
         var engine = new DefaultRulesEngine();

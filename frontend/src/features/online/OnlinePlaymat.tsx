@@ -241,7 +241,7 @@ function OnlineHandZone({
   return (
     <div className="hand online-hand">
       {player.hand.map((card, index) => {
-        const isPlayableUnit = canPlayUnit && card.kind === 'unit'
+        const isPlayableUnit = canPlayUnit && (card.kind === 'unit' || card.kind === 'champion')
         const isPlayableCard = (playableCardHandIndexes ?? []).includes(index)
         return (
           <button

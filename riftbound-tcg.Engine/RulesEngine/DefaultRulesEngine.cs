@@ -1789,7 +1789,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var card = hand[handIndex.Value]!.AsObject();
-        if (card["kind"]?.GetValue<string>() != "unit")
+        if (!IsPlayableUnitCard(card))
         {
             return null;
         }
@@ -3633,6 +3633,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 playerId,
                 new JsonObject { ["handIndex"] = item.Index }))
             .ToArray();
+    }
+
+    private static bool IsPlayableUnitCard(JsonObject card)
+    {
+        return card["kind"]?.GetValue<string>() is "unit" or "champion";
     }
 
     private static IReadOnlyList<EngineLegalAction> HideCardsFromHand(JsonObject state, int playerId)
