@@ -580,6 +580,70 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void drawing_past_empty_deck_recycles_trash_and_waits_for_burn_out_choice()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("draw-two", "Draw Two", "spell", "[Action] Draw 2.", "draw", 2, cost: 0));
+        var player = FindPlayer(state, 0);
+        player["deck"] = new JsonArray(Card("deck-card", "Deck Card", "unit", "", "rally", 0, cost: 0));
+        player["trash"] = new JsonArray(
+            Card("trash-a", "Trash A", "unit", "", "rally", 0, cost: 0),
+            Card("trash-b", "Trash B", "unit", "", "rally", 0, cost: 0));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+
+        player = FindPlayer(afterSecondPass.State, 0);
+        Assert.That(afterSecondPass.State.State["pendingBurnOut"], Is.Not.Null);
+        Assert.That(player["hand"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("deck-card"));
+        Assert.That(player["trash"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Is.EqualTo(new[] { "draw-two" }));
+        Assert.That(player["deck"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(engine.GetLegalActions(afterSecondPass.State, 0).Select(action => action.Type), Contains.Item("choose-burn-out-opponent"));
+
+        var chosen = engine.ApplyAction(afterSecondPass.State, new EngineGameAction(0, "choose-burn-out-opponent", new Dictionary<string, object?> { ["opponentPlayerId"] = 1 }), afterSecondPass.State.SequenceNumber);
+
+        player = FindPlayer(chosen.State, 0);
+        Assert.That(chosen.Accepted, Is.True);
+        Assert.That(chosen.State.State["pendingBurnOut"], Is.Null);
+        Assert.That(PlayerPoints(chosen.State, 1), Is.EqualTo(1));
+        Assert.That(player["hand"]!.AsArray(), Has.Count.EqualTo(2));
+        Assert.That(player["deck"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void repeated_burn_out_with_empty_trash_can_award_immediate_win()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("draw-two", "Draw Two", "spell", "[Action] Draw 2.", "draw", 2, cost: 0));
+        FindPlayer(state, 0)["deck"] = new JsonArray();
+        SetPlayerPoints(state, 1, 7);
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), state.SequenceNumber);
+        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+        var chosen = engine.ApplyAction(afterSecondPass.State, new EngineGameAction(0, "choose-burn-out-opponent", new Dictionary<string, object?> { ["opponentPlayerId"] = 1 }), afterSecondPass.State.SequenceNumber);
+
+        Assert.That(chosen.State.State["stage"]!.GetValue<string>(), Is.EqualTo("game-over"));
+        Assert.That(chosen.State.State["winner"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(PlayerPoints(chosen.State, 1), Is.EqualTo(8));
+    }
+
+    [Test]
+    public void burn_out_recycle_order_is_deterministic_for_same_seed()
+    {
+        var first = ResolveBurnOutUntilChoice(123);
+        var second = ResolveBurnOutUntilChoice(123);
+
+        var firstDeck = FindPlayer(first, 0)["deck"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()).ToArray();
+        var secondDeck = FindPlayer(second, 0)["deck"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()).ToArray();
+
+        Assert.That(secondDeck, Is.EqualTo(firstDeck));
+    }
+
+    [Test]
     public void chain_window_tracks_priority_and_rejects_non_priority_passes()
     {
         var engine = new DefaultRulesEngine();
@@ -942,6 +1006,32 @@ public class DefaultRulesEngineTests
         }
 
         return current;
+    }
+
+    private static EngineMatchState ResolveBurnOutUntilChoice(int seed)
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config(), Decks(), seed);
+        var afterFirst = engine.ApplyAction(state, new EngineGameAction(0, "confirm-mulligan", new Dictionary<string, object?>()), 0);
+        var afterSecond = engine.ApplyAction(afterFirst.State, new EngineGameAction(1, "confirm-mulligan", new Dictionary<string, object?>()), 1);
+        var current = afterSecond.State;
+        while (current.State["turnPhase"]?.GetValue<string>() != "main")
+        {
+            var turnPlayerId = current.State["turnPlayerId"]!.GetValue<int>();
+            current = engine.ApplyAction(current, new EngineGameAction(turnPlayerId, "advance-phase", new Dictionary<string, object?>()), current.SequenceNumber).State;
+        }
+
+        PutCardInHand(current, 0, Card("draw-two", "Draw Two", "spell", "[Action] Draw 2.", "draw", 2, cost: 0));
+        var player = FindPlayer(current, 0);
+        player["deck"] = new JsonArray(Card("deck-card", "Deck Card", "unit", "", "rally", 0, cost: 0));
+        player["trash"] = new JsonArray(
+            Card("trash-a", "Trash A", "unit", "", "rally", 0, cost: 0),
+            Card("trash-b", "Trash B", "unit", "", "rally", 0, cost: 0),
+            Card("trash-c", "Trash C", "unit", "", "rally", 0, cost: 0));
+
+        var played = engine.ApplyAction(current, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0 }), current.SequenceNumber);
+        var afterFirstPass = engine.ApplyAction(played.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), played.State.SequenceNumber);
+        return engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber).State;
     }
 
     private static EngineMatchState PassAllFocus(DefaultRulesEngine engine, EngineMatchState state)

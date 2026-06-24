@@ -51,6 +51,7 @@ export function DeckBuilderPage({
           />
 
           <DeckCardPool
+            cardLibrary={cardLibrary}
             deckDraft={deckBuilder.deckDraft}
             deckDomainFilter={deckBuilder.deckDomainFilter}
             deckMaxCost={deckBuilder.deckMaxCost}

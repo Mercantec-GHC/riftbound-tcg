@@ -3,6 +3,7 @@ import { createDecksApi, type ApiClient, type AuthSession } from '../../shared/a
 import {
   blankDeck,
   cardTags,
+  cardFitsDomainIdentity,
   cardsShareTag,
   deckValidationMessages,
   normalizeDeck,
@@ -110,7 +111,7 @@ export function useDeckBuilder({
       legendId: cards.some((card) => card.id === deck.legendId && card.kind === 'legend') ? deck.legendId : '',
       battlefieldDeckIds: deck.battlefieldDeckIds.filter((id) => cards.some((card) => card.id === id && card.kind === 'battlefield')).slice(0, 3),
       runeDeckIds: deck.runeDeckIds.filter((id) => cards.some((card) => card.id === id && card.kind === 'rune')),
-      mainDeckIds: deck.mainDeckIds.filter((id) => cards.some((card) => card.id === id && isDeckBuilderMainDeckCard(card))).slice(0, 40),
+      mainDeckIds: deck.mainDeckIds.filter((id) => cards.some((card) => card.id === id && isDeckBuilderMainDeckCard(card))),
     }
   }
 
@@ -245,15 +246,15 @@ export function useDeckBuilder({
     deckValidation,
     deleteDeck,
     exportDeck,
-    filteredBattlefields: filterAndSortCards(cards.filter((card) => card.kind === 'battlefield'), deckFilters),
+    filteredBattlefields: filterAndSortCards(cards.filter((card) => card.kind === 'battlefield' && cardFitsDomainIdentity(card, selectedLegend)), deckFilters),
     filteredChampions: filterAndSortCards(
       cards.filter((card) => card.kind === 'champion' && (!selectedLegend || cardsShareTag(card, selectedLegend))),
       deckFilters,
     ),
     filteredLegends: filterAndSortCards(cards.filter((card) => card.kind === 'legend'), deckFilters),
-    filteredMainDeckCards: filterAndSortCards(cards.filter(isDeckBuilderMainDeckCard), deckFilters),
+    filteredMainDeckCards: filterAndSortCards(cards.filter((card) => isDeckBuilderMainDeckCard(card) && cardFitsDomainIdentity(card, selectedLegend)), deckFilters),
     filteredRunes: filterAndSortCards(
-      cards.filter((card) => card.kind === 'rune' && (!selectedLegend || selectedLegend.domains.includes(card.domain))),
+      cards.filter((card) => card.kind === 'rune' && cardFitsDomainIdentity(card, selectedLegend)),
       deckFilters,
     ),
     importDeck,

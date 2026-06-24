@@ -13,6 +13,11 @@ public sealed class CardBuilder
     private CardEffectDefinition _effect = new(CardEffectType.Rally, 0);
     private int _cost = 1;
     private int _might = 2;
+    private IReadOnlyList<string> _tags = [];
+    private Domain _domain = riftbound_tcg.Core.Cards.Domain.Fury;
+    private IReadOnlyList<Domain> _domains = [riftbound_tcg.Core.Cards.Domain.Fury];
+    private string? _supertype;
+    private string? _cardType;
 
     public CardBuilder Id(string id) { _id = id; return this; }
     public CardBuilder Name(string name) { _name = name; return this; }
@@ -21,20 +26,25 @@ public sealed class CardBuilder
     public CardBuilder Effect(CardEffectType type, int amount) { _effect = new(type, amount); return this; }
     public CardBuilder Cost(int cost) { _cost = cost; return this; }
     public CardBuilder Might(int might) { _might = might; return this; }
+    public CardBuilder Tags(params string[] tags) { _tags = tags; return this; }
+    public CardBuilder Domain(Domain domain) { _domain = domain; _domains = [domain]; return this; }
+    public CardBuilder Domains(params Domain[] domains) { _domains = domains; _domain = domains.FirstOrDefault(); return this; }
+    public CardBuilder Supertype(string? supertype) { _supertype = supertype; return this; }
+    public CardBuilder CardType(string cardType) { _cardType = cardType; return this; }
 
     public CardDefinition Build() => new(
         Id: _id,
         Name: _name,
         Kind: _kind,
-        Tags: [],
-        Domain: Domain.Fury,
-        Domains: [Domain.Fury],
+        Tags: _tags,
+        Domain: _domain,
+        Domains: _domains,
         Cost: _cost,
         Might: _might,
         Text: _text,
         Image: "",
-        CardType: _kind.ToString(),
-        Supertype: null,
+        CardType: _cardType ?? _kind.ToString(),
+        Supertype: _supertype,
         Effect: _effect);
 
     public static CardBuilder Spell() => new CardBuilder().Kind(CardKind.Spell);
