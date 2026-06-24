@@ -56,9 +56,30 @@ function battlefieldCatalogCard(field: Battlefield, cardsById: Map<string, Card>
   return field.catalogId ? cardsById.get(field.catalogId) ?? null : null
 }
 
-function ReadOnlyArtCard({ card, className = '', title }: { card: Card; className?: string; title?: string }) {
+function ReadOnlyArtCard({
+  card,
+  className = '',
+  title,
+  onClick,
+  draggable,
+  onDragStart,
+}: {
+  card: Card
+  className?: string
+  title?: string
+  onClick?: () => void
+  draggable?: boolean
+  onDragStart?: (event: React.DragEvent) => void
+}) {
   return (
-    <div className={`online-art-card ${className}`.trim()} title={title ?? card.name}>
+    <div
+      className={`online-art-card ${className}`.trim()}
+      title={title ?? card.name}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      draggable={draggable}
+      onDragStart={onDragStart}
+    >
       <CardFace artOnly card={card} />
     </div>
   )
@@ -259,6 +280,8 @@ function OnlinePlayerMat({
   canPlayUnit,
   onPlayUnit,
   canMoveUnit,
+  canSummonChampion,
+  onSummonChampion,
 }: {
   isViewer: boolean
   player: Player
@@ -268,6 +291,8 @@ function OnlinePlayerMat({
   canPlayUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
   canMoveUnit?: boolean
+  canSummonChampion?: boolean
+  onSummonChampion?: () => void
 }) {
   const dragData = useDragData()
   const handZone = (
@@ -281,10 +306,22 @@ function OnlinePlayerMat({
     </section>
   )
 
+  const isChampionPlayable = Boolean(isViewer && canSummonChampion && player.champion && !player.championSummoned)
   const championZone = (
     <section className="mat-zone champion-zone fixed-card-zone">
       <span className="zone-label">Champion</span>
-      {player.champion ? <ReadOnlyArtCard card={player.champion} className="online-zone-card" /> : <div className="empty-slot">No champion</div>}
+      {player.champion && !player.championSummoned ? (
+        <ReadOnlyArtCard
+          card={player.champion}
+          className={`online-zone-card ${isChampionPlayable ? 'playable' : ''}`.trim()}
+          onClick={isChampionPlayable ? () => onSummonChampion?.() : undefined}
+          draggable={isChampionPlayable}
+          onDragStart={isChampionPlayable ? (event) => dragData(event, { type: 'champion' }) : undefined}
+          title={isChampionPlayable ? `Summon ${player.champion.name}` : player.champion.name}
+        />
+      ) : (
+        <div className="empty-slot">No champion</div>
+      )}
     </section>
   )
 
@@ -295,7 +332,7 @@ function OnlinePlayerMat({
     </section>
   )
 
-  const canDropOnBase = Boolean(isViewer && canPlayUnit)
+  const canDropOnBase = Boolean(isViewer && (canPlayUnit || isChampionPlayable))
   const baseZone = (
     <section
       className={`mat-zone base-zone flexible-card-zone ${canDropOnBase ? 'drop-zone' : ''}`.trim()}
@@ -303,7 +340,8 @@ function OnlinePlayerMat({
       onDrop={canDropOnBase ? (event) => {
         event.preventDefault()
         const payload = readDragData(event)
-        if (payload?.type === 'card') onPlayUnit?.(payload.handIndex)
+        if (payload?.type === 'card' && canPlayUnit) onPlayUnit?.(payload.handIndex)
+        if (payload?.type === 'champion' && isChampionPlayable) onSummonChampion?.()
       } : undefined}
     >
       <span className="zone-label">Base</span>
@@ -483,6 +521,8 @@ export function OnlinePlaymat({
   onPlayUnit,
   canMoveUnit,
   onMoveUnit,
+  canSummonChampion,
+  onSummonChampion,
 }: {
   cards: Card[]
   game: GameState
@@ -493,6 +533,8 @@ export function OnlinePlaymat({
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
+  canSummonChampion?: boolean
+  onSummonChampion?: () => void
 }) {
   const cardsById = new Map(cards.map((card) => [card.id, card]))
   const hydratedGame: GameState = {
@@ -520,6 +562,8 @@ export function OnlinePlaymat({
             canPlayUnit={canPlayUnit}
             onPlayUnit={onPlayUnit}
             canMoveUnit={canMoveUnit}
+            canSummonChampion={canSummonChampion}
+            onSummonChampion={onSummonChampion}
           />
         )}
       </section>
@@ -543,6 +587,8 @@ export function OnlinePlaymat({
             canPlayUnit={player.id === viewerPlayerId ? canPlayUnit : false}
             onPlayUnit={onPlayUnit}
             canMoveUnit={player.id === viewerPlayerId ? canMoveUnit : false}
+            canSummonChampion={player.id === viewerPlayerId ? canSummonChampion : false}
+            onSummonChampion={onSummonChampion}
           />
         ))}
       </section>
