@@ -2,7 +2,7 @@ import { CardFace } from '../../shared/ui/CardFace'
 import { DeckStack } from '../../shared/ui/DeckStack'
 import { readDragData, useDragData } from '../../shared/dragDrop'
 import type { MatchPlayer } from '../../shared/api'
-import type { Battlefield, Card, GameState, Player, Unit } from '../../shared/models'
+import type { Battlefield, Card, GameState, Gear, Player, Unit } from '../../shared/models'
 
 function canAffordCard(player: Player, card: Card): boolean {
   return player.runes.ready.length + player.runePool.energy >= card.cost
@@ -28,10 +28,15 @@ function hydrateUnit(unit: Unit, cardsById: Map<string, Card>): Unit {
   return hydrateCard(unit, cardsById)
 }
 
+function hydrateGear(gear: Gear, cardsById: Map<string, Card>): Gear {
+  return hydrateCard(gear, cardsById)
+}
+
 function hydratePlayer(player: Player, cardsById: Map<string, Card>): Player {
   return {
     ...player,
     base: player.base.map((unit) => hydrateUnit(unit, cardsById)),
+    baseGear: (player.baseGear ?? []).map((gear) => hydrateGear(gear, cardsById)),
     champion: player.champion ? hydrateCard(player.champion, cardsById) : null,
     deck: player.deck.map((card) => hydrateCard(card, cardsById)),
     hand: player.hand.map((card) => hydrateCard(card, cardsById)),
@@ -194,11 +199,15 @@ function OnlineHandZone({
   player,
   mulliganSelection,
   canPlayUnit,
+  playableCardHandIndexes,
+  onPlayCard,
 }: {
   isViewer: boolean
   player: Player
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
   canPlayUnit?: boolean
+  playableCardHandIndexes?: number[]
+  onPlayCard?: (handIndex: number) => void
 }) {
   const dragData = useDragData()
   if (!isViewer) {
@@ -237,13 +246,15 @@ function OnlineHandZone({
     <div className="hand online-hand">
       {player.hand.map((card, index) => {
         const isPlayableUnit = canPlayUnit && card.kind === 'unit' && canAffordCard(player, card)
+        const isPlayableCard = (playableCardHandIndexes ?? []).includes(index)
         return (
           <button
             type="button"
             key={`${card.id}-${index}`}
-            className={`online-hand-card-button ${isPlayableUnit ? 'playable' : ''}`.trim()}
+            className={`online-hand-card-button ${isPlayableUnit || isPlayableCard ? 'playable' : ''}`.trim()}
             draggable={isPlayableUnit}
-            disabled={!isPlayableUnit}
+            disabled={!isPlayableUnit && !isPlayableCard}
+            onClick={isPlayableCard ? () => onPlayCard?.(index) : undefined}
             onDragStart={(event) => dragData(event, { type: 'card', handIndex: index, playerId: player.id })}
             title={card.kind === 'unit' && !canAffordCard(player, card) ? `Needs ${card.cost} energy to play ${card.name}` : card.name}
           >
@@ -279,6 +290,8 @@ function OnlinePlayerMat({
   mulliganSelection,
   canPlayUnit,
   onPlayUnit,
+  playableCardHandIndexes,
+  onPlayCard,
   canMoveUnit,
   canSummonChampion,
   onSummonChampion,
@@ -290,6 +303,8 @@ function OnlinePlayerMat({
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
   canPlayUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  playableCardHandIndexes?: number[]
+  onPlayCard?: (handIndex: number) => void
   canMoveUnit?: boolean
   canSummonChampion?: boolean
   onSummonChampion?: () => void
@@ -302,6 +317,8 @@ function OnlinePlayerMat({
         player={player}
         mulliganSelection={isViewer ? mulliganSelection : undefined}
         canPlayUnit={isViewer ? canPlayUnit : false}
+        playableCardHandIndexes={isViewer ? playableCardHandIndexes : []}
+        onPlayCard={onPlayCard}
       />
     </section>
   )
@@ -359,6 +376,13 @@ function OnlinePlayerMat({
         })}
         {player.base.length === 0 && <span className="zone-empty-text">No units</span>}
       </div>
+      {(player.baseGear ?? []).length > 0 && (
+        <div className="unit-row online-gear-row">
+          {player.baseGear.map((gear) => (
+            <ReadOnlyArtCard key={gear.uid} card={gear} className="online-unit-card online-gear-card" title={gear.name} />
+          ))}
+        </div>
+      )}
     </section>
   )
 
@@ -519,6 +543,8 @@ export function OnlinePlaymat({
   mulliganSelection,
   canPlayUnit,
   onPlayUnit,
+  playableCardHandIndexes,
+  onPlayCard,
   canMoveUnit,
   onMoveUnit,
   canSummonChampion,
@@ -531,6 +557,8 @@ export function OnlinePlaymat({
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
   canPlayUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  playableCardHandIndexes?: number[]
+  onPlayCard?: (handIndex: number) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   canSummonChampion?: boolean
@@ -561,6 +589,8 @@ export function OnlinePlaymat({
             mulliganSelection={mulliganSelection}
             canPlayUnit={canPlayUnit}
             onPlayUnit={onPlayUnit}
+            playableCardHandIndexes={playableCardHandIndexes}
+            onPlayCard={onPlayCard}
             canMoveUnit={canMoveUnit}
             canSummonChampion={canSummonChampion}
             onSummonChampion={onSummonChampion}
@@ -586,6 +616,8 @@ export function OnlinePlaymat({
             mulliganSelection={player.id === viewerPlayerId ? mulliganSelection : undefined}
             canPlayUnit={player.id === viewerPlayerId ? canPlayUnit : false}
             onPlayUnit={onPlayUnit}
+            playableCardHandIndexes={player.id === viewerPlayerId ? playableCardHandIndexes : []}
+            onPlayCard={onPlayCard}
             canMoveUnit={player.id === viewerPlayerId ? canMoveUnit : false}
             canSummonChampion={player.id === viewerPlayerId ? canSummonChampion : false}
             onSummonChampion={onSummonChampion}

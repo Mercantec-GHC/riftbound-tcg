@@ -56,6 +56,14 @@ public sealed record UnitState(
     bool Attacker,
     bool Defender);
 
+public sealed record GearState(
+    string Uid,
+    string CardId,
+    int OwnerPlayerId,
+    CardLocation Location,
+    bool Exhausted,
+    string? AttachedUnitId);
+
 public sealed record RunePools(
     IReadOnlyList<string> ReadyCardIds,
     IReadOnlyList<string> ExhaustedCardIds,
@@ -71,6 +79,7 @@ public sealed record PlayerState(
     IReadOnlyList<string> HandCardIds,
     IReadOnlyList<string> TrashCardIds,
     IReadOnlyList<UnitState> Base,
+    IReadOnlyList<GearState> BaseGear,
     string? ChampionCardId,
     string? LegendCardId,
     bool ChampionSummoned,

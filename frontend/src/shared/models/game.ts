@@ -25,6 +25,14 @@ export type Unit = Card & {
   defender?: boolean
 }
 
+export type Gear = Card & {
+  uid: string
+  ownerId: number
+  location: { type: 'base' } | { type: 'battlefield'; battlefieldId: string }
+  exhausted: boolean
+  attachedUnitId: string | null
+}
+
 export type Player = {
   id: number
   name: string
@@ -41,6 +49,7 @@ export type Player = {
   hand: Card[]
   trash: Card[]
   base: Unit[]
+  baseGear: Gear[]
   champion: Card | null
   legend: Card | null
   championSummoned: boolean
@@ -89,7 +98,14 @@ export type GameState = {
   mulliganPlayerIndex: number
   mulliganConfirmedPlayerIds?: number[]
   activeShowdown: { battlefieldId: string; kind: 'non-combat' | 'combat' } | null
-  activeCombat: { battlefieldId: string; attackerPlayerId: number; defenderPlayerId: number } | null
+  activeCombat: {
+    battlefieldId: string
+    attackerPlayerId: number
+    defenderPlayerId: number
+    damageStep?: boolean
+    attackerAssignments?: Record<string, number>
+    defenderAssignments?: Record<string, number>
+  } | null
   selectedCard: { player: number; handIndex: number } | null
   selectedUnit: { player: number; unitId: string } | null
   nextUid: number
@@ -97,7 +113,7 @@ export type GameState = {
   log: { id: number; text: string }[]
   passShield: boolean
   effectStack: StackItem[]
-  chainWindow: { passedByPlayer: Record<number, boolean> } | null
+  chainWindow: { priorityPlayerId?: number; startedByPlayerId?: number; passedByPlayer: Record<number, boolean> } | null
 }
 
 export type GameMode = 'duel-1v1' | 'ffa-3' | 'ffa-4' | 'teams-2v2'

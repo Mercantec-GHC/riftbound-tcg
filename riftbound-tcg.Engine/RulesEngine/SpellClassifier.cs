@@ -22,11 +22,11 @@ public static class SpellClassifier
             || card.Text.Contains("As you play me", StringComparison.OrdinalIgnoreCase);
     }
 
-    // A card may be played during the chain window if it is a [Reaction] spell (any player)
-    // or any other card being played by the turn player.
+    // A card may be played during a chain window only if it has Reaction timing.
     public static bool CanPlayDuringChainWindow(CardDefinition card, int playerId, int turnPlayerId)
     {
-        if (GetSpellSubtype(card) == SpellSubtype.Reaction) return true;
-        return playerId == turnPlayerId;
+        _ = playerId;
+        _ = turnPlayerId;
+        return GetSpellSubtype(card) == SpellSubtype.Reaction;
     }
 }

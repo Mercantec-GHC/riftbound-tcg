@@ -38,6 +38,7 @@ public sealed class CardBuilder
         Effect: _effect);
 
     public static CardBuilder Spell() => new CardBuilder().Kind(CardKind.Spell);
+    public static CardBuilder Gear() => new CardBuilder().Kind(CardKind.Gear);
     public static CardBuilder Unit() => new CardBuilder().Kind(CardKind.Unit);
     public static CardBuilder Champion() => new CardBuilder().Kind(CardKind.Champion);
     public static CardBuilder Legend() => new CardBuilder().Kind(CardKind.Legend);
@@ -57,6 +58,7 @@ public static class StateBuilder
             HandCardIds: Enumerable.Range(0, handSize).Select(i => $"hand-{id}-{i}").ToList(),
             TrashCardIds: [],
             Base: [],
+            BaseGear: [],
             ChampionCardId: null,
             LegendCardId: null,
             ChampionSummoned: false,

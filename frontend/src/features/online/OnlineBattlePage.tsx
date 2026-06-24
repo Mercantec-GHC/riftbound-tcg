@@ -108,6 +108,26 @@ function combatPanelKey(game: GameState): string {
   return `${combat?.battlefieldId ?? 'none'}:${battlefield?.units.map((unit) => unit.uid).join(',') ?? ''}`
 }
 
+function playerName(game: GameState, playerId: number | null | undefined): string {
+  if (playerId === null || playerId === undefined) return 'None'
+  return game.players.find((player) => player.id === playerId)?.name ?? `Player ${playerId + 1}`
+}
+
+function currentWindowLabel(game: GameState): string {
+  if (game.chainWindow) return 'Chain'
+  if (game.activeCombat?.damageStep) return 'Combat damage'
+  if (game.activeShowdown?.kind === 'combat') return 'Combat showdown'
+  if (game.activeShowdown) return 'Showdown'
+  return 'Neutral'
+}
+
+function passedPlayerNames(game: GameState, passedByPlayer: Record<number, boolean>): string {
+  const names = Object.entries(passedByPlayer)
+    .filter(([, passed]) => passed)
+    .map(([id]) => playerName(game, Number(id)))
+  return names.length > 0 ? names.join(', ') : 'None'
+}
+
 function CombatAssignmentInputs({
   assignments,
   label,
@@ -266,6 +286,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
+  const playableCardHandIndexes = legalActions
+    .filter((action) => action.type === 'play-card' && action.playerId === playerId)
+    .map((action) => Number(action.payloadSchema?.handIndex))
+    .filter((index) => Number.isInteger(index))
   const canResolveCombat = Boolean(state?.activeCombat && legalActions.some((action) => action.type === 'resolve-combat' && action.playerId === playerId))
 
   useEffect(() => {
@@ -524,7 +548,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
         actionId: action.id,
         type: action.type,
         playerId: action.playerId,
-        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : {},
+        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : action.payloadSchema ?? {},
         expectedSequenceNumber: match.sequenceNumber,
       })
     } catch (error) {
@@ -559,6 +583,10 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
 
   async function moveUnit(unitId: string, battlefieldId: string) {
     await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
+  }
+
+  async function playCard(handIndex: number) {
+    await submitTypedAction('play-card', { handIndex }, 'Unable to play card.')
   }
 
   async function summonChampion() {
@@ -744,6 +772,24 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 </article>
               ))}
             </div>
+            <div className="online-window-panel">
+              <article>
+                <span>Window</span>
+                <strong>{currentWindowLabel(state)}</strong>
+              </article>
+              <article>
+                <span>Priority</span>
+                <strong>{playerName(state, state.chainWindow?.priorityPlayerId ?? state.priorityPlayerId)}</strong>
+              </article>
+              <article>
+                <span>Focus</span>
+                <strong>{playerName(state, state.focusPlayerId)}</strong>
+              </article>
+              <article>
+                <span>Passed</span>
+                <strong>{state.chainWindow ? passedPlayerNames(state, state.chainWindow.passedByPlayer) : passedPlayerNames(state, state.hasPassedFocusByPlayer)}</strong>
+              </article>
+            </div>
             <OnlinePlaymat
               cards={cards}
               game={state}
@@ -751,6 +797,8 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               viewerPlayerId={playerId}
               canPlayUnit={legalActions.some((action) => action.type === 'play-unit' && action.playerId === playerId)}
               onPlayUnit={playUnit}
+              playableCardHandIndexes={playableCardHandIndexes}
+              onPlayCard={playCard}
               canMoveUnit={legalActions.some((action) => action.type === 'move-unit' && action.playerId === playerId)}
               onMoveUnit={moveUnit}
               canSummonChampion={legalActions.some((action) => action.type === 'summon-champion' && action.playerId === playerId)}
@@ -763,13 +811,21 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
 
           <aside className="online-actions">
             <h3>Actions</h3>
+            {state.effectStack.length > 0 && (
+              <div className="online-stack">
+                <strong>Chain</strong>
+                {state.effectStack.map((item, index) => (
+                  <p key={item.id}>{index === 0 ? 'Top' : `#${index + 1}`}: {item.cardName} ({playerName(state, item.playerId)})</p>
+                ))}
+              </div>
+            )}
             {isMulliganTurn && (
               <p>Select up to 2 cards in your hand to exchange ({mulliganHandIndexes.length}/2 selected).</p>
             )}
             {state.activeCombat && (
               canResolveCombat
                 ? <button type="button" onClick={() => setCombatModalOpen(true)}>Assign combat damage</button>
-                : <p>Waiting for combat damage assignments.</p>
+                : <p>{state.activeCombat.damageStep ? 'Waiting for combat damage assignments.' : 'Combat showdown is open.'}</p>
             )}
             {state.activeCombat && canResolveCombat && combatModalOpen && (
               <CombatShowdownModal
