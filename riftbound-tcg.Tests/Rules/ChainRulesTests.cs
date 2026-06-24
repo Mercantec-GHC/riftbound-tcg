@@ -18,6 +18,27 @@ public class ChainRulesTests
         Assert.That(window.PassedByPlayer, Is.Empty);
     }
 
+    [Test]
+    public void Open_PlayedCardSource_PassesFocusOnClose()
+    {
+        var window = ChainRules.Open(priorityPlayerId: 2, startedByPlayerId: 2);
+
+        Assert.That(window.PriorityPlayerId, Is.EqualTo(2));
+        Assert.That(window.StartedByPlayerId, Is.EqualTo(2));
+        Assert.That(window.Source, Is.EqualTo(ChainItemSource.PlayedCard));
+        Assert.That(window.PassesFocusOnClose, Is.True);
+    }
+
+    [TestCase(ChainItemSource.TriggeredAbility)]
+    [TestCase(ChainItemSource.AddCreated)]
+    public void Open_NonPlayedCardSources_DoNotPassFocusOnClose(ChainItemSource source)
+    {
+        var window = ChainRules.Open(priorityPlayerId: 1, startedByPlayerId: 1, source);
+
+        Assert.That(window.Source, Is.EqualTo(source));
+        Assert.That(window.PassesFocusOnClose, Is.False);
+    }
+
     // --- ChainRules.Pass ---
 
     [Test]
@@ -34,14 +55,40 @@ public class ChainRulesTests
     [Test]
     public void Pass_TwoPlayers_FirstPassDoesNotResolve()
     {
-        var window = ChainRules.Open();
+        var window = ChainRules.Open(priorityPlayerId: 0);
         var turnOrder = new[] { 0, 1 };
 
         var result = ChainRules.Pass(window, playerId: 0, turnOrder);
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.PassedByPlayer[0], Is.True);
+        Assert.That(result.PriorityPlayerId, Is.EqualTo(1));
         Assert.That(result.PassedByPlayer.ContainsKey(1), Is.False);
+    }
+
+    [Test]
+    public void Pass_FourPlayers_AdvancesPriorityInTurnOrder()
+    {
+        var turnOrder = new[] { 2, 3, 0, 1 };
+        var window = ChainRules.Open(priorityPlayerId: 2);
+
+        var afterFirst = ChainRules.Pass(window, 2, turnOrder);
+        var afterSecond = ChainRules.Pass(afterFirst!, 3, turnOrder);
+
+        Assert.That(afterFirst!.PriorityPlayerId, Is.EqualTo(3));
+        Assert.That(afterSecond!.PriorityPlayerId, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Pass_NonPriorityPlayer_DoesNotMarkPass()
+    {
+        var window = ChainRules.Open(priorityPlayerId: 0);
+
+        var result = ChainRules.Pass(window, playerId: 1, turnOrder: [0, 1]);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.PassedByPlayer, Is.Empty);
+        Assert.That(result.PriorityPlayerId, Is.EqualTo(0));
     }
 
     [Test]
@@ -137,5 +184,23 @@ public class ChainRulesTests
         var result = ChainRules.ValidateChainPlay(card, playerId: 0, turnPlayerId: 0, chainWindow: null);
 
         Assert.That(result.IsValid, Is.True);
+    }
+
+    [Test]
+    public void Finalize_MarksPendingItemFinalized()
+    {
+        var item = new StackItem(
+            "stack-1",
+            "card-1",
+            "Test Spell",
+            0,
+            new CardEffectDefinition(CardEffectType.Draw, 1),
+            null,
+            null);
+
+        var finalized = ChainRules.Finalize(item);
+
+        Assert.That(item.Status, Is.EqualTo(ChainItemStatus.Pending));
+        Assert.That(finalized.Status, Is.EqualTo(ChainItemStatus.Finalized));
     }
 }

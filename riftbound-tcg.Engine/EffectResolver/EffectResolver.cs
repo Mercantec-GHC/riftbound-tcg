@@ -1,6 +1,7 @@
 using riftbound_tcg.Core.Cards;
 using riftbound_tcg.Core.Effects;
 using riftbound_tcg.Core.GameState;
+using riftbound_tcg.Engine.RulesEngine;
 
 namespace riftbound_tcg.Engine.EffectResolver;
 
@@ -15,7 +16,7 @@ public static class EffectResolver
     {
         if (stack.Count == 0) return null;
 
-        var item = stack[0];
+        var item = ChainRules.Finalize(stack[0]);
         var remaining = stack.Skip(1).ToList();
 
         var (updatedPlayers, updatedBattlefields) = ApplyEffect(item, players, battlefields);
