@@ -58,7 +58,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["claim"] = 2,
             ["chosenBy"] = index % mode.PlayerCount,
             ["controllerId"] = null,
-            ["units"] = new JsonArray()
+            ["units"] = new JsonArray(),
+            ["hiddenCards"] = new JsonArray()
         }).ToArray();
 
         var state = new JsonObject
@@ -176,6 +177,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 actions.Add(new("set-facedown", "set-facedown", "Set facedown", playerId));
                 actions.AddRange(PlayableCardsFromHand(state.State, playerId, IsSpellOrGear));
                 actions.AddRange(ActivatedAbilityActions(state.State, playerId));
+                actions.AddRange(HideCardsFromHand(state.State, playerId));
 
                 if (CanSummonChampion(state.State, playerId))
                 {
@@ -252,7 +254,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 nextState = EndCurrentTurn(nextState, action.PlayerId);
                 break;
             case "play-unit":
-                var playUnitResult = PlayUnit(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"));
+                var playUnitResult = PlayUnit(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"), ReadBool(action.Payload, "accelerate"));
                 if (playUnitResult is null)
                 {
                     return Reject(state, "Invalid play-unit action: unit can only be played to your base or a battlefield you control.");
@@ -352,6 +354,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 }
 
                 nextState = activateAbilityResult;
+                break;
+            case "hide-card":
+                var hideCardResult = HideCard(nextState, action.PlayerId, ReadInt(action.Payload, "handIndex"), ReadString(action.Payload, "battlefieldId"));
+                if (hideCardResult is null)
+                {
+                    return Reject(state, "Invalid hide-card action: only cards with Hidden can be hidden at a battlefield you control with no hidden card there.");
+                }
+
+                nextState = hideCardResult;
                 break;
             case "pass-chain-window":
                 var passResult = PassChainWindow(nextState, action.PlayerId);
@@ -760,6 +771,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
         else if (currentPhase == "beginning")
         {
+            state = KillTemporaryPermanents(state, playerId);
+
             foreach (var battlefieldId in ControlledBattlefieldIds(state, playerId))
             {
                 state = ScoreBattlefield(state, new ScoreRequest(playerId, battlefieldId, ScoreSource.Hold));
@@ -1562,7 +1575,59 @@ public sealed class DefaultRulesEngine : IRulesEngine
         });
     }
 
-    private static JsonObject? PlayUnit(JsonObject state, int playerId, int? handIndex, string? battlefieldId)
+    private static JsonObject? HideCard(JsonObject state, int playerId, int? handIndex, string? battlefieldId)
+    {
+        if (handIndex is null || string.IsNullOrWhiteSpace(battlefieldId))
+        {
+            return null;
+        }
+
+        var player = FindPlayer(state, playerId);
+        var battlefield = FindBattlefield(state, battlefieldId);
+        if (player is null || battlefield is null || battlefield["controllerId"]?.GetValue<int>() != playerId)
+        {
+            return null;
+        }
+
+        var hiddenCards = battlefield["hiddenCards"] as JsonArray ?? new JsonArray();
+        battlefield["hiddenCards"] = hiddenCards;
+        if (hiddenCards.Any(node => node?["ownerId"]?.GetValue<int>() == playerId))
+        {
+            return null;
+        }
+
+        var hand = player["hand"]!.AsArray();
+        if (handIndex.Value < 0 || handIndex.Value >= hand.Count)
+        {
+            return null;
+        }
+
+        var card = hand[handIndex.Value]!.AsObject();
+        if (!HasKeyword(card, KeywordKind.Hidden) || !CanPay(player, 1))
+        {
+            return null;
+        }
+
+        state = UpdatePlayer(state, playerId, p =>
+        {
+            p["hand"]!.AsArray().RemoveAt(handIndex.Value);
+            PayCost(p, 1);
+            return p;
+        });
+
+        var hiddenCard = Clone(card);
+        hiddenCard["uid"] = $"hidden-{state["nextUid"]?.GetValue<int>() ?? 1}";
+        hiddenCard["ownerId"] = playerId;
+        hiddenCard["hiddenAtBattlefieldId"] = battlefieldId;
+        hiddenCard["hiddenTurnNumber"] = state["turnNumber"]?.GetValue<int>() ?? 1;
+        hiddenCard["facedown"] = true;
+        state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
+        hiddenCards.Add(hiddenCard);
+
+        return AddLog(state, $"{PlayerName(state, playerId)} hid a card at {battlefield["name"]?.GetValue<string>() ?? "a battlefield"}.");
+    }
+
+    private static JsonObject? PlayUnit(JsonObject state, int playerId, int? handIndex, string? battlefieldId, bool accelerate)
     {
         if (handIndex is null)
         {
@@ -1602,6 +1667,17 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var cost = ReadCost(card);
+        if (accelerate && !HasKeyword(card, KeywordKind.Accelerate))
+        {
+            return null;
+        }
+
+        var cost = ReadCost(card);
+        if (accelerate)
+        {
+            cost = cost with { Energy = cost.Energy + 2 };
+        }
+
         if (!CanPay(player, cost))
         {
             return null;
@@ -1612,7 +1688,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         unit["ownerId"] = playerId;
         unit["controllerId"] = playerId;
         unit["location"] = new JsonObject { ["type"] = battlefield is null ? "base" : "battlefield", ["battlefieldId"] = battlefield?["id"]?.GetValue<string>(), ["attachedToUid"] = null };
-        unit["exhausted"] = true;
+        unit["exhausted"] = !accelerate;
         unit["damage"] = 0;
         unit["attachedMight"] = 0;
         unit["attacker"] = false;
@@ -1874,7 +1950,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return AddLog(state, $"{PlayerName(state, playerId)} moved {unitLabel} to their base.");
         }
 
-        if (string.IsNullOrWhiteSpace(battlefieldId) || moves.Any(move => move.Origin == MoveOrigin.Battlefield))
+        if (string.IsNullOrWhiteSpace(battlefieldId) || moves.Any(move => move.Origin == MoveOrigin.Battlefield && !HasKeyword(move.Unit, KeywordKind.Ganking)))
         {
             return null;
         }
@@ -2521,6 +2597,35 @@ public sealed class DefaultRulesEngine : IRulesEngine
             }
         }
 
+        var tankUnits = opposingUnits.Where(unit => HasKeyword(unit, KeywordKind.Tank)).ToArray();
+        if (tankUnits.Length > 0)
+        {
+            var allTanksLethal = tankUnits.All(unit =>
+            {
+                var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+                return assignments.GetValueOrDefault(uid) >= LethalDamage(state, unit);
+            });
+            if (!allTanksLethal && opposingUnits.Any(unit => !HasKeyword(unit, KeywordKind.Tank) && assignments.GetValueOrDefault(unit["uid"]?.GetValue<string>() ?? string.Empty) > 0))
+            {
+                return false;
+            }
+        }
+
+        var backlineUnits = opposingUnits.Where(unit => HasKeyword(unit, KeywordKind.Backline)).ToArray();
+        if (backlineUnits.Length > 0)
+        {
+            var frontlineUnits = opposingUnits.Where(unit => !HasKeyword(unit, KeywordKind.Backline)).ToArray();
+            var allFrontlineLethal = frontlineUnits.All(unit =>
+            {
+                var uid = unit["uid"]?.GetValue<string>() ?? string.Empty;
+                return assignments.GetValueOrDefault(uid) >= LethalDamage(state, unit);
+            });
+            if (!allFrontlineLethal && backlineUnits.Any(unit => assignments.GetValueOrDefault(unit["uid"]?.GetValue<string>() ?? string.Empty) > 0))
+            {
+                return false;
+            }
+        }
+
         var nonLethalPositiveCount = 0;
         var damageableOpposingUnits = opposingUnits.Where(CanTakeDamage).ToArray();
         var allOpposingUnitsAssignedLethal = damageableOpposingUnits.All(unit =>
@@ -2620,6 +2725,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 continue;
             }
 
+            var ownerId = unit["ownerId"]?.GetValue<int>() ?? -1;
+            state = ResolveDeathknell(state, ownerId, unit);
             units.RemoveAt(i);
             state = MoveObjectAndAttachmentsToOwnerZone(state, unit, "trash");
         }
@@ -2643,8 +2750,76 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     continue;
                 }
 
+                var ownerId = unit["ownerId"]?.GetValue<int>() ?? player["id"]?.GetValue<int>() ?? -1;
+                state = ResolveDeathknell(state, ownerId, unit);
                 units.RemoveAt(i);
                 state = MoveObjectAndAttachmentsToOwnerZone(state, unit, "trash");
+            }
+        }
+
+        return state;
+    }
+
+    private static JsonObject KillTemporaryPermanents(JsonObject state, int playerId)
+    {
+        var player = FindPlayer(state, playerId);
+        if (player is not null)
+        {
+            var baseUnits = player["base"]!.AsArray();
+            for (var i = baseUnits.Count - 1; i >= 0; i--)
+            {
+                var unit = baseUnits[i]!.AsObject();
+                if (!HasKeyword(unit, KeywordKind.Temporary))
+                {
+                    continue;
+                }
+
+                player["trash"]!.AsArray().Add(TrashSnapshot(unit));
+                state = ResolveDeathknell(state, playerId, unit);
+                baseUnits.RemoveAt(i);
+            }
+        }
+
+        foreach (var battlefield in state["battlefields"]!.AsArray().Select(node => node!.AsObject()))
+        {
+            var units = battlefield["units"]!.AsArray();
+            for (var i = units.Count - 1; i >= 0; i--)
+            {
+                var unit = units[i]!.AsObject();
+                if (unit["ownerId"]?.GetValue<int>() != playerId || !HasKeyword(unit, KeywordKind.Temporary))
+                {
+                    continue;
+                }
+
+                state = MoveKilledPermanentToTrash(state, playerId, unit);
+                units.RemoveAt(i);
+            }
+        }
+
+        return state;
+    }
+
+    private static JsonObject TrashSnapshot(JsonObject permanent)
+    {
+        var killed = Clone(permanent);
+        killed.Remove("uid");
+        killed.Remove("ownerId");
+        killed.Remove("exhausted");
+        killed.Remove("damage");
+        killed.Remove("attachedMight");
+        killed.Remove("attacker");
+        killed.Remove("defender");
+        return killed;
+    }
+
+    private static JsonObject ResolveDeathknell(JsonObject state, int ownerId, JsonObject permanent)
+    {
+        foreach (var keyword in Keywords(permanent).Where(keyword => KeywordKindName(keyword) == KeywordKind.Deathknell))
+        {
+            var text = keyword["text"]?.GetValue<string>() ?? permanent["text"]?.GetValue<string>() ?? string.Empty;
+            if (TryReadInstructionAmount(text, "draw") is { } drawAmount)
+            {
+                state = DrawCards(state, ownerId, drawAmount);
             }
         }
 
@@ -2656,7 +2831,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var might = (unit["might"]?.GetValue<int>() ?? 0) + (unit["attachedMight"]?.GetValue<int>() ?? 0) + PassiveMightBonus(state, unit);
         if (unit["defender"]?.GetValue<bool>() == true)
         {
-            might += KeywordValue(unit, "Shield", defaultValue: 1);
+            might += KeywordValue(unit, KeywordKind.Shield);
         }
 
         return might;
@@ -2669,7 +2844,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return 0;
         }
 
-        return Math.Max(0, CurrentMight(state, unit));
+        var might = CurrentMight(state, unit);
+        if (unit["attacker"]?.GetValue<bool>() == true)
+        {
+            might += KeywordValue(unit, KeywordKind.Assault);
+        }
+
+        if (unit["defender"]?.GetValue<bool>() == true)
+        {
+            might += KeywordValue(unit, KeywordKind.Shield);
+        }
+
+        return Math.Max(0, might);
     }
 
     private static int LethalDamage(JsonObject state, JsonObject unit)
@@ -3286,6 +3472,40 @@ public sealed class DefaultRulesEngine : IRulesEngine
             .ToArray();
     }
 
+    private static IReadOnlyList<EngineLegalAction> HideCardsFromHand(JsonObject state, int playerId)
+    {
+        var player = FindPlayer(state, playerId);
+        if (player is null || !CanPay(player, 1))
+        {
+            return [];
+        }
+
+        var controlledBattlefields = state["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Where(battlefield => battlefield["controllerId"]?.GetValue<int>() == playerId)
+            .Where(battlefield => !(battlefield["hiddenCards"] as JsonArray ?? []).Any(card => card?["ownerId"]?.GetValue<int>() == playerId))
+            .ToArray();
+        if (controlledBattlefields.Length == 0)
+        {
+            return [];
+        }
+
+        return player["hand"]!.AsArray()
+            .Select((node, index) => (Card: node!.AsObject(), Index: index))
+            .Where(item => HasKeyword(item.Card, KeywordKind.Hidden))
+            .Select(item => new EngineLegalAction(
+                $"hide-card-{playerId}-{item.Index}",
+                "hide-card",
+                $"Hide {item.Card["name"]?.GetValue<string>() ?? "card"}",
+                playerId,
+                new JsonObject
+                {
+                    ["handIndex"] = item.Index,
+                    ["battlefieldIds"] = ToArray(controlledBattlefields.Select(battlefield => battlefield["id"]?.GetValue<string>() ?? string.Empty))
+                }))
+            .ToArray();
+    }
+
     private static bool CanPlayCardNow(JsonObject state, int playerId, JsonObject card)
     {
         var stage = state["stage"]?.GetValue<string>() ?? "";
@@ -3347,7 +3567,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return false;
         }
 
-        return (card["text"]?.GetValue<string>() ?? string.Empty).Contains("[Reaction]", StringComparison.Ordinal);
+        return HasKeyword(card, KeywordKind.Reaction) || HasKeyword(card, KeywordKind.QuickDraw);
     }
 
     private static bool IsActionCard(JsonObject card)
@@ -3358,8 +3578,8 @@ public sealed class DefaultRulesEngine : IRulesEngine
         }
 
         var text = card["text"]?.GetValue<string>() ?? string.Empty;
-        return text.Contains("[Action]", StringComparison.Ordinal)
-            || !text.Contains("[Reaction]", StringComparison.Ordinal);
+        return HasKeyword(card, KeywordKind.Action)
+            || !HasKeyword(card, KeywordKind.Reaction);
     }
 
     private static TargetSelection ValidateTargetSelection(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
@@ -3437,6 +3657,10 @@ public sealed class DefaultRulesEngine : IRulesEngine
     }
 
     private static bool CanPay(JsonObject player, ResourceCost cost) => BuildPaymentPlan(player, cost) is not null;
+
+    private static bool CanPay(JsonObject player, int energy) => CanPay(player, new ResourceCost(Math.Max(0, energy), new Dictionary<Domain, int>(), 0));
+
+    private static void PayCost(JsonObject player, int energy) => PayCost(player, new ResourceCost(Math.Max(0, energy), new Dictionary<Domain, int>(), 0));
 
     private static void PayCost(JsonObject player, ResourceCost cost)
     {
@@ -4251,6 +4475,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 ["image"] = definition.Image,
                 ["cardType"] = definition.CardType,
                 ["supertype"] = definition.Supertype,
+                ["keywords"] = ToArray(KeywordCatalog.For(definition).Select(ToKeywordObject)),
                 ["effect"] = new JsonObject { ["type"] = definition.Effect.Type.ToString().ToLowerInvariant(), ["amount"] = definition.Effect.Amount }
             };
         }
@@ -4270,6 +4495,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["image"] = "*",
             ["cardType"] = "Unit",
             ["supertype"] = null,
+            ["keywords"] = new JsonArray(),
             ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
         };
     }
@@ -4352,6 +4578,31 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["power"] = ToObject(power),
             ["universalPower"] = 0
         };
+    }
+
+    private static JsonObject ToKeywordObject(CardKeywordDefinition keyword)
+    {
+        var obj = new JsonObject
+        {
+            ["kind"] = keyword.Kind.ToString(),
+            ["behavior"] = keyword.Behavior.ToString()
+        };
+        if (keyword.Value is not null)
+        {
+            obj["value"] = keyword.Value.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword.Cost))
+        {
+            obj["cost"] = keyword.Cost;
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword.Text))
+        {
+            obj["text"] = keyword.Text;
+        }
+
+        return obj;
     }
 
     private static JsonObject ToObject(IReadOnlyDictionary<string, int> values)
@@ -4443,8 +4694,70 @@ public sealed class DefaultRulesEngine : IRulesEngine
         {
             JsonElement element when element.ValueKind is JsonValueKind.True or JsonValueKind.False => element.GetBoolean(),
             bool boolValue => boolValue,
+            string text when bool.TryParse(text, out var parsed) => parsed,
             _ => null
         };
+    }
+
+    private static bool HasKeyword(JsonObject card, KeywordKind kind) =>
+        KeywordValue(card, kind, countPresence: true) > 0;
+
+    private static int KeywordValue(JsonObject card, KeywordKind kind, bool countPresence = false)
+    {
+        var matching = Keywords(card).Where(keyword => KeywordKindName(keyword) == kind).ToArray();
+        if (matching.Length == 0)
+        {
+            return 0;
+        }
+
+        if (countPresence)
+        {
+            return matching.Length;
+        }
+
+        return kind switch
+        {
+            KeywordKind.Assault or KeywordKind.Deflect or KeywordKind.Shield or KeywordKind.Hunt => matching.Sum(keyword => keyword["value"]?.GetValue<int>() ?? 1),
+            _ => matching.Length
+        };
+    }
+
+    private static IReadOnlyList<JsonObject> Keywords(JsonObject card)
+    {
+        if (card["keywords"] is JsonArray keywords && keywords.Count > 0)
+        {
+            return keywords.Select(node => node!.AsObject()).ToArray();
+        }
+
+        return KeywordCatalog.Parse(card["text"]?.GetValue<string>())
+            .Select(ToKeywordObject)
+            .ToArray();
+    }
+
+    private static KeywordKind? KeywordKindName(JsonObject keyword)
+    {
+        var value = keyword["kind"]?.GetValue<string>() ?? string.Empty;
+        return Enum.TryParse<KeywordKind>(value, ignoreCase: true, out var kind) ? kind : null;
+    }
+
+    private static int? TryReadInstructionAmount(string text, string instruction)
+    {
+        var words = text.Split([' ', '.', ',', '[', ']'], StringSplitOptions.RemoveEmptyEntries);
+        var instructionIndex = Array.FindIndex(words, word => string.Equals(word, instruction, StringComparison.OrdinalIgnoreCase));
+        if (instructionIndex < 0)
+        {
+            return null;
+        }
+
+        for (var i = instructionIndex + 1; i < words.Length; i++)
+        {
+            if (int.TryParse(words[i], out var amount))
+            {
+                return amount;
+            }
+        }
+
+        return 1;
     }
 
     private static ScoreSource ScoreSourceFrom(string? source)
