@@ -194,6 +194,30 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void first_player_skips_their_first_draw_phase_in_ffa3()
+    {
+        AssertFirstPlayerFirstDrawAdvance("ffa-3", 3, shouldDraw: false);
+    }
+
+    [Test]
+    public void first_player_skips_their_first_draw_phase_in_ffa4()
+    {
+        AssertFirstPlayerFirstDrawAdvance("ffa-4", 4, shouldDraw: false);
+    }
+
+    [Test]
+    public void first_player_skips_their_first_draw_phase_in_teams_2v2()
+    {
+        AssertFirstPlayerFirstDrawAdvance("teams-2v2", 4, shouldDraw: false);
+    }
+
+    [Test]
+    public void first_player_still_draws_during_their_first_draw_phase_in_duel()
+    {
+        AssertFirstPlayerFirstDrawAdvance("duel-1v1", 2, shouldDraw: true);
+    }
+
+    [Test]
     public void concede_completes_match()
     {
         var engine = new DefaultRulesEngine();
@@ -1049,6 +1073,51 @@ public class DefaultRulesEngineTests
         return current;
     }
 
+    private static void AssertFirstPlayerFirstDrawAdvance(string mode, int playerCount, bool shouldDraw)
+    {
+        var engine = new DefaultRulesEngine();
+        var current = engine.CreateInitialState(MultiplayerConfig(mode, playerCount), MultiplayerDecks(playerCount), 123);
+        current = ConfirmAllMulligans(engine, current, playerCount);
+
+        Assert.That(current.State["turnPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(current.State["turnPhase"]!.GetValue<string>(), Is.EqualTo("draw"));
+
+        var playerBefore = Player(current, 0);
+        var handBefore = playerBefore["hand"]!.AsArray().Count;
+        var deckBefore = playerBefore["deck"]!.AsArray().Count;
+
+        var result = engine.ApplyAction(
+            current,
+            new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()),
+            current.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["turnPhase"]!.GetValue<string>(), Is.EqualTo("main"));
+
+        var playerAfter = Player(result.State, 0);
+        var expectedHand = shouldDraw ? handBefore + 1 : handBefore;
+        var expectedDeck = shouldDraw ? deckBefore - 1 : deckBefore;
+        Assert.That(playerAfter["hand"]!.AsArray(), Has.Count.EqualTo(expectedHand));
+        Assert.That(playerAfter["deck"]!.AsArray(), Has.Count.EqualTo(expectedDeck));
+    }
+
+    private static EngineMatchState ConfirmAllMulligans(DefaultRulesEngine engine, EngineMatchState state, int playerCount)
+    {
+        var current = state;
+        for (var playerId = 0; playerId < playerCount; playerId++)
+        {
+            var result = engine.ApplyAction(
+                current,
+                new EngineGameAction(playerId, "confirm-mulligan", new Dictionary<string, object?>()),
+                current.SequenceNumber);
+
+            Assert.That(result.Accepted, Is.True);
+            current = result.State;
+        }
+
+        return current;
+    }
+
     private static JsonObject FindPlayer(EngineMatchState state, int playerId)
     {
         return state.State["players"]!.AsArray()
@@ -1118,6 +1187,22 @@ public class DefaultRulesEngineTests
             0);
     }
 
+    private static EngineMatchConfig MultiplayerConfig(string mode, int playerCount)
+    {
+        return new EngineMatchConfig(
+            $"match-{mode}",
+            mode,
+            Enumerable.Range(0, playerCount)
+                .Select(playerId => new EngineSeatConfig(
+                    playerId,
+                    $"user-demo-{playerId + 1:000}",
+                    $"Demo {playerId + 1}",
+                    mode == "teams-2v2" ? playerId / 2 : playerId))
+                .ToArray(),
+            Enumerable.Range(0, playerCount).Select(playerId => $"battlefield-{playerId}").ToArray(),
+            0);
+    }
+
     private static IReadOnlyList<EnginePlayerDeck> Decks()
     {
         return
@@ -1125,6 +1210,19 @@ public class DefaultRulesEngineTests
             new EnginePlayerDeck("deck-a", "legend-a", "champion-a", ["skybridge"], ["rune-a", "rune-a", "rune-a"], ["unit-a", "unit-b", "unit-c", "unit-d", "unit-e"]),
             new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["emberfield"], ["rune-b", "rune-b", "rune-b"], ["unit-f", "unit-g", "unit-h", "unit-i", "unit-j"])
         ];
+    }
+
+    private static IReadOnlyList<EnginePlayerDeck> MultiplayerDecks(int playerCount)
+    {
+        return Enumerable.Range(0, playerCount)
+            .Select(playerId => new EnginePlayerDeck(
+                $"deck-{playerId}",
+                $"legend-{playerId}",
+                $"champion-{playerId}",
+                [$"battlefield-{playerId}"],
+                [$"rune-{playerId}", $"rune-{playerId}", $"rune-{playerId}"],
+                Enumerable.Range(0, 5).Select(index => $"unit-{playerId}-{index}").ToArray()))
+            .ToArray();
     }
 
     private static IReadOnlyList<EnginePlayerDeck> DecksWithLargerLibrary()
