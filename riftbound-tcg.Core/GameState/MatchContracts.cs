@@ -38,12 +38,21 @@ public enum ShowdownKind
 public enum CardLocationType
 {
     Base,
-    Battlefield
+    Battlefield,
+    Hand,
+    Deck,
+    Trash,
+    Banished,
+    Attached,
+    Stack,
+    RuneDeck,
+    RunePool
 }
 
 public sealed record CardLocation(
     CardLocationType Type,
-    string? BattlefieldId);
+    string? BattlefieldId,
+    string? AttachedToUid = null);
 
 public sealed record UnitState(
     string Uid,
@@ -54,7 +63,12 @@ public sealed record UnitState(
     int Damage,
     int AttachedMight,
     bool Attacker,
-    bool Defender);
+    bool Defender,
+    bool IsToken = false,
+    bool IsFaceDown = false,
+    bool RulesTextActive = true,
+    IReadOnlyList<string>? AttachedCardIds = null,
+    string? TopCardId = null);
 
 public sealed record GearState(
     string Uid,
@@ -62,7 +76,12 @@ public sealed record GearState(
     int OwnerPlayerId,
     CardLocation Location,
     bool Exhausted,
-    string? AttachedUnitId);
+    string? AttachedUnitId,
+    bool IsToken = false,
+    bool IsFaceDown = false,
+    bool RulesTextActive = true,
+    IReadOnlyList<string>? AttachedCardIds = null,
+    string? TopCardId = null);
 
 public sealed record RunePools(
     IReadOnlyList<string> ReadyCardIds,
@@ -83,7 +102,8 @@ public sealed record PlayerState(
     string? ChampionCardId,
     string? LegendCardId,
     bool ChampionSummoned,
-    string BattlefieldId);
+    string BattlefieldId,
+    IReadOnlyList<string>? BanishedCardIds = null);
 
 public sealed record BattlefieldState(
     string Id,
