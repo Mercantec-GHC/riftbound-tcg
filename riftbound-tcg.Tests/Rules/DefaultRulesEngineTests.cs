@@ -194,7 +194,7 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
-    public void concede_completes_match()
+    public void duel_concede_completes_match()
     {
         var engine = new DefaultRulesEngine();
         var state = engine.CreateInitialState(Config(), Decks(), 123);
@@ -204,6 +204,73 @@ public class DefaultRulesEngineTests
         Assert.That(result.Accepted, Is.True);
         Assert.That(result.State.Stage, Is.EqualTo("game-over"));
         Assert.That(result.State.State["winner"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ffa_concede_removes_player_and_continues_when_multiple_players_remain()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config("ffa-3", 3), Decks(3), 123);
+        var playerOneBattlefield = state.State["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(battlefield => battlefield["chosenBy"]!.GetValue<int>() == 1);
+        playerOneBattlefield["controllerId"] = 1;
+        playerOneBattlefield["units"]!.AsArray().Add(Unit("unit-p1", 1));
+        playerOneBattlefield["units"]!.AsArray().Add(Unit("unit-p2", 2));
+        state.State["effectStack"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "stack-p1",
+            ["playerId"] = 1,
+            ["kind"] = "spell"
+        });
+
+        var result = engine.ApplyAction(state, new EngineGameAction(1, "concede", new Dictionary<string, object?>()), 0);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("mulligan"));
+        Assert.That(ActivePlayerIds(result.State), Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(result.State.Players.Select(player => player.PlayerId), Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(engine.GetLegalActions(result.State, 1), Is.Empty);
+        Assert.That(result.State.State["turnOrder"]!.AsArray().Select(node => node!.GetValue<int>()), Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(result.State.State["effectStack"]!.AsArray(), Is.Empty);
+
+        var replacedBattlefield = result.State.State["battlefields"]!.AsArray()
+            .Select(node => node!.AsObject())
+            .Single(battlefield => battlefield["id"]!.GetValue<string>() == playerOneBattlefield["id"]!.GetValue<string>());
+        Assert.That(replacedBattlefield["catalogId"]!.GetValue<string>(), Is.EqualTo("token-battlefield"));
+        Assert.That(replacedBattlefield["controllerId"], Is.Null);
+        Assert.That(replacedBattlefield["units"]!.AsArray().Select(unit => unit!["ownerId"]!.GetValue<int>()), Is.EqualTo(new[] { 2 }));
+    }
+
+    [Test]
+    public void ffa_concede_completes_match_when_only_one_player_remains()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config("ffa-3", 3), Decks(3), 123);
+
+        var afterFirstConcede = engine.ApplyAction(state, new EngineGameAction(1, "concede", new Dictionary<string, object?>()), 0);
+        var result = engine.ApplyAction(afterFirstConcede.State, new EngineGameAction(0, "concede", new Dictionary<string, object?>()), 1);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
+        Assert.That(result.State.State["winner"]!.GetValue<int>(), Is.EqualTo(2));
+        Assert.That(ActivePlayerIds(result.State), Is.EqualTo(new[] { 2 }));
+    }
+
+    [Test]
+    public void teams_2v2_concede_causes_conceding_team_to_lose()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = engine.CreateInitialState(Config("teams-2v2", 4), Decks(4), 123);
+
+        var result = engine.ApplyAction(state, new EngineGameAction(2, "concede", new Dictionary<string, object?>()), 0);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
+        Assert.That(result.State.State["winningTeamId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(result.State.State["winner"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(ActivePlayerIds(result.State), Is.EqualTo(new[] { 1, 3 }));
+        Assert.That(result.State.Players.Select(player => player.PlayerId), Is.EqualTo(new[] { 1, 3 }));
     }
 
     [Test]
@@ -1118,6 +1185,18 @@ public class DefaultRulesEngineTests
             0);
     }
 
+    private static EngineMatchConfig Config(string mode, int playerCount)
+    {
+        return new EngineMatchConfig(
+            "match-demo-001",
+            mode,
+            Enumerable.Range(0, playerCount)
+                .Select(playerId => new EngineSeatConfig(playerId, $"user-demo-{playerId + 1:000}", $"Demo {playerId + 1}", mode == "teams-2v2" ? playerId % 2 : playerId))
+                .ToArray(),
+            Enumerable.Range(0, playerCount).Select(playerId => $"battlefield-{playerId}").ToArray(),
+            0);
+    }
+
     private static IReadOnlyList<EnginePlayerDeck> Decks()
     {
         return
@@ -1127,6 +1206,19 @@ public class DefaultRulesEngineTests
         ];
     }
 
+    private static IReadOnlyList<EnginePlayerDeck> Decks(int playerCount)
+    {
+        return Enumerable.Range(0, playerCount)
+            .Select(playerId => new EnginePlayerDeck(
+                $"deck-{playerId}",
+                $"legend-{playerId}",
+                $"champion-{playerId}",
+                [$"battlefield-{playerId}"],
+                [$"rune-{playerId}", $"rune-{playerId}", $"rune-{playerId}"],
+                Enumerable.Range(0, 5).Select(cardIndex => $"unit-{playerId}-{cardIndex}").ToArray()))
+            .ToArray();
+    }
+
     private static IReadOnlyList<EnginePlayerDeck> DecksWithLargerLibrary()
     {
         return
@@ -1134,5 +1226,25 @@ public class DefaultRulesEngineTests
             new EnginePlayerDeck("deck-a", "legend-a", "champion-a", ["skybridge"], ["rune-a", "rune-a", "rune-a"], Enumerable.Range(0, 12).Select(i => $"unit-a{i}").ToArray()),
             new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["emberfield"], ["rune-b", "rune-b", "rune-b"], Enumerable.Range(0, 12).Select(i => $"unit-b{i}").ToArray())
         ];
+    }
+
+    private static JsonObject Unit(string uid, int ownerId)
+    {
+        var unit = Card(uid, $"Unit {ownerId}", "unit", "", "rally", 0, cost: 0);
+        unit["uid"] = uid;
+        unit["ownerId"] = ownerId;
+        unit["exhausted"] = false;
+        unit["damage"] = 0;
+        unit["attachedMight"] = 0;
+        unit["attacker"] = false;
+        unit["defender"] = false;
+        return unit;
+    }
+
+    private static int[] ActivePlayerIds(EngineMatchState state)
+    {
+        return state.State["players"]!.AsArray()
+            .Select(node => node!["id"]!.GetValue<int>())
+            .ToArray();
     }
 }
