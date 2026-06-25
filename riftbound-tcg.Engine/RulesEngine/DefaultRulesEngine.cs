@@ -5269,11 +5269,12 @@ public sealed class DefaultRulesEngine : IRulesEngine
     {
         var effect = card["effect"]?.AsObject();
         var effectType = FirstTargetRequiringStepType(effect) ?? effect?["type"]?.GetValue<string>() ?? "rally";
-        var requiredCount = RequiredTargetCount(card);
+        var targetRequirement = RequiredTargetRequirement(card);
+        var requiredCount = targetRequirement.Count;
 
         if (requiredCount > 1 && effectType is "buff" or "rally" or "kill" or "banish" or "stun")
         {
-            return ValidateMultiUnitTargetSelection(state, playerId, effectType, requiredCount, targetUnitIds ?? []);
+            return ValidateMultiUnitTargetSelection(state, playerId, effectType, targetRequirement, targetUnitIds ?? [], card);
         }
 
         return ValidateEffectTargetSelection(state, playerId, effect, targetUnitId, targetLaneId, AllowsZeroTargets(card), card);
@@ -5355,44 +5356,117 @@ public sealed class DefaultRulesEngine : IRulesEngine
         ["four"] = 4,
     };
 
-    private static int RequiredTargetCount(JsonObject card)
+    private static MultiUnitTargetRequirement RequiredTargetRequirement(JsonObject card)
     {
         var text = card["text"]?.GetValue<string>() ?? string.Empty;
-        if (Regex.IsMatch(text, @"\ba (friendly |enemy )?unit and an? (friendly |enemy )?unit\b", RegexOptions.IgnoreCase))
+        var pairMatch = Regex.Match(text, @"\ba\s+(friendly|enemy)?\s*unit\s+and\s+an?\s+(friendly|enemy)?\s*unit\b", RegexOptions.IgnoreCase);
+        if (pairMatch.Success)
         {
-            return 2;
+            return new MultiUnitTargetRequirement(2,
+            [
+                ParseTargetQualifier(pairMatch.Groups[1].Value),
+                ParseTargetQualifier(pairMatch.Groups[2].Value)
+            ]);
         }
 
-        var match = Regex.Match(text, @"\b(two|three|four|\d+)\b\s+(friendly\s+)?units\b", RegexOptions.IgnoreCase);
+        var match = Regex.Match(text, @"\b(two|three|four|\d+)\b\s+((friendly|enemy)\s+)?units\b", RegexOptions.IgnoreCase);
         if (!match.Success)
         {
-            return 1;
+            return new MultiUnitTargetRequirement(1, [TargetQualifier.Any]);
         }
 
         var word = match.Groups[1].Value;
-        return NumberWords.TryGetValue(word, out var value) ? value : int.TryParse(word, out var parsed) ? parsed : 1;
+        var count = NumberWords.TryGetValue(word, out var value) ? value : int.TryParse(word, out var parsed) ? parsed : 1;
+        var qualifier = ParseTargetQualifier(match.Groups[3].Value);
+        return new MultiUnitTargetRequirement(count, Enumerable.Repeat(qualifier, count).ToArray());
     }
 
-    private static TargetSelection ValidateMultiUnitTargetSelection(JsonObject state, int playerId, string effectType, int requiredCount, IReadOnlyList<string> targetUnitIds)
+    private static TargetSelection ValidateMultiUnitTargetSelection(JsonObject state, int playerId, string effectType, MultiUnitTargetRequirement requirement, IReadOnlyList<string> targetUnitIds, JsonObject? sourceCard = null)
     {
+        var requiredCount = requirement.Count;
         var distinctIds = targetUnitIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToArray();
         if (distinctIds.Length != requiredCount)
         {
             return TargetSelection.Invalid;
         }
 
-        var targets = new List<EffectTarget>();
+        var targetUnits = new List<JsonObject>(requiredCount);
         foreach (var unitId in distinctIds)
         {
-            if (FindUnit(state, unitId) is not { } unit || !UnitCanBeTargetedByEffect(state, playerId, effectType, unit))
+            if (FindUnit(state, unitId) is not { } unit || !UnitCanBeTargetedByEffect(state, playerId, effectType, unit, sourceCard))
             {
                 return TargetSelection.Invalid;
             }
 
-            targets.Add(UnitTargetFrom(state, unit, effectType, null));
+            targetUnits.Add(unit);
         }
 
+        if (!SelectedUnitsMatchQualifiers(state, playerId, targetUnits, requirement.Qualifiers))
+        {
+            return TargetSelection.Invalid;
+        }
+
+        var targets = targetUnits.Select(unit => UnitTargetFrom(state, unit, effectType, null)).ToList();
         return new TargetSelection(true, distinctIds[0], null, targets);
+    }
+
+    private static TargetQualifier ParseTargetQualifier(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "friendly" => TargetQualifier.Friendly,
+            "enemy" => TargetQualifier.Enemy,
+            _ => TargetQualifier.Any
+        };
+    }
+
+    private static bool SelectedUnitsMatchQualifiers(JsonObject state, int playerId, IReadOnlyList<JsonObject> targetUnits, IReadOnlyList<TargetQualifier> qualifiers)
+    {
+        if (qualifiers.Count != targetUnits.Count)
+        {
+            return false;
+        }
+
+        var used = new bool[qualifiers.Count];
+        return MatchAt(0);
+
+        bool MatchAt(int unitIndex)
+        {
+            if (unitIndex >= targetUnits.Count)
+            {
+                return true;
+            }
+
+            var unit = targetUnits[unitIndex];
+            for (var qualifierIndex = 0; qualifierIndex < qualifiers.Count; qualifierIndex++)
+            {
+                if (used[qualifierIndex] || !UnitMatchesQualifier(state, playerId, unit, qualifiers[qualifierIndex]))
+                {
+                    continue;
+                }
+
+                used[qualifierIndex] = true;
+                if (MatchAt(unitIndex + 1))
+                {
+                    return true;
+                }
+
+                used[qualifierIndex] = false;
+            }
+
+            return false;
+        }
+    }
+
+    private static bool UnitMatchesQualifier(JsonObject state, int playerId, JsonObject unit, TargetQualifier qualifier)
+    {
+        return qualifier switch
+        {
+            TargetQualifier.Any => true,
+            TargetQualifier.Friendly => IsFriendlyUnit(state, playerId, unit),
+            TargetQualifier.Enemy => IsEnemyUnit(state, playerId, unit),
+            _ => false
+        };
     }
 
     // For a multi-step card, target selection is validated/tagged against the first step that
@@ -7348,6 +7422,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private sealed record RuneResource(string Id, Domain Domain);
 
     private sealed record BattlefieldSetupSelection(string CatalogId, int? ChosenByPlayerId);
+
+    private enum TargetQualifier
+    {
+        Any,
+        Friendly,
+        Enemy
+    }
+
+    private sealed record MultiUnitTargetRequirement(int Count, IReadOnlyList<TargetQualifier> Qualifiers);
 
     private sealed record TargetSelection(
         bool IsValid,

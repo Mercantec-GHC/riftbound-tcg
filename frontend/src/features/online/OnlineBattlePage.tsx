@@ -280,6 +280,7 @@ function validateAssignments(assigningUnits: Unit[], targetUnits: Unit[], assign
 }
 
 type TargetKind = 'none' | 'unit' | 'lane'
+type UnitTargetQualifier = 'any' | 'friendly' | 'enemy'
 
 const TARGETABLE_EFFECT_TYPES: EffectType[] = ['damage', 'buff', 'rally', 'kill', 'banish', 'stun']
 
@@ -305,17 +306,76 @@ function effectTargetKind(card: Card | undefined): TargetKind {
 
 const TARGET_COUNT_WORDS: Record<string, number> = { two: 2, three: 3, four: 4 }
 
+function parseUnitTargetQualifier(value: string | undefined): UnitTargetQualifier {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (normalized === 'friendly' || normalized === 'enemy') return normalized
+  return 'any'
+}
+
+function requiredUnitTargetQualifiers(card: Card | undefined): UnitTargetQualifier[] {
+  if (!card) return []
+  const text = card.text ?? ''
+  const pairMatch = /\ba\s+(friendly|enemy)?\s*unit\s+and\s+an?\s+(friendly|enemy)?\s*unit\b/i.exec(text)
+  if (pairMatch) return [parseUnitTargetQualifier(pairMatch[1]), parseUnitTargetQualifier(pairMatch[2])]
+
+  const match = /\b(two|three|four|\d+)\b\s+((friendly|enemy)\s+)?units\b/i.exec(text)
+  if (!match) return []
+  const word = match[1].toLowerCase()
+  const count = TARGET_COUNT_WORDS[word] ?? (Number.parseInt(word, 10) || 1)
+  const qualifier = parseUnitTargetQualifier(match[3])
+  return Array.from({ length: count }, () => qualifier)
+}
+
 // Mirrors the server's RequiredTargetCount: cards like "Give two friendly units each +2 Might"
 // need that many distinct unit targets picked before the action can be submitted.
 function requiredTargetCount(card: Card | undefined): number {
-  if (!card) return 1
-  const text = card.text ?? ''
-  if (/\ba (friendly |enemy )?unit and an? (friendly |enemy )?unit\b/i.test(text)) return 2
+  const qualifiers = requiredUnitTargetQualifiers(card)
+  return qualifiers.length > 0 ? qualifiers.length : 1
+}
 
-  const match = /\b(two|three|four|\d+)\b\s+(friendly\s+)?units\b/i.exec(text)
-  if (!match) return 1
-  const word = match[1].toLowerCase()
-  return TARGET_COUNT_WORDS[word] ?? (Number.parseInt(word, 10) || 1)
+function canSatisfyUnitTargetQualifiers(required: UnitTargetQualifier[], selected: Array<'friendly' | 'enemy'>): boolean {
+  if (selected.length > required.length) return false
+  const used = new Array(required.length).fill(false)
+
+  const matches = (qualifier: UnitTargetQualifier, side: 'friendly' | 'enemy') => qualifier === 'any' || qualifier === side
+
+  const assign = (selectedIndex: number): boolean => {
+    if (selectedIndex >= selected.length) return true
+    for (let requiredIndex = 0; requiredIndex < required.length; requiredIndex += 1) {
+      if (used[requiredIndex] || !matches(required[requiredIndex], selected[selectedIndex])) continue
+      used[requiredIndex] = true
+      if (assign(selectedIndex + 1)) return true
+      used[requiredIndex] = false
+    }
+    return false
+  }
+
+  return assign(0)
+}
+
+function unitTargetOwnerFilter(
+  game: GameState | null,
+  viewerPlayerId: number,
+  selection: { kind: 'unit' | 'lane'; requiredCount: number; selectedUnitIds: string[]; targetQualifiers: UnitTargetQualifier[] } | null,
+): number[] | undefined {
+  if (!game || !selection || selection.kind !== 'unit' || selection.requiredCount <= 1 || selection.targetQualifiers.length !== selection.requiredCount) {
+    return undefined
+  }
+
+  const allUnits = [...game.players.flatMap((player) => player.base), ...game.battlefields.flatMap((battlefield) => battlefield.units)]
+  const selectedSides = selection.selectedUnitIds
+    .map((unitId) => allUnits.find((unit) => unit.uid === unitId))
+    .filter((unit): unit is Unit => Boolean(unit))
+    .map((unit) => (unitOwnerId(unit) === viewerPlayerId ? 'friendly' : 'enemy'))
+
+  if (!canSatisfyUnitTargetQualifiers(selection.targetQualifiers, selectedSides)) return undefined
+
+  const canPickFriendly = canSatisfyUnitTargetQualifiers(selection.targetQualifiers, [...selectedSides, 'friendly'])
+  const canPickEnemy = canSatisfyUnitTargetQualifiers(selection.targetQualifiers, [...selectedSides, 'enemy'])
+  if (canPickFriendly && canPickEnemy) return undefined
+  if (!canPickFriendly && !canPickEnemy) return undefined
+  if (canPickFriendly) return [viewerPlayerId]
+  return game.players.map((player) => player.id).filter((id) => id !== viewerPlayerId)
 }
 
 function combatPanelKey(game: GameState): string {
@@ -513,7 +573,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [legalActions, setLegalActions] = useState<LegalAction[]>([])
   const [mulliganHandIndexes, setMulliganHandIndexes] = useState<number[]>([])
   const [combatModalOpen, setCombatModalOpen] = useState(false)
-  const [targetSelection, setTargetSelection] = useState<{ handIndex: number; cardName: string; kind: 'unit' | 'lane'; requiredCount: number; selectedUnitIds: string[] } | null>(null)
+  const [targetSelection, setTargetSelection] = useState<{ handIndex: number; cardName: string; kind: 'unit' | 'lane'; requiredCount: number; selectedUnitIds: string[]; targetQualifiers: UnitTargetQualifier[] } | null>(null)
   const [dragActionPrompt, setDragActionPrompt] = useState<DragActionPrompt | null>(null)
   const [events, setEvents] = useState<MatchEvent[]>([])
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
@@ -908,7 +968,14 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       return
     }
 
-    setTargetSelection({ handIndex, cardName: card?.name ?? 'this card', kind, requiredCount: requiredTargetCount(card), selectedUnitIds: [] })
+    setTargetSelection({
+      handIndex,
+      cardName: card?.name ?? 'this card',
+      kind,
+      requiredCount: requiredTargetCount(card),
+      selectedUnitIds: [],
+      targetQualifiers: requiredUnitTargetQualifiers(card),
+    })
   }
 
   async function chooseTarget(targetUnitId?: string, targetLaneId?: string) {
@@ -921,6 +988,15 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     }
 
     if (!targetUnitId) return
+    const allowedOwnerIds = unitTargetOwnerFilter(state, playerId, targetSelection)
+    if (allowedOwnerIds) {
+      const allUnits = state
+        ? [...state.players.flatMap((player) => player.base), ...state.battlefields.flatMap((battlefield) => battlefield.units)]
+        : []
+      const selectedUnit = allUnits.find((unit) => unit.uid === targetUnitId)
+      if (!selectedUnit || !allowedOwnerIds.includes(unitOwnerId(selectedUnit))) return
+    }
+
     const selectedUnitIds = targetSelection.selectedUnitIds.includes(targetUnitId)
       ? targetSelection.selectedUnitIds
       : [...targetSelection.selectedUnitIds, targetUnitId]
@@ -1241,7 +1317,11 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               mulliganSelection={
                 isMulliganTurn ? { selectedIndexes: mulliganHandIndexes, onToggle: toggleMulliganHandIndex } : undefined
               }
-              targetSelection={targetSelection ? { kind: targetSelection.kind, excludeUnitIds: targetSelection.selectedUnitIds } : undefined}
+              targetSelection={targetSelection ? {
+                kind: targetSelection.kind,
+                excludeUnitIds: targetSelection.selectedUnitIds,
+                allowedOwnerIds: unitTargetOwnerFilter(state, playerId, targetSelection),
+              } : undefined}
               onSelectUnitTarget={(unitId) => void chooseTarget(unitId, undefined)}
               onSelectLaneTarget={(laneId) => void chooseTarget(undefined, laneId)}
             />

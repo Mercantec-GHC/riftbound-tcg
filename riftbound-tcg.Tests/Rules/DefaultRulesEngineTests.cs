@@ -1534,6 +1534,21 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void buff_card_naming_two_friendly_units_rejects_enemy_selection()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("back-to-back", "Back to Back", "spell", "[Reaction] Give two friendly units each +2 Might this turn.", "buff", 2, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("ally-a", ownerId: 0, might: 2));
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitIds"] = new[] { "ally-a", "enemy-a" } }), state.SequenceNumber);
+
+        Assert.That(played.Accepted, Is.False);
+    }
+
+    [Test]
     public void stun_card_naming_a_friendly_unit_and_an_enemy_unit_requires_two_targets()
     {
         var engine = new DefaultRulesEngine();
@@ -1550,6 +1565,21 @@ public class DefaultRulesEngineTests
 
         var units = resolved.State.State["battlefields"]![0]!["units"]!.AsArray();
         Assert.That(units.Select(unit => unit!["exhausted"]!.GetValue<bool>()), Is.All.True);
+    }
+
+    [Test]
+    public void stun_card_naming_a_friendly_unit_and_an_enemy_unit_rejects_same_side_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("facebreaker", "Facebreaker", "spell", "[Action] Stun a friendly unit and an enemy unit at the same battlefield.", "stun", 0, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("ally-a", ownerId: 0, might: 2));
+        battlefield["units"]!.AsArray().Add(Unit("ally-b", ownerId: 0, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitIds"] = new[] { "ally-a", "ally-b" } }), state.SequenceNumber);
+
+        Assert.That(played.Accepted, Is.False);
     }
 
     [Test]

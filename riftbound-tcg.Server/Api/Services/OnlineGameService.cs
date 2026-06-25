@@ -1634,7 +1634,21 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             Text = card.Text.Trim(),
             Image = string.IsNullOrWhiteSpace(card.Image) ? "*" : card.Image.Trim(),
             CardType = string.IsNullOrWhiteSpace(card.CardType) ? kind : card.CardType.Trim(),
-            Effect = card.Effect with { Type = string.IsNullOrWhiteSpace(card.Effect.Type) ? "rally" : card.Effect.Type.Trim(), Amount = Math.Max(0, card.Effect.Amount) }
+            Effect = card.Effect with
+            {
+                Type = string.IsNullOrWhiteSpace(card.Effect.Type) ? "rally" : card.Effect.Type.Trim(),
+                Amount = NormalizeEffectAmount(card.Effect.Type, card.Effect.Amount)
+            }
+        };
+    }
+
+    private static int NormalizeEffectAmount(string effectType, int amount)
+    {
+        var normalizedType = string.IsNullOrWhiteSpace(effectType) ? string.Empty : effectType.Trim();
+        return normalizedType.ToLowerInvariant() switch
+        {
+            "buff" => amount,
+            _ => Math.Max(0, amount)
         };
     }
 

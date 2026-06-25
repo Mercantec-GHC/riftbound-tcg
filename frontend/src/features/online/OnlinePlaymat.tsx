@@ -31,6 +31,8 @@ type DragIntent =
   | { type: 'unit'; unitId: string }
   | { type: 'champion' }
 
+type TargetSelection = { kind: 'unit' | 'lane'; excludeUnitIds?: string[]; allowedOwnerIds?: number[] }
+
 function unitOwnerId(unit: Unit): number {
   return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
 }
@@ -285,7 +287,7 @@ function OnlineBattlefieldLane({
   onDropCard?: (handIndex: number, battlefieldId: string) => void
   onDropCardOnUnit?: (handIndex: number, unitId: string) => void
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
-  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  targetSelection?: TargetSelection
   onSelectUnitTarget?: (unitId: string) => void
   onSelectLaneTarget?: (laneId: string) => void
 }) {
@@ -323,7 +325,9 @@ function OnlineBattlefieldLane({
             onDragEnd={() => onDragIntent(null)}
             canDropCard={acceptsDraggedCard || (!dragIntent && canDropAttachedCard)}
             onDropCard={onDropCardOnUnit}
-            targetable={unitsTargetable && !targetSelection?.excludeUnitIds?.includes(unit.uid)}
+            targetable={unitsTargetable
+              && !targetSelection?.excludeUnitIds?.includes(unit.uid)
+              && (!targetSelection?.allowedOwnerIds || targetSelection.allowedOwnerIds.includes(unitOwnerId(unit)))}
             onSelectTarget={onSelectUnitTarget}
           />
         )
@@ -548,7 +552,7 @@ function OnlinePlayerMat({
   onDragIntent?: (intent: DragIntent | null) => void
   onChooseHandAction?: (choice: BoardActionChoice) => void
   onSummonChampion?: () => void
-  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  targetSelection?: TargetSelection
   onSelectUnitTarget?: (unitId: string) => void
 }) {
   const dragData = useDragData()
@@ -646,7 +650,9 @@ function OnlinePlayerMat({
               onDragEnd={() => onDragIntent(null)}
               canDropCard={acceptsDraggedCard || (!dragIntent && Boolean(isViewer && canAttachCard))}
               onDropCard={onDropCardOnUnit ?? onAttachCard}
-              targetable={targetSelection?.kind === 'unit' && !targetSelection?.excludeUnitIds?.includes(unit.uid)}
+              targetable={targetSelection?.kind === 'unit'
+                && !targetSelection?.excludeUnitIds?.includes(unit.uid)
+                && (!targetSelection?.allowedOwnerIds || targetSelection.allowedOwnerIds.includes(unitOwnerId(unit)))}
               onSelectTarget={onSelectUnitTarget}
             />
           )
@@ -796,7 +802,7 @@ function BattlefieldZone({
   onDragIntent: (intent: DragIntent | null) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
-  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  targetSelection?: TargetSelection
   onSelectUnitTarget?: (unitId: string) => void
   onSelectLaneTarget?: (laneId: string) => void
 }) {
@@ -897,7 +903,7 @@ export function OnlinePlaymat({
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   canSummonChampion?: boolean
   onSummonChampion?: () => void
-  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  targetSelection?: TargetSelection
   onSelectUnitTarget?: (unitId: string) => void
   onSelectLaneTarget?: (laneId: string) => void
 }) {
