@@ -20,12 +20,19 @@ export default defineConfig([
     },
   },
   {
-    files: ['src/features/online/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{
-          group: ['../game/rules/*', '../../features/game/rules/*', '**/features/game/rules/*'],
-          message: 'Online match UI must render server state and submit server-approved actions; keep local hotseat rule helpers out of online paths.',
+          group: [
+            '../features/game/rules/*',
+            '../game/rules/*',
+            '../../features/game/rules/*',
+            '**/features/game/rules/*',
+            '**/archive/local-hotseat/*',
+            '**/archive/local-hotseat/**',
+          ],
+          message: 'Production frontend code must render server state and submit server-approved actions; archived local-hotseat rule helpers are reference-only.',
         }],
       }],
     },

@@ -182,6 +182,55 @@ public class MultiplayerTeamRulesTests
     }
 
     [Test]
+    public void ffa_concession_cleans_objects_pending_work_and_battlefield_contribution()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = PlayingState(engine, "ffa-3", turnPhase: "main");
+        var battlefield = Battlefield(state, "field-b-1");
+        battlefield["controllerId"] = 1;
+        battlefield["contestedByPlayerId"] = 2;
+        battlefield["stagedCombat"] = true;
+        battlefield["stagedShowdown"] = true;
+        battlefield["units"] = new JsonArray(Unit("removed-unit", 1, 2), Unit("remaining-unit", 2, 2));
+        battlefield["hiddenCards"] = new JsonArray(HiddenCard("removed-hidden", 1));
+        Player(state, 2)["base"]!.AsArray().Add(UnitWithAttachments("ally-base", 2, 2, Attached("removed-gear", 1)));
+        state.State["activeCombat"] = new JsonObject { ["battlefieldId"] = "field-b-1", ["attackerPlayerId"] = 2, ["defenderPlayerId"] = 1, ["damageStep"] = true };
+        state.State["activeShowdown"] = new JsonObject { ["battlefieldId"] = "field-b-1", ["kind"] = "combat" };
+        state.State["focusPlayerId"] = 1;
+        state.State["priorityPlayerId"] = 1;
+        state.State["effectStack"]!.AsArray().Add(StackItem("removed-stack", 1));
+        state.State["effectStack"]!.AsArray().Add(StackItem("remaining-stack", 2));
+        state.State["pendingTriggeredAbilities"] = new JsonArray(PendingItem("removed-pending", 1), PendingItem("remaining-pending", 2));
+        state.State["delayedAbilities"] = new JsonArray(PendingItem("removed-delayed", 1));
+        state.State["chainWindow"] = new JsonObject
+        {
+            ["priorityPlayerId"] = 1,
+            ["startedByPlayerId"] = 1,
+            ["source"] = "played-card",
+            ["passesFocusOnClose"] = true,
+            ["passedByPlayer"] = new JsonObject { ["1"] = true }
+        };
+
+        var result = engine.ApplyAction(state, new EngineGameAction(1, "concede", new Dictionary<string, object?>()), state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("playing"));
+        Assert.That(result.State.State["players"]!.AsArray().Select(player => player!["id"]!.GetValue<int>()), Is.EqualTo(new[] { 0, 2 }));
+        var replaced = Battlefield(result.State, "field-b-1");
+        Assert.That(replaced["catalogId"]!.GetValue<string>(), Is.EqualTo("token-battlefield"));
+        Assert.That(replaced["controllerId"]!.GetValue<int>(), Is.EqualTo(2));
+        Assert.That(replaced["units"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()), Is.EqualTo(new[] { "remaining-unit" }));
+        Assert.That(replaced["hiddenCards"]!.AsArray(), Is.Empty);
+        Assert.That(Player(result.State, 2)["base"]!.AsArray().Single()!["attachedCards"]!.AsArray(), Is.Empty);
+        Assert.That(result.State.State["activeCombat"], Is.Null);
+        Assert.That(result.State.State["activeShowdown"], Is.Null);
+        Assert.That(result.State.State["effectStack"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()), Is.EqualTo(new[] { "remaining-stack" }));
+        Assert.That(result.State.State["pendingTriggeredAbilities"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()), Is.EqualTo(new[] { "remaining-pending" }));
+        Assert.That(result.State.State["delayedAbilities"]!.AsArray(), Is.Empty);
+        Assert.That(engine.GetLegalActions(result.State, 1), Is.Empty);
+    }
+
+    [Test]
     public void teams_2v2_concession_causes_the_entire_team_to_lose()
     {
         var engine = new DefaultRulesEngine();
@@ -192,6 +241,111 @@ public class MultiplayerTeamRulesTests
         Assert.That(result.Accepted, Is.True);
         Assert.That(result.State.Stage, Is.EqualTo("game-over"));
         Assert.That(result.State.State["winningTeamId"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void teams_2v2_concession_removes_shared_losing_team_objects()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = PlayingState(engine, "teams-2v2", turnPhase: "main");
+        var battlefield = Battlefield(state, "field-a-0");
+        battlefield["controllerId"] = 0;
+        battlefield["units"] = new JsonArray(Unit("conceder-unit", 0, 2), Unit("teammate-unit", 2, 2), Unit("winner-unit", 1, 2));
+        battlefield["hiddenCards"] = new JsonArray(HiddenCard("team-hidden", 2), HiddenCard("winner-hidden", 1));
+        Player(state, 1)["base"]!.AsArray().Add(UnitWithAttachments("winner-base", 1, 2, Attached("losing-attachment", 0)));
+        state.State["effectStack"]!.AsArray().Add(StackItem("team-stack", 2));
+        state.State["pendingTriggeredAbilities"] = new JsonArray(PendingItem("team-pending", 0), PendingItem("winner-pending", 1));
+
+        var result = engine.ApplyAction(state, new EngineGameAction(0, "concede", new Dictionary<string, object?>()), state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.Stage, Is.EqualTo("game-over"));
+        Assert.That(result.State.State["players"]!.AsArray().Select(player => player!["id"]!.GetValue<int>()), Is.EqualTo(new[] { 1, 3 }));
+        var updatedBattlefield = Battlefield(result.State, "field-a-0");
+        Assert.That(updatedBattlefield["units"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()), Is.EqualTo(new[] { "winner-unit" }));
+        Assert.That(updatedBattlefield["hiddenCards"]!.AsArray().Select(card => card!["uid"]!.GetValue<string>()), Is.EqualTo(new[] { "winner-hidden" }));
+        Assert.That(Player(result.State, 1)["base"]!.AsArray().Single()!["attachedCards"]!.AsArray(), Is.Empty);
+        Assert.That(result.State.State["effectStack"]!.AsArray(), Is.Empty);
+        Assert.That(result.State.State["pendingTriggeredAbilities"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()), Is.EqualTo(new[] { "winner-pending" }));
+    }
+
+    [Test]
+    public void multiplayer_nonparticipants_cannot_play_or_create_units_at_staged_combat_destination()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = PlayingState(engine, "ffa-3", turnPhase: "main");
+        state.State["turnPlayerId"] = 2;
+        state.State["activePlayer"] = 2;
+        var battlefield = Battlefield(state, "field-a-0");
+        battlefield["controllerId"] = 2;
+        battlefield["contestedByPlayerId"] = 0;
+        battlefield["stagedCombat"] = true;
+        battlefield["stagedShowdown"] = true;
+        battlefield["units"] = new JsonArray(Unit("attacker", 0, 2), Unit("defender", 1, 2));
+        PutCardInHand(state, 2, Card("late-unit", "Late Unit", "unit", "", "rally", 0, 0));
+
+        var playResult = engine.ApplyAction(
+            state,
+            new EngineGameAction(2, "play-unit", new Dictionary<string, object?> { ["handIndex"] = 0, ["battlefieldId"] = "field-a-0" }),
+            state.SequenceNumber);
+        var tokenResult = engine.ApplyAction(
+            state,
+            new EngineGameAction(2, "create-token", new Dictionary<string, object?> { ["battlefieldId"] = "field-a-0" }),
+            state.SequenceNumber);
+
+        Assert.That(playResult.Accepted, Is.False);
+        Assert.That(tokenResult.Accepted, Is.False);
+        Assert.That(Battlefield(state, "field-a-0")["units"]!.AsArray(), Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public void ffa_removing_nonparticipant_cleans_combat_contribution_and_allows_combat_to_resolve()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = PlayingState(engine, "ffa-3", turnPhase: "main");
+        var battlefield = Battlefield(state, "field-a-0");
+        battlefield["controllerId"] = 1;
+        battlefield["contestedByPlayerId"] = 0;
+        battlefield["stagedCombat"] = true;
+        battlefield["stagedShowdown"] = true;
+        battlefield["units"] = new JsonArray(Unit("attacker", 0, 4), Unit("defender", 1, 2), Unit("third-party", 2, 2));
+        state.State["activeCombat"] = new JsonObject { ["battlefieldId"] = "field-a-0", ["attackerPlayerId"] = 0, ["defenderPlayerId"] = 1, ["damageStep"] = true };
+        state.State["activeShowdown"] = new JsonObject { ["battlefieldId"] = "field-a-0", ["kind"] = "combat" };
+
+        var beforeRemoval = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "resolve-combat", new Dictionary<string, object?>
+            {
+                ["battlefieldId"] = "field-a-0",
+                ["assignments"] = new Dictionary<string, int> { ["defender"] = 4 }
+            }),
+            state.SequenceNumber);
+        Assert.That(beforeRemoval.Accepted, Is.False);
+
+        var removed = engine.ApplyAction(state, new EngineGameAction(2, "concede", new Dictionary<string, object?>()), state.SequenceNumber);
+        Assert.That(removed.Accepted, Is.True);
+        Assert.That(Battlefield(removed.State, "field-a-0")["units"]!.AsArray().Select(unit => unit!["uid"]!.GetValue<string>()), Is.EqualTo(new[] { "attacker", "defender" }));
+
+        var afterAttack = engine.ApplyAction(
+            removed.State,
+            new EngineGameAction(0, "resolve-combat", new Dictionary<string, object?>
+            {
+                ["battlefieldId"] = "field-a-0",
+                ["assignments"] = new Dictionary<string, int> { ["defender"] = 4 }
+            }),
+            removed.State.SequenceNumber);
+        var result = engine.ApplyAction(
+            afterAttack.State,
+            new EngineGameAction(1, "resolve-combat", new Dictionary<string, object?>
+            {
+                ["battlefieldId"] = "field-a-0",
+                ["assignments"] = new Dictionary<string, int> { ["attacker"] = 2 }
+            }),
+            afterAttack.State.SequenceNumber);
+
+        Assert.That(afterAttack.Accepted, Is.True);
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(Battlefield(result.State, "field-a-0")["controllerId"]!.GetValue<int>(), Is.EqualTo(0));
     }
 
     private static EngineMatchState PlayingState(DefaultRulesEngine engine, string mode, string turnPhase)
@@ -251,6 +405,55 @@ public class MultiplayerTeamRulesTests
             ["supertype"] = null,
             ["effect"] = new JsonObject { ["type"] = effectType, ["amount"] = amount }
         };
+    }
+
+    private static JsonObject StackItem(string id, int playerId)
+    {
+        return new JsonObject
+        {
+            ["id"] = id,
+            ["playerId"] = playerId,
+            ["kind"] = "spell",
+            ["card"] = Card($"{id}-card", id, "spell", "", "rally", 0, 0),
+            ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
+        };
+    }
+
+    private static JsonObject PendingItem(string id, int playerId)
+    {
+        return new JsonObject
+        {
+            ["id"] = id,
+            ["playerId"] = playerId,
+            ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
+        };
+    }
+
+    private static JsonObject HiddenCard(string uid, int ownerId)
+    {
+        var hidden = Card(uid, uid, "unit", "", "rally", 0, 0);
+        hidden["uid"] = uid;
+        hidden["ownerId"] = ownerId;
+        hidden["controllerId"] = ownerId;
+        hidden["facedown"] = true;
+        return hidden;
+    }
+
+    private static JsonObject Attached(string uid, int ownerId)
+    {
+        var attached = Card(uid, uid, "gear", "", "rally", 0, 0);
+        attached["uid"] = uid;
+        attached["ownerId"] = ownerId;
+        attached["controllerId"] = ownerId;
+        attached["attachedCards"] = new JsonArray();
+        return attached;
+    }
+
+    private static JsonObject UnitWithAttachments(string uid, int ownerId, int might, params JsonObject[] attachedCards)
+    {
+        var unit = Unit(uid, ownerId, might);
+        unit["attachedCards"] = new JsonArray(attachedCards.Select(card => card.DeepClone()).ToArray());
+        return unit;
     }
 
     private static JsonObject Unit(string uid, int ownerId, int might, bool exhausted = true)

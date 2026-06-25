@@ -1,35 +1,49 @@
 import type { Page } from '../shared/models'
 
-const pages: { page: Page; label: string }[] = [
-  { page: 'home', label: 'Frontpage' },
-  { page: 'online', label: 'Online' },
-  { page: 'cards', label: 'Card viewer' },
-  { page: 'decks', label: 'Deck builder' },
-  { page: 'deck-list', label: 'Deck list' },
+export type NavRoute = {
+  label: string
+  page: Page
+  path: string
+}
+
+const pages: NavRoute[] = [
+  { page: 'home', path: '/', label: 'Frontpage' },
+  { page: 'online', path: '/online', label: 'Online' },
+  { page: 'cards', path: '/cards', label: 'Card viewer' },
+  { page: 'decks', path: '/decks', label: 'Deck builder' },
+  { page: 'deck-list', path: '/decks/browse', label: 'Deck list' },
 ]
 
 export function AppNav({
   page,
   isAdmin,
   isSignedIn,
-  onPageChange,
+  onNavigate,
 }: {
   page: Page
   isAdmin: boolean
   isSignedIn: boolean
-  onPageChange: (page: Page) => void
+  onNavigate: (path: string) => void
 }) {
   const visiblePages = [
     ...pages,
-    ...(isSignedIn ? [{ page: 'account' as const, label: 'My account' }] : []),
-    ...(isAdmin ? [{ page: 'admin' as const, label: 'Admin' }] : []),
+    ...(isSignedIn ? [{ page: 'account' as const, path: '/account', label: 'My account' }] : []),
+    ...(isAdmin ? [{ page: 'admin' as const, path: '/admin', label: 'Admin' }] : []),
   ]
   return (
     <nav className="app-nav" aria-label="Main navigation">
       {visiblePages.map((item) => (
-        <button className={page === item.page ? 'active' : ''} key={item.page} type="button" onClick={() => onPageChange(item.page)}>
+        <a
+          className={page === item.page ? 'active' : ''}
+          href={item.path}
+          key={item.page}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate(item.path)
+          }}
+        >
           {item.label}
-        </button>
+        </a>
       ))}
     </nav>
   )

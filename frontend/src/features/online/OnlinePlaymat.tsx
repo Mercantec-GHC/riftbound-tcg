@@ -1,8 +1,35 @@
+import { useState } from 'react'
 import { CardFace } from '../../shared/ui/CardFace'
 import { DeckStack } from '../../shared/ui/DeckStack'
 import { readDragData, useDragData } from '../../shared/dragDrop'
 import type { MatchPlayer } from '../../shared/api'
-import type { Battlefield, Card, GameState, Gear, Player, Unit } from '../../shared/models'
+import { useActionMenu } from '../../shared/ui/actionMenuContext'
+import { useCardHoverPreview } from '../../shared/ui/cardHoverPreviewContext'
+import type { Battlefield, Card, CardStatusEffect, GameState, Gear, Player, Unit } from '../../shared/models'
+
+export type BoardActionChoice = {
+  key: string
+  label: string
+  payload: Record<string, unknown>
+  type: string
+}
+
+export type HandCardIntent = {
+  actions: BoardActionChoice[]
+  attachUnitIds: string[]
+  battlefieldIds: string[]
+  canUseBase: boolean
+}
+
+export type UnitMoveIntent = {
+  battlefieldIds: string[]
+  canMoveToBase: boolean
+}
+
+type DragIntent =
+  | { type: 'hand-card'; handIndex: number }
+  | { type: 'unit'; unitId: string }
+  | { type: 'champion' }
 
 function unitOwnerId(unit: Unit): number {
   return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
@@ -21,7 +48,15 @@ function hydrateCard<T extends Card>(card: T, cardsById: Map<string, Card>): T {
 }
 
 function hydrateUnit(unit: Unit, cardsById: Map<string, Card>): Unit {
-  return hydrateCard(unit, cardsById)
+  const hydrated = hydrateCard(unit, cardsById)
+  return {
+    ...hydrated,
+    attachedCards: hydrated.attachedCards?.map((card) => hydrateCard(card, cardsById)),
+    statusEffects: hydrated.statusEffects?.map((effect) => ({
+      ...effect,
+      sourceCard: hydrateCard(effect.sourceCard, cardsById),
+    })),
+  }
 }
 
 function hydrateGear(gear: Gear, cardsById: Map<string, Card>): Gear {
@@ -64,6 +99,7 @@ function ReadOnlyArtCard({
   onClick,
   draggable,
   onDragStart,
+  onDragEnd,
 }: {
   card: Card
   className?: string
@@ -71,6 +107,7 @@ function ReadOnlyArtCard({
   onClick?: () => void
   draggable?: boolean
   onDragStart?: (event: React.DragEvent) => void
+  onDragEnd?: () => void
 }) {
   return (
     <div
@@ -80,23 +117,103 @@ function ReadOnlyArtCard({
       role={onClick ? 'button' : undefined}
       draggable={draggable}
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
     >
       <CardFace artOnly card={card} />
     </div>
   )
 }
 
-function ReadOnlyUnit({ unit, draggable, onDragStart, targetable, onSelectTarget }: { unit: Unit; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; targetable?: boolean; onSelectTarget?: (unitId: string) => void }) {
+function StatusIcon({
+  label,
+  sourceCard,
+  title,
+}: {
+  label: string
+  sourceCard: Card
+  title: string
+}) {
+  const hoverPreview = useCardHoverPreview()
+
+  return (
+    <span
+      className="online-status-icon"
+      onMouseEnter={(event) => hoverPreview?.showPreview(sourceCard, event)}
+      onMouseLeave={hoverPreview?.hidePreview}
+      onMouseMove={hoverPreview?.movePreview}
+      title={title}
+    >
+      {label}
+    </span>
+  )
+}
+
+function effectTitle(effect: CardStatusEffect): string {
+  const amount = effect.amount > 0 ? ` +${effect.amount}` : effect.amount < 0 ? ` ${effect.amount}` : ''
+  return `${effect.sourceCard.name}: ${effect.type}${amount}`
+}
+
+function ReadOnlyUnit({
+  unit,
+  draggable,
+  onDragStart,
+  onDragEnd,
+  canDropCard,
+  onDropCard,
+  targetable,
+  onSelectTarget,
+}: {
+  unit: Unit
+  draggable?: boolean
+  onDragStart?: (event: React.DragEvent) => void
+  onDragEnd?: () => void
+  canDropCard?: boolean
+  onDropCard?: (handIndex: number, unitId: string) => void
+  targetable?: boolean
+  onSelectTarget?: (unitId: string) => void
+}) {
+  const attachedCards = unit.attachedCards ?? []
+  const statusEffects = unit.statusEffects ?? []
+  const hasStatusIcons = attachedCards.length > 0 || statusEffects.length > 0
+
   return (
     <div
-      className={`online-unit-card-wrap ${draggable ? 'movable' : ''} ${targetable ? 'targetable' : ''}`.trim()}
+      className={`online-unit-card-wrap ${draggable ? 'movable' : ''} ${canDropCard ? 'drop-zone attach-drop-zone' : ''} ${targetable ? 'targetable' : ''}`.trim()}
       draggable={draggable}
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={canDropCard ? (event) => event.preventDefault() : undefined}
+      onDrop={canDropCard ? (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const payload = readDragData(event)
+        if (payload?.type === 'card') onDropCard?.(payload.handIndex, unit.uid)
+      } : undefined}
       onClick={targetable ? () => onSelectTarget?.(unit.uid) : undefined}
       role={targetable ? 'button' : undefined}
       title={targetable ? `Target ${unit.name}` : undefined}
     >
       <ReadOnlyArtCard card={unit} className={`online-unit-card ${unit.exhausted ? 'exhausted' : ''}`.trim()} />
+      {hasStatusIcons && (
+        <div className="online-status-icons" aria-label={`${unit.name} card-sourced effects`}>
+          {attachedCards.map((card, index) => (
+            <StatusIcon
+              key={`${card.id}-${index}`}
+              label="G"
+              sourceCard={card}
+              title={`Attached: ${card.name}`}
+            />
+          ))}
+          {statusEffects.map((effect) => (
+            <StatusIcon
+              key={effect.id}
+              label="FX"
+              sourceCard={effect.sourceCard}
+              title={effectTitle(effect)}
+            />
+          ))}
+        </div>
+      )}
       {(unit.damage > 0 || unit.exhausted) && (
         <div className="online-card-badges">
           {unit.damage > 0 && <small>{unit.damage} dmg</small>}
@@ -132,9 +249,18 @@ function OnlineBattlefieldLane({
   viewerPlayerId,
   isShowdown,
   canDropPlayedUnit,
+  canDropCardPlay,
+  canDropHiddenCard,
   canDropMovedUnit,
+  canDropAttachedCard,
   canMoveUnit,
+  dragIntent,
+  handCardIntents,
+  unitMoveIntents,
+  onDragIntent,
   onPlayUnit,
+  onDropCard,
+  onDropCardOnUnit,
   onMoveUnit,
   targetSelection,
   onSelectUnitTarget,
@@ -146,9 +272,18 @@ function OnlineBattlefieldLane({
   viewerPlayerId: number
   isShowdown: boolean
   canDropPlayedUnit: boolean
+  canDropCardPlay: boolean
+  canDropHiddenCard: boolean
   canDropMovedUnit: boolean
+  canDropAttachedCard: boolean
   canMoveUnit?: boolean
+  dragIntent: DragIntent | null
+  handCardIntents: Record<number, HandCardIntent>
+  unitMoveIntents: Record<string, UnitMoveIntent>
+  onDragIntent: (intent: DragIntent | null) => void
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  onDropCard?: (handIndex: number, battlefieldId: string) => void
+  onDropCardOnUnit?: (handIndex: number, unitId: string) => void
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
   onSelectUnitTarget?: (unitId: string) => void
@@ -156,7 +291,15 @@ function OnlineBattlefieldLane({
 }) {
   const dragData = useDragData()
   const catalogCard = battlefieldCatalogCard(field, cardsById)
-  const canDropUnit = canDropPlayedUnit || canDropMovedUnit
+  const draggedHandIntent = dragIntent?.type === 'hand-card' ? handCardIntents[dragIntent.handIndex] : null
+  const draggedUnitIntent = dragIntent?.type === 'unit' ? unitMoveIntents[dragIntent.unitId] : null
+  const acceptsDraggedHandCard = Boolean(draggedHandIntent?.battlefieldIds.includes(field.id))
+  const acceptsDraggedUnit = Boolean(draggedUnitIntent?.battlefieldIds.includes(field.id))
+  const hasPotentialHandDrop = Object.values(handCardIntents).some((intent) => intent.battlefieldIds.includes(field.id))
+  const hasPotentialUnitDrop = Object.values(unitMoveIntents).some((intent) => intent.battlefieldIds.includes(field.id))
+  const canDropUnit = acceptsDraggedHandCard || acceptsDraggedUnit
+  const hasAnyDrop = canDropPlayedUnit || canDropCardPlay || canDropHiddenCard || canDropMovedUnit || hasPotentialHandDrop || hasPotentialUnitDrop
+  const blocksCurrentDrag = Boolean(dragIntent && !canDropUnit)
   const viewerUnits = field.units.filter((unit) => unitOwnerId(unit) === viewerPlayerId)
   const opponentUnits = field.units.filter((unit) => unitOwnerId(unit) !== viewerPlayerId)
   const unitsTargetable = targetSelection?.kind === 'unit'
@@ -165,13 +308,21 @@ function OnlineBattlefieldLane({
   const renderUnitSide = (units: Unit[], side: 'opponent' | 'viewer') => (
     <div className={`unit-row online-battlefield-units online-battlefield-units-${side}`}>
       {units.map((unit) => {
-        const isMovable = Boolean(canMoveUnit && side === 'viewer' && !targetSelection)
+        const moveIntent = unitMoveIntents[unit.uid]
+        const isMovable = Boolean(canMoveUnit && side === 'viewer' && !targetSelection && moveIntent && (moveIntent.battlefieldIds.length > 0 || moveIntent.canMoveToBase))
+        const acceptsDraggedCard = Boolean(draggedHandIntent?.attachUnitIds.includes(unit.uid))
         return (
           <ReadOnlyUnit
             key={unit.uid}
             unit={unit}
             draggable={isMovable}
-            onDragStart={isMovable ? (event) => dragData(event, { type: 'unit', unitId: unit.uid }) : undefined}
+            onDragStart={isMovable ? (event) => {
+              onDragIntent({ type: 'unit', unitId: unit.uid })
+              dragData(event, { type: 'unit', unitId: unit.uid })
+            } : undefined}
+            onDragEnd={() => onDragIntent(null)}
+            canDropCard={acceptsDraggedCard || (!dragIntent && canDropAttachedCard)}
+            onDropCard={onDropCardOnUnit}
             targetable={unitsTargetable && !targetSelection?.excludeUnitIds?.includes(unit.uid)}
             onSelectTarget={onSelectUnitTarget}
           />
@@ -182,13 +333,22 @@ function OnlineBattlefieldLane({
 
   return (
     <article
-      className={`online-battlefield ${canDropUnit ? 'drop-zone' : ''} ${laneTargetable ? 'targetable' : ''}`.trim()}
+      className={[
+        'online-battlefield',
+        hasAnyDrop ? 'drop-zone' : '',
+        canDropUnit ? 'drop-zone-active' : '',
+        blocksCurrentDrag ? 'drop-zone-blocked' : '',
+        laneTargetable ? 'targetable' : '',
+      ].filter(Boolean).join(' ')}
       aria-label={field.name}
       onDragOver={canDropUnit ? (event) => event.preventDefault() : undefined}
       onDrop={canDropUnit ? (event) => {
         event.preventDefault()
         const payload = readDragData(event)
-        if (payload?.type === 'card' && canDropPlayedUnit) onPlayUnit?.(payload.handIndex, field.id)
+        if (payload?.type === 'card') {
+          if (canDropCardPlay || canDropHiddenCard) onDropCard?.(payload.handIndex, field.id)
+          else if (canDropPlayedUnit) onPlayUnit?.(payload.handIndex, field.id)
+        }
         if (payload?.type === 'unit' && canDropMovedUnit) onMoveUnit?.(payload.unitId, field.id)
       } : undefined}
       onClick={laneTargetable ? () => onSelectLaneTarget?.(field.id) : undefined}
@@ -216,16 +376,27 @@ function OnlineHandZone({
   mulliganSelection,
   canPlayUnit,
   playableCardHandIndexes,
+  hideableCardHandIndexes,
+  canAttachCard,
+  handCardIntents,
   onPlayCard,
+  onChooseHandAction,
+  onDragIntent,
 }: {
   isViewer: boolean
   player: Player
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
   canPlayUnit?: boolean
   playableCardHandIndexes?: number[]
+  hideableCardHandIndexes?: number[]
+  canAttachCard?: boolean
+  handCardIntents: Record<number, HandCardIntent>
   onPlayCard?: (handIndex: number) => void
+  onChooseHandAction: (choice: BoardActionChoice) => void
+  onDragIntent: (intent: DragIntent | null) => void
 }) {
   const dragData = useDragData()
+  const actionMenu = useActionMenu()
   if (!isViewer) {
     return (
       <div className="hidden-hand" aria-label={`${player.name} hidden hand`}>
@@ -241,16 +412,20 @@ function OnlineHandZone({
         {player.hand.map((card, index) => {
           const isSelected = mulliganSelection.selectedIndexes.includes(index)
           return (
-            <button
-              type="button"
+            <div
               key={`${card.id}-${index}`}
-              className={`online-hand-card-button ${isSelected ? 'selected' : ''}`.trim()}
-              onClick={() => mulliganSelection.onToggle(index)}
-              aria-pressed={isSelected}
-              title={isSelected ? `Deselect ${card.name}` : `Select ${card.name} to mulligan`}
+              className="online-hand-card-shell"
             >
-              <ReadOnlyArtCard card={card} className="online-hand-card" />
-            </button>
+              <button
+                type="button"
+                className={`online-hand-card-button ${isSelected ? 'selected' : ''}`.trim()}
+                onClick={() => mulliganSelection.onToggle(index)}
+                aria-pressed={isSelected}
+                title={isSelected ? `Deselect ${card.name}` : `Select ${card.name} to mulligan`}
+              >
+                <ReadOnlyArtCard card={card} className="online-hand-card" />
+              </button>
+            </div>
           )
         })}
         {player.hand.length === 0 && <span className="no-runes">No cards in hand</span>}
@@ -261,21 +436,46 @@ function OnlineHandZone({
   return (
     <div className="hand online-hand">
       {player.hand.map((card, index) => {
+        const intent = handCardIntents[index] ?? { actions: [], attachUnitIds: [], battlefieldIds: [], canUseBase: false }
         const isPlayableUnit = canPlayUnit && (card.kind === 'unit' || card.kind === 'champion')
         const isPlayableCard = (playableCardHandIndexes ?? []).includes(index)
+        const isHideableCard = (hideableCardHandIndexes ?? []).includes(index)
+        const isAttachableCard = Boolean(canAttachCard && (card.kind === 'gear' || card.cardType?.toLowerCase().includes('gear') || card.cardType?.toLowerCase().includes('equipment')))
+        const isActionable = intent.actions.length > 0 || intent.canUseBase || intent.battlefieldIds.length > 0 || intent.attachUnitIds.length > 0
+        const isDraggable = Boolean(isActionable && (isPlayableUnit || isPlayableCard || isHideableCard || isAttachableCard))
         return (
-          <button
-            type="button"
+          <div
             key={`${card.id}-${index}`}
-            className={`online-hand-card-button ${isPlayableUnit || isPlayableCard ? 'playable' : ''}`.trim()}
-            draggable={isPlayableUnit}
-            disabled={!isPlayableUnit && !isPlayableCard}
-            onClick={isPlayableCard ? () => onPlayCard?.(index) : undefined}
-            onDragStart={(event) => dragData(event, { type: 'card', handIndex: index, playerId: player.id })}
-            title={card.name}
+            className={`online-hand-card-shell ${isActionable ? 'playable' : ''}`.trim()}
           >
-            <ReadOnlyArtCard card={card} className="online-hand-card" />
-          </button>
+            <button
+              type="button"
+              className={`online-hand-card-button ${isActionable ? 'playable' : ''}`.trim()}
+              draggable={isDraggable}
+              disabled={!isActionable}
+              onClick={() => {
+                if (intent.actions.length > 1) {
+                  actionMenu.openActionMenu({
+                    title: card.name,
+                    choices: intent.actions,
+                    onChoose: onChooseHandAction,
+                  })
+                } else if (intent.actions.length === 1) {
+                  onChooseHandAction(intent.actions[0])
+                } else if (isPlayableCard) {
+                  onPlayCard?.(index)
+                }
+              }}
+              onDragStart={isDraggable ? (event) => {
+                onDragIntent({ type: 'hand-card', handIndex: index })
+                dragData(event, { type: 'card', handIndex: index, playerId: player.id })
+              } : undefined}
+              onDragEnd={() => onDragIntent(null)}
+              title={card.name}
+            >
+              <ReadOnlyArtCard card={card} className="online-hand-card" />
+            </button>
+          </div>
         )
       })}
       {player.hand.length === 0 && <span className="no-runes">No cards in hand</span>}
@@ -306,10 +506,21 @@ function OnlinePlayerMat({
   mulliganSelection,
   canPlayUnit,
   onPlayUnit,
+  onDropCardOnBase,
+  onDropCardOnUnit,
   playableCardHandIndexes,
+  hideableCardHandIndexes,
+  canAttachCard,
   onPlayCard,
+  onAttachCard,
   canMoveUnit,
+  onMoveUnit,
   canSummonChampion,
+  dragIntent = null,
+  handCardIntents = {},
+  unitMoveIntents = {},
+  onDragIntent = () => undefined,
+  onChooseHandAction = () => undefined,
   onSummonChampion,
   targetSelection,
   onSelectUnitTarget,
@@ -321,10 +532,21 @@ function OnlinePlayerMat({
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
   canPlayUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  onDropCardOnBase?: (handIndex: number) => void
+  onDropCardOnUnit?: (handIndex: number, unitId: string) => void
   playableCardHandIndexes?: number[]
+  hideableCardHandIndexes?: number[]
+  canAttachCard?: boolean
   onPlayCard?: (handIndex: number) => void
+  onAttachCard?: (handIndex: number, targetUnitId: string) => void
   canMoveUnit?: boolean
+  onMoveUnit?: (unitId: string, battlefieldId: string) => void
   canSummonChampion?: boolean
+  dragIntent?: DragIntent | null
+  handCardIntents?: Record<number, HandCardIntent>
+  unitMoveIntents?: Record<string, UnitMoveIntent>
+  onDragIntent?: (intent: DragIntent | null) => void
+  onChooseHandAction?: (choice: BoardActionChoice) => void
   onSummonChampion?: () => void
   targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
   onSelectUnitTarget?: (unitId: string) => void
@@ -338,7 +560,12 @@ function OnlinePlayerMat({
         mulliganSelection={isViewer ? mulliganSelection : undefined}
         canPlayUnit={isViewer ? canPlayUnit : false}
         playableCardHandIndexes={isViewer ? playableCardHandIndexes : []}
+        hideableCardHandIndexes={isViewer ? hideableCardHandIndexes : []}
+        canAttachCard={isViewer ? canAttachCard : false}
+        handCardIntents={isViewer ? handCardIntents : {}}
         onPlayCard={onPlayCard}
+        onChooseHandAction={onChooseHandAction}
+        onDragIntent={onDragIntent}
       />
     </section>
   )
@@ -353,7 +580,11 @@ function OnlinePlayerMat({
           className={`online-zone-card ${isChampionPlayable ? 'playable' : ''}`.trim()}
           onClick={isChampionPlayable ? () => onSummonChampion?.() : undefined}
           draggable={isChampionPlayable}
-          onDragStart={isChampionPlayable ? (event) => dragData(event, { type: 'champion' }) : undefined}
+          onDragStart={isChampionPlayable ? (event) => {
+            onDragIntent({ type: 'champion' })
+            dragData(event, { type: 'champion' })
+          } : undefined}
+          onDragEnd={() => onDragIntent(null)}
           title={isChampionPlayable ? `Summon ${player.champion.name}` : player.champion.name}
         />
       ) : (
@@ -369,28 +600,52 @@ function OnlinePlayerMat({
     </section>
   )
 
-  const canDropOnBase = Boolean(isViewer && (canPlayUnit || isChampionPlayable))
+  const draggedHandIntent = dragIntent?.type === 'hand-card' ? handCardIntents[dragIntent.handIndex] : null
+  const canDropDraggedHandOnBase = Boolean(isViewer && draggedHandIntent?.canUseBase)
+  const canDropDraggedChampionOnBase = Boolean(isViewer && dragIntent?.type === 'champion' && isChampionPlayable)
+  const canDropDraggedUnitOnBase = Boolean(isViewer && dragIntent?.type === 'unit' && unitMoveIntents[dragIntent.unitId]?.canMoveToBase)
+  const hasPotentialBaseDrop = Object.values(handCardIntents).some((intent) => intent.canUseBase)
+  const hasPotentialUnitBaseDrop = Object.values(unitMoveIntents).some((intent) => intent.canMoveToBase)
+  const canDropOnBase = canDropDraggedHandOnBase || canDropDraggedChampionOnBase || canDropDraggedUnitOnBase
+  const baseBlocksCurrentDrag = Boolean(isViewer && dragIntent && !canDropOnBase)
   const baseZone = (
     <section
-      className={`mat-zone base-zone flexible-card-zone ${canDropOnBase ? 'drop-zone' : ''}`.trim()}
+      className={[
+        'mat-zone base-zone flexible-card-zone',
+        isViewer && (hasPotentialBaseDrop || hasPotentialUnitBaseDrop || isChampionPlayable) ? 'drop-zone' : '',
+        canDropOnBase ? 'drop-zone-active' : '',
+        baseBlocksCurrentDrag ? 'drop-zone-blocked' : '',
+      ].filter(Boolean).join(' ')}
       onDragOver={canDropOnBase ? (event) => event.preventDefault() : undefined}
       onDrop={canDropOnBase ? (event) => {
         event.preventDefault()
         const payload = readDragData(event)
-        if (payload?.type === 'card' && canPlayUnit) onPlayUnit?.(payload.handIndex)
+        if (payload?.type === 'card') {
+          if (onDropCardOnBase) onDropCardOnBase(payload.handIndex)
+          else if (canPlayUnit) onPlayUnit?.(payload.handIndex)
+        }
         if (payload?.type === 'champion' && isChampionPlayable) onSummonChampion?.()
+        if (payload?.type === 'unit' && canDropDraggedUnitOnBase) onMoveUnit?.(payload.unitId, 'base')
       } : undefined}
     >
       <span className="zone-label">Base</span>
       <div className="unit-row">
         {player.base.map((unit) => {
-          const isMovable = Boolean(isViewer && canMoveUnit && !targetSelection)
+          const moveIntent = unitMoveIntents[unit.uid]
+          const isMovable = Boolean(isViewer && canMoveUnit && !targetSelection && moveIntent && (moveIntent.battlefieldIds.length > 0 || moveIntent.canMoveToBase))
+          const acceptsDraggedCard = Boolean(draggedHandIntent?.attachUnitIds.includes(unit.uid))
           return (
             <ReadOnlyUnit
               key={unit.uid}
               unit={unit}
               draggable={isMovable}
-              onDragStart={isMovable ? (event) => dragData(event, { type: 'unit', unitId: unit.uid }) : undefined}
+              onDragStart={isMovable ? (event) => {
+                onDragIntent({ type: 'unit', unitId: unit.uid })
+                dragData(event, { type: 'unit', unitId: unit.uid })
+              } : undefined}
+              onDragEnd={() => onDragIntent(null)}
+              canDropCard={acceptsDraggedCard || (!dragIntent && Boolean(isViewer && canAttachCard))}
+              onDropCard={onDropCardOnUnit ?? onAttachCard}
               targetable={targetSelection?.kind === 'unit' && !targetSelection?.excludeUnitIds?.includes(unit.uid)}
               onSelectTarget={onSelectUnitTarget}
             />
@@ -475,7 +730,7 @@ function OnlinePlayerMat({
             <span>{isViewer ? 'Your mat' : 'Opponent mat'}</span>
             <h3>{player.name}</h3>
           </div>
-          <strong>{player.points} pts</strong>
+          <strong>{player.xp ?? 0} XP</strong>
         </header>
 
         <div className={`online-player-zones ${isViewer ? 'viewer-player-zones' : 'opponent-player-zones'}`}>
@@ -509,6 +764,15 @@ function BattlefieldZone({
   viewerPlayerId,
   canPlayUnit,
   onPlayUnit,
+  onDropCardOnBattlefield,
+  onDropCardOnUnit,
+  canDropCardPlay,
+  canDropHiddenCard,
+  canAttachCard,
+  dragIntent,
+  handCardIntents,
+  unitMoveIntents,
+  onDragIntent,
   canMoveUnit,
   onMoveUnit,
   targetSelection,
@@ -521,6 +785,15 @@ function BattlefieldZone({
   viewerPlayerId: number
   canPlayUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  onDropCardOnBattlefield?: (handIndex: number, battlefieldId: string) => void
+  onDropCardOnUnit?: (handIndex: number, unitId: string) => void
+  canDropCardPlay?: boolean
+  canDropHiddenCard?: boolean
+  canAttachCard?: boolean
+  dragIntent: DragIntent | null
+  handCardIntents: Record<number, HandCardIntent>
+  unitMoveIntents: Record<string, UnitMoveIntent>
+  onDragIntent: (intent: DragIntent | null) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
@@ -551,9 +824,18 @@ function BattlefieldZone({
               viewerPlayerId={viewerPlayerId}
               isShowdown={game.activeShowdown?.battlefieldId === field.id}
               canDropPlayedUnit={Boolean(canPlayUnit)}
+              canDropCardPlay={Boolean(canDropCardPlay)}
+              canDropHiddenCard={Boolean(canDropHiddenCard)}
               canDropMovedUnit={Boolean(canMoveUnit)}
+              canDropAttachedCard={Boolean(canAttachCard)}
               canMoveUnit={canMoveUnit}
+              dragIntent={dragIntent}
+              handCardIntents={handCardIntents}
+              unitMoveIntents={unitMoveIntents}
+              onDragIntent={onDragIntent}
               onPlayUnit={onPlayUnit}
+              onDropCard={onDropCardOnBattlefield}
+              onDropCardOnUnit={onDropCardOnUnit}
               onMoveUnit={onMoveUnit}
               targetSelection={targetSelection}
               onSelectUnitTarget={onSelectUnitTarget}
@@ -574,8 +856,17 @@ export function OnlinePlaymat({
   mulliganSelection,
   canPlayUnit,
   onPlayUnit,
+  onDropCardOnBase,
+  onDropCardOnBattlefield,
+  onDropCardOnUnit,
   playableCardHandIndexes,
+  hideableCardHandIndexes,
   onPlayCard,
+  canAttachCard,
+  handCardIntents = {},
+  unitMoveIntents = {},
+  onChooseHandAction,
+  onAttachCard,
   canMoveUnit,
   onMoveUnit,
   canSummonChampion,
@@ -591,8 +882,17 @@ export function OnlinePlaymat({
   mulliganSelection?: { selectedIndexes: number[]; onToggle: (index: number) => void }
   canPlayUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
+  onDropCardOnBase?: (handIndex: number) => void
+  onDropCardOnBattlefield?: (handIndex: number, battlefieldId: string) => void
+  onDropCardOnUnit?: (handIndex: number, unitId: string) => void
   playableCardHandIndexes?: number[]
+  hideableCardHandIndexes?: number[]
   onPlayCard?: (handIndex: number) => void
+  canAttachCard?: boolean
+  handCardIntents?: Record<number, HandCardIntent>
+  unitMoveIntents?: Record<string, UnitMoveIntent>
+  onChooseHandAction?: (choice: BoardActionChoice) => void
+  onAttachCard?: (handIndex: number, targetUnitId: string) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   canSummonChampion?: boolean
@@ -601,6 +901,7 @@ export function OnlinePlaymat({
   onSelectUnitTarget?: (unitId: string) => void
   onSelectLaneTarget?: (laneId: string) => void
 }) {
+  const [dragIntent, setDragIntent] = useState<DragIntent | null>(null)
   const cardsById = new Map(cards.map((card) => [card.id, card]))
   const hydratedGame: GameState = {
     ...game,
@@ -632,6 +933,15 @@ export function OnlinePlaymat({
           viewerPlayerId={viewerPlayerId}
           canPlayUnit={canPlayUnit}
           onPlayUnit={onPlayUnit}
+          onDropCardOnBattlefield={onDropCardOnBattlefield}
+          onDropCardOnUnit={onDropCardOnUnit ?? onAttachCard}
+          canDropCardPlay={Boolean(playableCardHandIndexes?.length)}
+          canDropHiddenCard={Boolean(hideableCardHandIndexes?.length)}
+          canAttachCard={canAttachCard}
+          dragIntent={dragIntent}
+          handCardIntents={handCardIntents}
+          unitMoveIntents={unitMoveIntents}
+          onDragIntent={setDragIntent}
           canMoveUnit={canMoveUnit}
           onMoveUnit={onMoveUnit}
           targetSelection={targetSelection}
@@ -647,9 +957,20 @@ export function OnlinePlaymat({
             mulliganSelection={mulliganSelection}
             canPlayUnit={canPlayUnit}
             onPlayUnit={onPlayUnit}
+            onDropCardOnBase={onDropCardOnBase}
+            onDropCardOnUnit={onDropCardOnUnit ?? onAttachCard}
             playableCardHandIndexes={playableCardHandIndexes}
+            hideableCardHandIndexes={hideableCardHandIndexes}
             onPlayCard={onPlayCard}
+            canAttachCard={canAttachCard}
+            dragIntent={dragIntent}
+            handCardIntents={handCardIntents}
+            unitMoveIntents={unitMoveIntents}
+            onDragIntent={setDragIntent}
+            onChooseHandAction={onChooseHandAction ?? (() => undefined)}
+            onAttachCard={onAttachCard}
             canMoveUnit={canMoveUnit}
+            onMoveUnit={onMoveUnit}
             canSummonChampion={canSummonChampion}
             onSummonChampion={onSummonChampion}
             targetSelection={targetSelection}
@@ -670,6 +991,15 @@ export function OnlinePlaymat({
         viewerPlayerId={viewerPlayerId}
         canPlayUnit={canPlayUnit}
         onPlayUnit={onPlayUnit}
+        onDropCardOnBattlefield={onDropCardOnBattlefield}
+        onDropCardOnUnit={onDropCardOnUnit ?? onAttachCard}
+        canDropCardPlay={Boolean(playableCardHandIndexes?.length)}
+        canDropHiddenCard={Boolean(hideableCardHandIndexes?.length)}
+        canAttachCard={canAttachCard}
+        dragIntent={dragIntent}
+        handCardIntents={handCardIntents}
+        unitMoveIntents={unitMoveIntents}
+        onDragIntent={setDragIntent}
         canMoveUnit={canMoveUnit}
         onMoveUnit={onMoveUnit}
         targetSelection={targetSelection}
@@ -688,9 +1018,20 @@ export function OnlinePlaymat({
             mulliganSelection={player.id === viewerPlayerId ? mulliganSelection : undefined}
             canPlayUnit={player.id === viewerPlayerId ? canPlayUnit : false}
             onPlayUnit={onPlayUnit}
+            onDropCardOnBase={player.id === viewerPlayerId ? onDropCardOnBase : undefined}
+            onDropCardOnUnit={player.id === viewerPlayerId ? onDropCardOnUnit ?? onAttachCard : undefined}
             playableCardHandIndexes={player.id === viewerPlayerId ? playableCardHandIndexes : []}
+            hideableCardHandIndexes={player.id === viewerPlayerId ? hideableCardHandIndexes : []}
             onPlayCard={onPlayCard}
+            canAttachCard={player.id === viewerPlayerId ? canAttachCard : false}
+            dragIntent={dragIntent}
+            handCardIntents={player.id === viewerPlayerId ? handCardIntents : {}}
+            unitMoveIntents={player.id === viewerPlayerId ? unitMoveIntents : {}}
+            onDragIntent={setDragIntent}
+            onChooseHandAction={onChooseHandAction ?? (() => undefined)}
+            onAttachCard={onAttachCard}
             canMoveUnit={player.id === viewerPlayerId ? canMoveUnit : false}
+            onMoveUnit={onMoveUnit}
             canSummonChampion={player.id === viewerPlayerId ? canSummonChampion : false}
             onSummonChampion={onSummonChampion}
             targetSelection={targetSelection}

@@ -1,0 +1,117 @@
+.visual-state-lab {
+  display: grid;
+  gap: 18px;
+}
+
+.visual-lab-header,
+.visual-lab-controls,
+.visual-lab-json-panel {
+  background:
+    linear-gradient(135deg, rgba(200, 170, 110, 0.08), transparent 18%),
+    linear-gradient(180deg, var(--rift-panel-2), var(--rift-panel));
+  border: 1px solid rgba(200, 170, 110, 0.34);
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.06),
+    0 22px 70px rgba(0, 0, 0, 0.36);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  color: var(--rift-text);
+}
+
+.visual-lab-header {
+  align-items: end;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+  padding: 22px;
+}
+
+.visual-lab-header p:last-child {
+  margin-bottom: 0;
+}
+
+.visual-lab-status {
+  background: rgba(4, 7, 11, 0.58);
+  border: 1px solid rgba(200, 170, 110, 0.28);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.visual-lab-status span {
+  color: var(--rift-muted);
+}
+
+.visual-lab-status strong {
+  color: var(--rift-gold-bright);
+  overflow-wrap: anywhere;
+}
+
+.visual-lab-controls {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto auto;
+  padding: 14px;
+}
+
+.visual-lab-workspace {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+}
+
+.visual-lab-playmat {
+  min-width: 0;
+}
+
+.visual-lab-json-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  position: sticky;
+  top: 88px;
+}
+
+.visual-lab-json-panel header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.visual-lab-json-panel h3 {
+  margin: 0;
+}
+
+.visual-lab-json-panel span {
+  color: var(--rift-muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.visual-lab-json-panel textarea {
+  font-family: Consolas, "Liberation Mono", monospace;
+  min-height: 660px;
+  resize: vertical;
+  white-space: pre;
+}
+
+@media (max-width: 1280px) {
+  .visual-lab-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-lab-json-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 900px) {
+  .visual-lab-header,
+  .visual-lab-controls {
+    grid-template-columns: 1fr;
+  }
+}

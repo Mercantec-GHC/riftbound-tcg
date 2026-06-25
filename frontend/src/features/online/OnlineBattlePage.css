@@ -108,7 +108,7 @@
   align-items: start;
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(0, 1fr) 220px 280px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .online-board {
@@ -161,6 +161,19 @@
 .online-log {
   display: grid;
   gap: 10px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.online-actions {
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.online-actions h3,
+.online-actions p,
+.online-actions .online-stack {
+  grid-column: 1 / -1;
 }
 
 .online-stack {
@@ -182,10 +195,11 @@
   background: rgba(3, 6, 14, 0.74);
   display: grid;
   inset: 0;
+  isolation: isolate;
   justify-items: center;
   padding: 18px;
   position: fixed;
-  z-index: 20;
+  z-index: 2147483647;
 }
 
 .combat-showdown-modal {
@@ -203,8 +217,26 @@
   width: min(720px, calc(100vw - 36px));
 }
 
+.drag-action-modal {
+  background: #111827;
+  border: 1px solid rgba(255, 220, 138, 0.34);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  color: #f7efe2;
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 18px;
+  position: relative;
+  width: min(420px, calc(100vw - 36px));
+  z-index: 1;
+}
+
 .combat-showdown-modal header,
 .combat-showdown-modal footer,
+.drag-action-modal header,
+.drag-action-modal footer,
 .combat-modal-toolbar {
   align-items: center;
   display: flex;
@@ -219,9 +251,27 @@
   text-transform: uppercase;
 }
 
+.drag-action-modal header span {
+  color: #ffdc8a;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .combat-showdown-modal h3,
-.combat-showdown-modal h4 {
+.combat-showdown-modal h4,
+.drag-action-modal h3 {
   margin: 0;
+}
+
+.drag-action-options {
+  display: grid;
+  gap: 10px;
+}
+
+.drag-action-options button {
+  justify-content: center;
+  width: 100%;
 }
 
 .combat-modal-close {
@@ -525,6 +575,10 @@
 .online-target-prompt p {
   margin: 0;
 }
+.online-unit-card-wrap.attach-drop-zone {
+  border-radius: 10px;
+  padding: 2px;
+}
 
 .online-card-badges {
   display: flex;
@@ -540,6 +594,31 @@
   font-size: 0.68rem;
   font-weight: 800;
   padding: 2px 6px;
+}
+
+.online-status-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+  position: relative;
+  z-index: 4;
+}
+
+.online-status-icon {
+  align-items: center;
+  background: rgba(6, 11, 18, 0.94);
+  border: 1px solid rgba(115, 238, 160, 0.72);
+  color: #c8ffd8;
+  cursor: help;
+  display: inline-flex;
+  font-size: 0.58rem;
+  font-weight: 900;
+  height: 18px;
+  justify-content: center;
+  line-height: 1;
+  min-width: 18px;
+  padding: 0 4px;
 }
 
 .online-hand {
@@ -712,7 +791,7 @@
 
 .online-hand-zone {
   min-width: 0;
-  overflow-x: auto;
+  overflow-x: visible;
 }
 
 .hidden-hand {
@@ -745,6 +824,22 @@
   grid-area: auto;
 }
 
+.online-victory-track .score-dot {
+  background: rgba(5, 8, 13, 0.82);
+  border-color: rgba(200, 170, 110, 0.36);
+  box-shadow: inset 0 0 0 1px rgba(240, 210, 138, 0.04);
+  color: rgba(248, 243, 231, 0.62);
+}
+
+.online-victory-track .score-dot.current {
+  background: radial-gradient(circle at 36% 26%, #fff0a8, #c8aa6e 50%, #4a371d);
+  border-color: rgba(240, 210, 138, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(240, 210, 138, 0.4),
+    0 0 16px rgba(240, 210, 138, 0.24);
+  color: #07090c;
+}
+
 .online-battlefield header,
 .online-board .online-player-mat-header {
   display: flex;
@@ -774,8 +869,8 @@
   }
 
   .online-hand {
-    flex-wrap: nowrap;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow-x: visible;
   }
 
   .online-battlefields-row {
@@ -807,5 +902,311 @@
   .compact-online-toolbar,
   .lobby-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+.online-toolbar,
+.online-status,
+.online-board,
+.online-actions,
+.online-log,
+.lobby-browser,
+.lobby-room,
+.online-check,
+.online-list-item,
+.online-account,
+.online-players .player,
+.online-battlefields article,
+.online-window-panel article,
+.online-stack,
+.combat-showdown-modal,
+.drag-action-modal,
+.combat-assignment-row,
+.combat-validation,
+.online-shared-playmat,
+.online-player-mat,
+.hidden-hand {
+  background:
+    linear-gradient(135deg, rgba(200, 170, 110, 0.08), transparent 18%),
+    linear-gradient(180deg, var(--rift-panel-2), var(--rift-panel));
+  border: 1px solid rgba(200, 170, 110, 0.32);
+  border-radius: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.05),
+    0 18px 48px rgba(0, 0, 0, 0.34);
+  color: var(--rift-text);
+}
+
+.online-toolbar,
+.online-board,
+.online-actions,
+.online-log,
+.lobby-browser,
+.lobby-room,
+.online-shared-playmat,
+.online-player-mat {
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+
+.online-shared-playmat {
+  background:
+    linear-gradient(90deg, rgba(200, 170, 110, 0.08) 1px, transparent 1px) 50% 0 / 1px 100% no-repeat,
+    radial-gradient(circle at 50% 32%, rgba(10, 200, 211, 0.08), transparent 34%),
+    linear-gradient(180deg, #080c12, #05070a);
+  border-color: rgba(200, 170, 110, 0.42);
+}
+
+.viewer-player-mat {
+  border-color: rgba(240, 210, 138, 0.74);
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.18),
+    0 0 32px rgba(200, 170, 110, 0.12);
+}
+
+.online-window-panel span,
+.online-stack strong,
+.online-account span,
+.online-player-mat-header span,
+.hidden-hand strong,
+.zone-empty-text,
+.online-list-item.active,
+.online-showdown-banner {
+  color: var(--rift-gold-bright);
+}
+
+.online-list-item small,
+.online-list-item span,
+.combat-assignment-row small,
+.online-player-mat-header span,
+.hidden-hand,
+.hidden-hand span,
+.zone-empty-text {
+  color: var(--rift-muted);
+}
+
+.online-player-mat-header strong,
+.online-card-badges small,
+.online-battlefield-controller-badge {
+  background: radial-gradient(circle at 36% 26%, #fff0a8, #c8aa6e 50%, #4a371d);
+  border-color: rgba(240, 210, 138, 0.72);
+  border-radius: 0;
+  color: #07090c;
+}
+
+.online-art-card,
+.online-art-card .card-art,
+.online-hand-card-button,
+.online-art-card.playable {
+  border-radius: 2px;
+}
+
+.online-art-card {
+  border: 1px solid rgba(200, 170, 110, 0.34);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.34);
+}
+
+.online-hand-card-button {
+  border-color: transparent;
+}
+
+.online-hand-card-button.selected,
+.online-art-card.playable {
+  border-color: var(--rift-gold-bright);
+  box-shadow: 0 0 0 1px rgba(240, 210, 138, 0.52), 0 0 24px rgba(200, 170, 110, 0.22);
+}
+
+.online-unit-card-wrap.movable {
+  border-radius: 0;
+  outline-color: rgba(240, 210, 138, 0.68);
+}
+
+.drop-zone {
+  border-radius: 0;
+}
+
+.drop-zone:hover {
+  outline-color: rgba(240, 210, 138, 0.82);
+}
+
+.online-battlefield-units-opponent,
+.online-battlefield-units-viewer {
+  border-color: rgba(200, 170, 110, 0.24);
+}
+
+.online-showdown-banner {
+  background: linear-gradient(180deg, rgba(98, 28, 28, 0.96), rgba(37, 12, 12, 0.96));
+  border: 1px solid rgba(240, 210, 138, 0.52);
+  border-radius: 0;
+  box-shadow: 0 0 18px rgba(201, 75, 69, 0.28);
+}
+
+.combat-validation {
+  background: rgba(65, 18, 18, 0.86);
+  border-color: rgba(201, 75, 69, 0.7);
+  color: #ffd2ca;
+}
+
+.online-shared-playmat {
+  --online-board-card-width: 82px;
+  --online-hand-card-width: 86px;
+  --online-fixed-zone-width: 112px;
+  gap: 14px;
+  padding: 14px;
+}
+
+.online-player-mat {
+  gap: 10px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  padding: 10px;
+}
+
+.online-player-mat-body,
+.online-player-zones,
+.online-player-zone-row {
+  gap: 10px;
+}
+
+.online-player-primary-row {
+  grid-template-columns: var(--online-fixed-zone-width) var(--online-fixed-zone-width) minmax(160px, 1fr) var(--online-fixed-zone-width);
+}
+
+.opponent-player-zones .online-player-primary-row {
+  grid-template-columns: var(--online-fixed-zone-width) minmax(160px, 1fr) var(--online-fixed-zone-width) var(--online-fixed-zone-width);
+}
+
+.online-player-secondary-row {
+  grid-template-columns: var(--online-fixed-zone-width) minmax(160px, 1fr) var(--online-fixed-zone-width);
+}
+
+.fixed-card-zone {
+  min-width: var(--online-fixed-zone-width);
+}
+
+.online-player-zones .mat-zone {
+  min-height: 132px;
+  padding: 16px 8px 8px;
+}
+
+.online-art-card,
+.online-zone-card,
+.online-unit-card,
+.online-gear-card,
+.online-shared-playmat .rune-card,
+.online-shared-playmat .deck-stack {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  max-width: none;
+  width: var(--online-board-card-width);
+}
+
+.online-unit-card-wrap {
+  box-sizing: border-box;
+  min-width: var(--online-board-card-width);
+  width: var(--online-board-card-width);
+}
+
+.online-shared-playmat .rune-card .card-art {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.online-hand-card-shell {
+  box-sizing: border-box;
+  flex: 0 0 var(--online-hand-card-width);
+  position: relative;
+  width: var(--online-hand-card-width);
+}
+
+.online-hand {
+  flex-wrap: wrap;
+  overflow-x: visible;
+  overflow-y: visible;
+  padding-top: 0;
+}
+
+.online-hand-card-button {
+  display: block;
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.online-hand-card {
+  box-sizing: border-box;
+  width: var(--online-hand-card-width);
+}
+
+.online-battlefield-art,
+.online-battlefield-fallback {
+  max-width: none;
+  width: 360px;
+}
+
+.online-hand-card-shell.playable .online-art-card,
+.online-art-card.playable {
+  border-color: var(--rift-gold-bright);
+  box-shadow:
+    0 0 0 1px rgba(240, 210, 138, 0.52),
+    0 0 20px rgba(200, 170, 110, 0.22);
+}
+
+.online-shared-playmat .rune-card.exhausted,
+.online-shared-playmat .online-unit-card.exhausted {
+  filter: grayscale(0.65) brightness(0.68);
+  transform: none;
+}
+
+.drop-zone-active {
+  background: rgba(30, 128, 92, 0.16);
+  outline-color: rgba(115, 238, 160, 0.9);
+  box-shadow:
+    inset 0 0 0 1px rgba(115, 238, 160, 0.28),
+    0 0 24px rgba(30, 128, 92, 0.22);
+}
+
+.drop-zone-blocked {
+  outline-color: rgba(201, 75, 69, 0.36);
+}
+
+.online-unit-card-wrap.attach-drop-zone.drop-zone {
+  outline-offset: 2px;
+}
+
+@media (max-width: 1320px) {
+  .online-match {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .online-actions,
+  .online-log {
+    max-height: 280px;
+    overflow: auto;
+  }
+
+  .online-actions {
+    align-items: start;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .online-actions h3,
+  .online-actions p,
+  .online-actions .online-stack {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .online-player-primary-row,
+  .opponent-player-zones .online-player-primary-row,
+  .online-player-secondary-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fixed-card-zone {
+    min-width: 0;
+  }
+
+  .online-battlefield-art,
+  .online-battlefield-fallback {
+    width: min(320px, calc(100vw - 64px));
   }
 }

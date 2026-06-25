@@ -12,7 +12,7 @@ This audit tracks how much of the numbered rules reference is represented in the
 - **Partial:** some behavior exists, but the rule family is incomplete.
 - **Improper:** behavior exists but contradicts the reference rules.
 - **Missing:** no meaningful authoritative implementation found.
-- **Frontend-only/prototype:** implemented in `frontend/src/features/game/rules/gameRules.ts` or UI controls, but not authoritative for online matches.
+- **Frontend-only/prototype:** implemented in archived/local UI controls, but not authoritative for online matches.
 
 ## Properly Implemented Or Mostly Correct
 
@@ -27,6 +27,7 @@ Status: **Implemented**
 - Server online play routes actions through `IRulesEngine`; accepted actions are persisted as match events and snapshots.
 - `MatchReplayService` can rebuild from the creation event and accepted event log, optionally starting from the latest snapshot, and verifies recorded post-state when present.
 - Player-scoped snapshots and action responses can carry redacted views.
+- The active frontend no longer contains a local gameplay rules implementation; online UI renders server state and submits only server-approved action shapes.
 
 Rule coverage:
 
@@ -41,14 +42,16 @@ Status: **Partial**
 - Players draw 4 during initial setup.
 - Separate main deck and rune deck zones exist in state.
 - Battlefields exist as shared board locations with hidden-card slots.
+- Engine setup preserves selected battlefield contributor metadata, and deterministic fallback selection uses mode-specific contributors when explicit selections are absent.
 - Champion and legend are represented as distinct slots.
+- The champion-zone summon consumes the champion-zone object so it no longer remains as a separate live source after summon.
 - Facedown state exists, and player-view redaction hides opponent hand, deck order, and unrevealed facedown identity from non-viewers.
 
 Rule coverage:
 
 - `103`, `107`, `108`, `111-119`, `128`, `159-175`.
 
-Gaps remain around the full setup/battlefield selection procedure, complete public/private information rules, top-most cards, ownership replacement, and complete champion-zone play semantics.
+Gaps remain around a full interactive battlefield-selection mini-procedure and exhaustive public/private information effects, but the current engine now models deterministic setup fallback, contributor metadata, and champion-zone consumption.
 
 ### Deck Construction Validation
 
@@ -218,11 +221,12 @@ Status: **Partial**
 
 - The engine models an effect stack and chain window.
 - Reactions and Quick-Draw cards can be played during an open chain window.
-- Action spells are rejected during Closed State chain windows unless future card-specific permission is added.
+- Action spells are rejected during Closed State chain windows by default; modeled card-specific rule modifiers can grant exceptions, with "cannot" restrictions taking precedence.
 - Chain priority is tracked; non-priority passes are rejected.
 - Passing by all active players resolves the newest stack item first.
 - New reaction items give priority to their controller and resolve LIFO.
 - Triggered/add-created chain sources do not pass showdown focus on close.
+- After a stack item resolves, the engine runs outstanding FEPR work before older stack items continue, so triggers, delayed choices, and nested triggered abilities created during resolution are queued or surfaced first.
 - Tests cover simple LIFO reaction resolution and priority movement.
 
 Rule coverage:
@@ -233,7 +237,7 @@ Remaining gaps:
 
 - The full FEPR priority model is still simplified.
 - Pending vs finalized chain items are represented but not a complete model of every chain timing edge.
-- Add-resource chain behavior, advanced triggered ability ordering, and card-granted timing exceptions are incomplete.
+- Add-resource chain behavior, full replacement/prevention choice timing, and unmodeled timing exception shapes are incomplete.
 
 ### Showdowns, Movement, And Battlefield Control
 
@@ -255,7 +259,7 @@ Rule coverage:
 
 Remaining gaps:
 
-- Destination and combat restrictions for every FFA/team edge case are not complete.
+- Destination/combat restrictions for modeled standard moves, direct unit play, token creation, and nonparticipant combat cleanup are covered; remaining gaps are mostly card-effect-specific exceptions and advanced replacement timing.
 - Full simultaneous movement ordering and all showdown timing details remain simplified.
 
 ### Combat And Scoring
@@ -298,6 +302,9 @@ Status: **Partial**
 - Duel concession completes the match.
 - FFA concession removes the conceding player and continues while more than one active player remains.
 - 2v2 concession causes the conceding team to lose.
+- FFA/team player removal clears removed-player permanents, attached objects they own/control, hidden cards, stack items, pending triggered/delayed ability work, chain pass state, and active combat/showdown participation.
+- Removed-player contributed battlefields are replaced with blank token battlefields while preserving other players' units and normalizing control/contested state.
+- 2v2 concession removes both teammates' game objects and pending work before recording the shared team loss.
 
 Rule coverage:
 
@@ -305,8 +312,8 @@ Rule coverage:
 
 Remaining gaps:
 
-- Full FFA removal cleanup is incomplete: the removed player's objects, active chain/showdown contributions, pending abilities, and battlefield contribution are only partially cleared.
-- Full team shared-loss cleanup and teammate object handling are incomplete.
+- Replacement/removal effects outside concession still need a general rule-action implementation.
+- Advanced multiplayer concession timing around simultaneous pending choices is still simplified.
 
 ## Improperly Implemented Or Incomplete Rules
 
@@ -314,24 +321,36 @@ These are places where the app has behavior, but the behavior still contradicts 
 
 ### Golden And Silver Rules
 
-Status: **Missing as a general system**
+Status: **Partial**
 
-- Card text superseding rules (`002`) is not implemented as a general override model.
-- "Can't beats can" (`054`) is not modeled.
-- "Do as much as you can" (`055`) exists only in some simple effect behavior, not generally.
-- Owner-zone replacement (`056`) is not implemented as a general rule.
+- Modeled card text/rule modifiers can grant or restrict current `play-card`, `play-unit`, and `effect-target` permissions for the existing action/effect shapes.
+- "Can't beats can" (`054`) is implemented for those modeled permission/restriction checks.
+- "Do as much as you can" (`055`) is implemented for modeled internal action batches used by current stack effects, so still-legal targets resolve while illegal targets are skipped.
+- Owner-zone replacement (`056`) is implemented for modeled server/internal zone movement paths, including internal discard/recycle/kill/banish/recall/counter/create-to-zone, resolved spells, lethal/temporary cleanup, board object banish, hidden-card cleanup, and attached object stacks.
+- Tokens disappear instead of entering non-board zones for modeled kill, banish, recall, lethal, and Temporary cleanup paths.
+
+Remaining gaps:
+
+- Arbitrary card-text rule overrides still need a general instruction/modifier model.
+- The current `054`/`055` support is scoped to modeled permissions and internal action batches, not every future card-text shape.
+- Owner-zone replacement should continue to be enforced when future card text adds new zone-moving effect shapes.
 
 ### Full Privacy And Information Rules
 
-Status: **Partial**
+Status: **Implemented for current online engine surfaces**
 
 - Player-scoped redaction hides opponent hand, deck order, and unrevealed facedown card identity in API views.
 - Hidden cards and facedown state exist.
+- `InformationModel` centralizes public/private/secret identity visibility for player and spectator views.
+- Active reveal entries expose card identity without moving cards, and clearing reveal entries returns those cards to their zone's normal privacy.
+- Facedown cards track controller-scoped visibility and explicit identity history for players who have previously been allowed to know the card.
+- Hidden battlefield cards are redacted through the same API view path while preserving public information such as owner/controller, facedown state, hidden battlefield, and hidden turn.
+- Production match snapshots redact even when no player viewer is supplied, preventing accidental spectator/admin leaks from the API view layer.
 
-Missing areas:
+Remaining future work:
 
-- A full public/private/secret information rules system is not present.
-- Reveal, facedown visibility history, hidden card ownership visibility, deck inspection, and information-sharing restrictions are only lightly represented.
+- Deck inspection effects can use the information model's explicit viewer lists, but a full card-effect-driven inspect/look action family is still incomplete.
+- Information-sharing restrictions and teammate communication policy are not enforced beyond redaction, because they are table policy/player communication rules rather than server action legality today.
 
 ### Full Object Model
 
@@ -339,26 +358,37 @@ Status: **Partial**
 
 - Units, gear, tokens, runes, legends, champions, battlefields, attached cards, hidden cards, facedown cards, banished cards, and continuous effects are represented in some form.
 - Attach/detach and token creation have server actions.
+- Top-most card tracking exists for modeled attached object stacks.
+- Facedown cards carry inactive rules text state and redaction metadata.
+- Hidden battlefield cards are cleaned up to the owner's trash when their controller no longer controls that battlefield.
+- Hidden battlefield cards can be found and moved by modeled object actions, and owner-zone moves clear facedown/private runtime metadata before landing in owner zones.
+- Token creation marks tokens distinctly, rejects direct token creation into non-board zones through the internal action path, and tokens cease to exist when moved off-board through modeled paths.
+- Unit control is modeled separately from ownership for movement, targeting, combat participant grouping, Deflect costs, ability control, and live rules queries; owner-zone replacement still uses the owner.
+- Inactive/facedown rules text is gated for printed abilities, parsed keywords, rule modifiers, and continuous effect sources.
 - Temporary and Deathknell have limited lifecycle behavior.
 
 Missing areas:
 
-- Full permanent/card/object distinction, top-most cards, facedown zones, token lifecycle, ownership replacement, text boxes, inactive rules text, and controller/source semantics are incomplete.
+- Full permanent/card/object distinction, every future facedown-zone effect, complete text-box layering, and advanced controller/source semantics beyond the modeled paths remain incomplete.
 
 ### Abilities
 
 Status: **Partial**
 
 - Triggered abilities can be collected and queued after matching events.
-- Delayed triggered abilities can fire once.
-- Replacement abilities can intercept modeled score events.
-- Activated and modal abilities can be legal/paid/resolved in simple cases.
+- Simultaneous triggered abilities are grouped by controller, ordered starting with the turn player, and require an explicit order choice when one player controls multiple simultaneous triggers.
+- Ability controller is derived from current `controllerId` where modeled, falling back to zone owner/owner only when no controller is present; controlled activated, triggered, replacement, delayed, and passive abilities use that controller for ordering and resolution.
+- Nested triggered abilities created while resolving stack items are processed before older stack items continue.
+- Delayed triggered abilities can fire once or use repeated/non-consuming counters for modeled delayed entries.
+- Replacement abilities can intercept modeled score and draw events, including scoped delayed replacements with target-player/target-battlefield filters and repeated use counts.
+- Activated and modal abilities can be legal/paid/resolved in simple cases, and modal/activated targets are validated through the modeled draw, damage, buff, and rally target shapes.
 - Passive abilities can contribute to unit state.
+- Priority/meta actions such as trigger ordering, chain/focus passes, mulligan confirmation, Burn Out/Vision choices, combat resolution, and concession do not create unintended `action-applied` triggers.
 
 Missing areas:
 
 - Full `360-406` semantics are not implemented.
-- Ability source/controller changes, advanced trigger ordering, nested/repeated triggers, delayed replacements beyond simple cases, modal targeting across all effect shapes, and continuous effect generation from arbitrary card text are incomplete.
+- Continuous effect generation from arbitrary card text, replacement/prevention choices beyond currently modeled score/draw hooks, full optional/mandatory trigger policy, activated ability timing exceptions, and modal targeting for future effect shapes remain incomplete.
 
 ### Internal Game Actions
 
@@ -366,12 +396,16 @@ Status: **Partial framework**
 
 `InternalGameActionExecutor` supports modeled internal actions for:
 
+- Draw.
 - Recycle.
 - Discard.
 - Reveal.
+- Deal.
 - Kill.
 - Banish.
 - Stun.
+- Ready.
+- Modify Might.
 - Counter.
 - Prevent.
 - Create.
@@ -384,7 +418,10 @@ Status: **Partial framework**
 
 Current caveat:
 
-- These are low-level executor operations and tests, not all exposed as player-legal actions or wired into every card/effect path. Treat them as implementation building blocks, not full rule-family completion.
+- The online rules engine routes modeled stack effects for draw, damage, buff, and rally through the internal action pipeline after stack target revalidation. Draw keeps the Burn Out replacement/choice flow in the rules engine while using internal draw/recycle primitives for the resulting zone movement.
+- The executor supports all-or-nothing and do-as-much-as-possible batch application for modeled internal action groups.
+- Owner-zone internal moves strip runtime/facedown metadata when cards enter owner zones.
+- These are still implementation building blocks, not full rule-family completion. They are not all exposed as player-legal actions, and more advanced card text still needs to be modeled before every rule action can use this path consistently.
 
 ### Burn Out
 
@@ -407,7 +444,7 @@ Status: **Partial**
 
 Remaining gaps:
 
-- Simple spell damage does not run a full universal Deal action model with every prevention, source, bonus damage, replacement, and trigger hook.
+- Simple spell damage now uses the internal Deal primitive after stack target revalidation, but it does not yet run a full universal Deal action model with every prevention, source, bonus damage, replacement, and trigger hook.
 - Kill/lethal handling is still implemented in specific resolution paths rather than as one generalized rules action.
 
 ### Keywords
@@ -415,26 +452,41 @@ Remaining gaps:
 Status: **Partial**
 
 - `KeywordCatalog` parses and classifies: Accelerate, Action, Assault, Deathknell, Deflect, Ganking, Hidden, Legion, Reaction, Shield, Tank, Temporary, Vision, Equip, Quick-Draw, Repeat, Weaponmaster, Ambush, Hunt, Level, Unique, and Backline.
-- Implemented behavior exists for several keywords, including Accelerate, Reaction, Action, Deflect, Ganking, Hidden, Shield, Tank, Temporary, Deathknell, Backline, and Quick-Draw.
+- Implemented behavior exists for several keywords, including Accelerate, Reaction, Action, Deflect, Ganking, Hidden, Shield, Tank, Temporary, Deathknell, Backline, Quick-Draw, Ambush, Vision, Legion, Level, Equip, Repeat, Weaponmaster, Hunt, and in-game Unique.
+- Ambush is enforced by the server rules engine for unit-play legal actions and final validation: Ambush units can be played to battlefields where their controller already controls a unit, including at Reaction timing, and become illegal if that controlled unit is gone before finalization.
+- Vision creates a pending server-side choice for the controller to keep or recycle the top main-deck card, repeats for multiple Vision instances, blocks unrelated actions until resolved, and redacts the card identity from opponents.
+- The engine tracks cards finalized by each player during the current turn so Legion dependent text can become active after that controller has played another card. Current modeled dependent text supports energy cost reductions, self might bonuses, and self keyword grants through the layer-aware live characteristic queries.
+- Hunt awards XP to the controller of Hunt units at a successfully Conquered or Held battlefield, and Level dependent text becomes active when the controller has enough XP. Current modeled Level text uses the same dependent-text support as Legion.
+- Equip is exposed as a server-side action for controlled base gear with Equip, validates target control and Equip cost payment, and attaches the gear to a controlled unit's attached-card stack.
+- Repeat can be paid as an optional additional spell cost; paid Repeat instances are stored on the stack item and execute the currently modeled spell effect an additional time on resolution.
+- Weaponmaster can attach controlled Equipment with Equip as a unit is played by paying the modeled Equip cost with a 1-energy discount.
+- Unique has its full in-game behavior from rule `825.3`: it remains a card characteristic but adds no extra gameplay restriction after deck construction.
+- Printed keyword behavior is suppressed while a card's rules text is inactive or facedown; layered external grants still apply when their active source permits them.
 
 Missing or incomplete areas:
 
 - Many keyword behaviors are classified but not fully executed.
-- Unique is still primarily a deck/card constraint concept, not a complete in-game uniqueness rule.
-- Legion, Level, Vision, Equip, Repeat, Weaponmaster, Ambush, and Hunt need complete card-effect behavior.
+- Dependent keyword text is not a general card-text interpreter; currently modeled Legion/Level text covers energy cost reduction, self might bonuses, and self keyword grants.
+- Repeat uses the current engine's single target/mode selection shape for all executions; separate Repeat choices and per-execution target ordering remain incomplete.
+- Equip and Weaponmaster do not yet model non-resource costs, arbitrary Equip cost modifiers, altered Equip timing/targets, or advanced top-card attachment edge cases beyond the current inactive-rules-text gate.
+- Hunt XP is applied directly during modeled score resolution rather than through a fully general Conquer/Hold triggered ability system.
+- Ambush is implemented for the current unit-play model, but broader interactions with future top-most card/control-changing rules should be revisited when those systems are completed.
 
 ### Layers
 
 Status: **Partial**
 
 - `ContinuousEffectLayerResolver` evaluates trait, ability, and arithmetic layers.
-- It supports add/remove/set operations, dependencies, timestamps, source order, arithmetic increases before decreases, and JSON-defined effects.
+- It supports add/remove/set operations, source-scoped effects, object applicability filters, dependencies, timestamps, source order, arithmetic increases before decreases, and JSON-defined effects.
+- Card definitions can serialize structured continuous effects into match state.
+- Live unit might and keyword queries use layered characteristics for modeled combat, movement, targeting-cost, and ability-contribution paths.
+- Inactive/facedown sources no longer emit printed continuous effects or base printed abilities into the layer resolver.
 - Legacy `attachedMight` is folded into arithmetic might evaluation.
 
 Missing areas:
 
 - This is a focused characteristic resolver, not the full rules `468-475` system.
-- Full object applicability, timestamps from actual game events, dependencies across all characteristic types, continuous effects generated by card text, and layer interaction with every rules query are incomplete.
+- Dependencies across all characteristic types, continuous effects generated by arbitrary card text, and layer interaction with every future rules query are incomplete.
 
 ### Multiplayer And Team Specific Rules
 
@@ -448,22 +500,31 @@ Status: **Partial**
 - Team movement and team combat grouping have coverage.
 - Lobby loadout selection prevents teammates in team modes from saving the same selected battlefield; saving a teammate-conflicting loadout clears the teammate's duplicate battlefield selection and unreadies them.
 - FFA and team concession behavior exists for basic outcomes.
+- FFA and team concession cleanup removes conceding players' objects, pending work, battlefield contribution, and team shared-loss objects.
+- Multiplayer staged/active combat destinations reject nonparticipant unit placement from movement, direct play, and token creation paths.
 
 Missing areas:
 
-- Full FFA player-removal cleanup, teammate battlefield contribution rules, all final-point exceptions, team shared-object cleanup, and every multiplayer destination restriction are incomplete.
+- Remaining multiplayer-specific gaps are mostly in exhaustive card-effect exceptions, complete teammate battlefield contribution edge cases, and replacement/timing interactions beyond the currently modeled movement, placement, combat, and scoring paths.
 
 ## Frontend-Only Or Prototype Implementations To Watch
 
-The local/hotseat rules module under `frontend/src/features/game/rules/gameRules.ts` contains client-side rule resolution for setup, turns, movement, combat, scoring, stack effects, and manual actions. This is useful for local play/prototyping, but it should not be treated as authoritative for online matches.
+Status: **Retired from active frontend**
 
-The online frontend path uses server-provided legal actions and `onlineActionGuards.ts` to check legal-action type and payload schema before submitting. That is appropriate as a UI guard only; final legality remains server-side.
+Decision: frontend local gameplay rules should not remain an active local-hotseat feature in the production Vite app. The active `frontend/src` tree no longer contains `features/game/rules/gameRules.ts` or the local-hotseat screen components that imported it. The preserved copy under `archive/local-hotseat` is reference-only and is not imported by the active app.
 
-Important frontend-only/prototype concerns:
+The online frontend path uses server-provided legal actions and `onlineActionGuards.ts` to check legal-action type and exact payload schema before submitting. That remains a UI guard only; final legality remains server-side through the match API and SignalR action submission paths.
 
-- It can manually adjust points, readiness, damage, kills, recalls, controller, showdown, and combat staging.
-- It resolves some combat and local actions independently of the server engine.
-- Any online path should continue to use server-provided legal actions and backend responses as authoritative.
+Current guardrails:
+
+- `frontend/eslint.config.js` blocks production frontend imports from `features/game/rules/*` and `archive/local-hotseat/**`.
+- `OnlineBattlePage` requests legal actions from the server, submits selected action IDs/types/payloads back to the server, and refreshes legal actions after state changes.
+- `OnlinePlaymat` receives board intents derived from server legal-action payloads; it does not import local gameplay mutation helpers.
+
+Remaining risks:
+
+- The online UI still has presentation-only helpers for combat assignment defaults and validation messaging. These must remain convenience checks only; server-side action validation is authoritative.
+- If local hot-seat play is restored later, it should be built as a separate explicitly named prototype or offline mode and must not share imports with online match authority.
 
 ## Recommended Tracking Order
 
@@ -482,3 +543,13 @@ Important frontend-only/prototype concerns:
 13. Next: expand privacy/reveal/facedown rules from redaction support into a full information model.
 14. Next: finish FFA/team player-removal cleanup and remaining multiplayer destination/combat restrictions.
 15. Next: decide whether frontend local rules remain a local-hotseat feature or should be retired in favor of server-provided legal actions only.
+16. Done: routed currently modeled stack card effects through the internal action pipeline for draw/recycle movement, damage, buff, and rally while preserving target revalidation and Burn Out choices.
+17. Done: expanded privacy/reveal/facedown rules from redaction support into a centralized information model for API views.
+18. Done: finished FFA/team player-removal cleanup and remaining modeled multiplayer destination/combat restrictions.
+19. Done: retired active frontend local rules in favor of server-provided legal actions only; retained `archive/local-hotseat` as reference-only and added frontend import guardrails.
+20. Done: implemented modeled owner-zone replacement, token disappearance off-board, hidden-card cleanup, Vision choices, simultaneous trigger ordering, and structured continuous effects wired into live unit queries.
+21. Done: implemented the remaining modeled keyword slice for Legion, Level, Equip, Repeat, Weaponmaster, Hunt, and in-game Unique behavior, with NUnit coverage for legal action generation, payment, state transitions, XP/Level interaction, Repeat resolution, and Unique's no-extra-gameplay-effect rule.
+22. Done: implemented the feasible ability-framework slice for source/controller semantics, nested trigger FEPR processing, repeated/scoped delayed replacements, modeled modal targeting, and meta-action trigger guards.
+23. Done: implemented modeled Golden/Silver rule support for typed rule modifiers, "cannot beats can" precedence, and do-as-much-as-possible internal action batches.
+24. Done: implemented setup/object/layer edge cases for battlefield contributor fallback, champion-zone consumption, controller-based object semantics, hidden/facedown owner-zone cleanup, and inactive rules-text gating.
+25. Next: replace the focused dependent-keyword, rule-modifier, and Repeat/Equip parsing with a fuller card-text instruction/choice model when broader card effect coverage is added.

@@ -1,11 +1,12 @@
 import { HubConnectionBuilder, HubConnectionState, LogLevel, type HubConnection } from '@microsoft/signalr'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import './OnlineBattlePage.css'
 import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../shared/api'
 import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../shared/api'
 import { gameModes, type Card, type EffectType, type GameMode, type GameState, type SavedDeck, type Unit } from '../../shared/models'
 import { findServerApprovedAction, hasServerApprovedAction, serverApprovedHandIndexes } from './onlineActionGuards'
-import { OnlinePlaymat } from './OnlinePlaymat'
+import { OnlinePlaymat, type BoardActionChoice, type HandCardIntent, type UnitMoveIntent } from './OnlinePlaymat'
 
 type OnlineBattlePageProps = {
   apiClient: ApiClient
@@ -23,8 +24,183 @@ type ResolveCombatPayload = {
   assignments: CombatAssignments
 }
 
+type DragActionChoice = BoardActionChoice
+
+type DragActionPrompt = {
+  cardName: string
+  choices: DragActionChoice[]
+}
+
 function unitOwnerId(unit: Unit): number {
   return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
+}
+
+function stringArrayPayload(action: LegalAction, key: string): string[] {
+  const value = action.payloadSchema?.[key]
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function stringPayload(action: LegalAction, key: string): string | null {
+  const value = action.payloadSchema?.[key]
+  return typeof value === 'string' ? value : null
+}
+
+function payloadFromServerAction(action: LegalAction, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...(action.payloadSchema ?? {}),
+    ...overrides,
+  }
+}
+
+function legalActionsForHandIndex(legalActions: LegalAction[], playerId: number, type: string, handIndex: number): LegalAction[] {
+  return legalActions.filter((action) =>
+    action.playerId === playerId &&
+    action.type === type &&
+    Number(action.payloadSchema?.handIndex) === handIndex)
+}
+
+function battlefieldName(game: GameState, battlefieldId: string): string {
+  return game.battlefields.find((field) => field.id === battlefieldId)?.name ?? 'battlefield'
+}
+
+function createEmptyHandIntent(): HandCardIntent {
+  return { actions: [], attachUnitIds: [], battlefieldIds: [], canUseBase: false }
+}
+
+function buildHandCardIntents(
+  game: GameState | null,
+  legalActions: LegalAction[],
+  playerId: number,
+): Record<number, HandCardIntent> {
+  const player = game?.players.find((candidate) => candidate.id === playerId)
+  if (!game || !player) return {}
+
+  return Object.fromEntries(player.hand.map((_, handIndex) => {
+    const intent = createEmptyHandIntent()
+    const actionKeys = new Set<string>()
+    const addAction = (choice: BoardActionChoice) => {
+      if (actionKeys.has(choice.key)) return
+      actionKeys.add(choice.key)
+      intent.actions.push(choice)
+    }
+
+    for (const action of legalActionsForHandIndex(legalActions, playerId, 'play-unit', handIndex)) {
+      const battlefieldId = stringPayload(action, 'battlefieldId')
+      const isAccelerated = action.payloadSchema?.accelerate === true
+      const payload = payloadFromServerAction(action)
+
+      if (battlefieldId) {
+        intent.battlefieldIds.push(battlefieldId)
+      } else {
+        intent.canUseBase = true
+      }
+
+      addAction({
+        key: action.id,
+        label: battlefieldId
+          ? `${isAccelerated ? 'Accelerate: ' : ''}${battlefieldName(game, battlefieldId)}`
+          : isAccelerated ? 'Accelerate to base' : 'Base',
+        type: 'play-unit',
+        payload,
+      })
+    }
+
+    for (const action of legalActionsForHandIndex(legalActions, playerId, 'play-card', handIndex)) {
+      addAction({
+        key: action.id,
+        label: action.label.replace(/^Play\s+/i, 'Play '),
+        type: action.type,
+        payload: payloadFromServerAction(action),
+      })
+    }
+
+    for (const action of legalActionsForHandIndex(legalActions, playerId, 'hide-card', handIndex)) {
+      for (const battlefieldId of stringArrayPayload(action, 'battlefieldIds')) {
+        intent.battlefieldIds.push(battlefieldId)
+        addAction({
+          key: `${action.id}-${battlefieldId}`,
+          label: `Hidden: ${battlefieldName(game, battlefieldId)}`,
+          type: action.type,
+          payload: payloadFromServerAction(action, { battlefieldId }),
+        })
+      }
+    }
+
+    for (const action of legalActionsForHandIndex(legalActions, playerId, 'attach-card', handIndex)) {
+      const targetUnitId = stringPayload(action, 'targetUnitId')
+      if (!targetUnitId) {
+        continue
+      }
+
+      intent.attachUnitIds.push(targetUnitId)
+      addAction({
+        key: action.id,
+        label: action.label.replace(/^Attach\s+/i, 'Attach '),
+        type: 'attach-card',
+        payload: payloadFromServerAction(action),
+      })
+    }
+
+    intent.battlefieldIds = Array.from(new Set(intent.battlefieldIds))
+    intent.attachUnitIds = Array.from(new Set(intent.attachUnitIds))
+    return [handIndex, intent] as const
+  }).filter(([, intent]) =>
+    intent.actions.length > 0 ||
+    intent.attachUnitIds.length > 0 ||
+    intent.battlefieldIds.length > 0 ||
+    intent.canUseBase)) as Record<number, HandCardIntent>
+}
+
+function buildUnitMoveIntents(legalActions: LegalAction[], playerId: number): Record<string, UnitMoveIntent> {
+  const intents: Record<string, UnitMoveIntent> = {}
+
+  for (const action of legalActions.filter((candidate) => candidate.playerId === playerId && candidate.type === 'move-unit')) {
+    const unitId = stringPayload(action, 'unitId')
+    const destinationId = stringPayload(action, 'battlefieldId')
+    if (!unitId || !destinationId) {
+      continue
+    }
+
+    const intent = intents[unitId] ?? { battlefieldIds: [], canMoveToBase: false }
+    if (destinationId === 'base') {
+      intent.canMoveToBase = true
+    } else {
+      intent.battlefieldIds.push(destinationId)
+    }
+
+    intents[unitId] = intent
+  }
+
+  return Object.fromEntries(Object.entries(intents)
+    .map(([unitId, intent]) => [unitId, {
+      battlefieldIds: Array.from(new Set(intent.battlefieldIds)),
+      canMoveToBase: intent.canMoveToBase,
+    }] as const)
+    .filter(([, intent]) => intent.battlefieldIds.length > 0 || intent.canMoveToBase))
+}
+
+function isBoardHandledAction(action: LegalAction): boolean {
+  return action.type === 'play-unit' ||
+    action.type === 'move-unit' ||
+    action.type === 'play-card' ||
+    action.type === 'hide-card' ||
+    action.type === 'attach-card' ||
+    action.type === 'summon-champion' ||
+    action.type === 'resolve-combat'
+}
+
+const payloadlessGenericActionTypes = new Set([
+  'advance-phase',
+  'concede',
+  'end-turn',
+  'pass-chain-window',
+  'pass-focus',
+])
+
+function canSubmitGenericAction(action: LegalAction): boolean {
+  return action.type === 'confirm-mulligan' ||
+    action.payloadSchema !== undefined ||
+    payloadlessGenericActionTypes.has(action.type)
 }
 
 function currentMight(unit: Unit): number {
@@ -282,6 +458,41 @@ function CombatShowdownModal({
   )
 }
 
+function DragActionModal({
+  prompt,
+  onCancel,
+  onChoose,
+}: {
+  prompt: DragActionPrompt
+  onCancel: () => void
+  onChoose: (choice: DragActionChoice) => void
+}) {
+  return createPortal(
+    <div className="combat-modal-backdrop" role="presentation">
+      <section aria-modal="true" className="drag-action-modal" role="dialog">
+        <header>
+          <div>
+            <span>Drag action</span>
+            <h3>{prompt.cardName}</h3>
+          </div>
+          <button aria-label="Cancel drag action" className="combat-modal-close" type="button" onClick={onCancel}>X</button>
+        </header>
+        <div className="drag-action-options">
+          {prompt.choices.map((choice) => (
+            <button key={choice.key} type="button" onClick={() => onChoose(choice)}>
+              {choice.label}
+            </button>
+          ))}
+        </div>
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  )
+}
+
 export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBattlePageProps) {
   const cardsApi = useMemo(() => createCardsApi(apiClient), [apiClient])
   const lobbiesApi = useMemo(() => createLobbiesApi(apiClient), [apiClient])
@@ -303,6 +514,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [mulliganHandIndexes, setMulliganHandIndexes] = useState<number[]>([])
   const [combatModalOpen, setCombatModalOpen] = useState(false)
   const [targetSelection, setTargetSelection] = useState<{ handIndex: number; cardName: string; kind: 'unit' | 'lane'; requiredCount: number; selectedUnitIds: string[] } | null>(null)
+  const [dragActionPrompt, setDragActionPrompt] = useState<DragActionPrompt | null>(null)
   const [events, setEvents] = useState<MatchEvent[]>([])
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
   const [status, setStatus] = useState('Create or join a lobby, or use quick queue for 1v1.')
@@ -333,26 +545,72 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const effectiveSelectedBattlefieldId = battlefieldOptions.some((battlefield) => battlefield.id === selectedBattlefieldId)
     ? selectedBattlefieldId
     : battlefieldOptions[0]?.id ?? ''
-  const playerId = match?.players.find((player) => player.userId === session?.user.id)?.playerId ?? 0
+  const playerId = useMemo(
+    () => match?.players.find((player) => player.userId === session?.user.id)?.playerId ?? 0,
+    [match, session?.user.id],
+  )
   const isMulliganTurn =
     state?.stage === 'mulligan' && !(state.mulliganConfirmedPlayerIds ?? []).includes(playerId)
   const isHost = lobby?.hostUserId === session?.user.id
   const isAdmin = session?.user.isAdmin === true
   const canReady = Boolean(lobby && selectedDeck && effectiveSelectedBattlefieldId)
   const playableCardHandIndexes = serverApprovedHandIndexes(legalActions, playerId, 'play-card')
+  const hideableCardHandIndexes = serverApprovedHandIndexes(legalActions, playerId, 'hide-card')
   const canPlayUnit = hasServerApprovedAction(legalActions, playerId, 'play-unit')
+  const canAttachCard = hasServerApprovedAction(legalActions, playerId, 'attach-card')
   const canMoveUnit = hasServerApprovedAction(legalActions, playerId, 'move-unit')
   const canSummonChampion = hasServerApprovedAction(legalActions, playerId, 'summon-champion')
   const canResolveCombat = Boolean(state?.activeCombat && hasServerApprovedAction(legalActions, playerId, 'resolve-combat'))
+  const handCardIntents = useMemo(
+    () => buildHandCardIntents(state, legalActions, playerId),
+    [legalActions, playerId, state],
+  )
+  const unitMoveIntents = useMemo(
+    () => buildUnitMoveIntents(legalActions, playerId),
+    [legalActions, playerId],
+  )
+  const visibleActionButtons = legalActions.filter((action) =>
+    action.playerId === playerId &&
+    !isBoardHandledAction(action) &&
+    canSubmitGenericAction(action) &&
+    !(canResolveCombat && action.type === 'resolve-combat'))
 
   useEffect(() => {
     playerIdRef.current = playerId
   }, [playerId])
 
+  const loadLobbies = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      try {
+        setLobbies(await lobbiesApi.listLobbies())
+      } catch (error) {
+        if (!silent) {
+          setStatus(error instanceof Error ? error.message : 'Unable to load lobbies.')
+        }
+      }
+    },
+    [lobbiesApi],
+  )
+
   useEffect(() => {
-    if (!session) return
-    void loadLobbies()
-  }, [session])
+    if (!session || view !== 'lobbies' || match) return
+
+    let cancelled = false
+    const refresh = async (silent = true) => {
+      if (cancelled) return
+      await loadLobbies({ silent })
+    }
+
+    void refresh(false)
+    const intervalId = window.setInterval(() => {
+      void refresh(true)
+    }, 5000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [loadLobbies, match, session, view])
 
   useEffect(() => {
     const unresolvedIds = selectedDeck?.battlefieldDeckIds.filter((id) => !cards.some((card) => card.id === id) && !battlefieldNames[id]) ?? []
@@ -455,14 +713,6 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     await connection.start()
     connectionRef.current = connection
     return connection
-  }
-
-  async function loadLobbies() {
-    try {
-      setLobbies(await lobbiesApi.listLobbies())
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Unable to load lobbies.')
-    }
   }
 
   async function createLobby() {
@@ -601,7 +851,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
         actionId: action.id,
         type: action.type,
         playerId: action.playerId,
-        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : action.payloadSchema ?? {},
+        payload: action.type === 'confirm-mulligan' ? { handIndexes: mulliganHandIndexes } : payloadFromServerAction(action),
         expectedSequenceNumber: match.sequenceNumber,
       })
     } catch (error) {
@@ -631,11 +881,15 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   }
 
   async function playUnit(handIndex: number, battlefieldId?: string) {
-    await submitTypedAction('play-unit', battlefieldId ? { handIndex, battlefieldId } : { handIndex }, 'Unable to play unit.')
+    const action = findServerApprovedAction(legalActions, playerId, 'play-unit', battlefieldId ? { handIndex, battlefieldId } : { handIndex })
+    if (!action) return
+    await submitTypedAction('play-unit', payloadFromServerAction(action), 'Unable to play unit.')
   }
 
   async function moveUnit(unitId: string, battlefieldId: string) {
-    await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
+    const action = findServerApprovedAction(legalActions, playerId, 'move-unit', { unitId, battlefieldId })
+    if (!action) return
+    await submitTypedAction('move-unit', payloadFromServerAction(action), 'Unable to move unit.')
   }
 
   async function playCard(handIndex: number, targetUnitId?: string, targetLaneId?: string, targetUnitIds?: string[]) {
@@ -688,6 +942,12 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     setTargetSelection(null)
   }
 
+  async function attachCard(handIndex: number, targetUnitId: string) {
+    const action = findServerApprovedAction(legalActions, playerId, 'attach-card', { handIndex, targetUnitId })
+    if (!action) return
+    await submitTypedAction('attach-card', payloadFromServerAction(action), 'Unable to attach card.')
+  }
+
   async function summonChampion() {
     await submitTypedAction('summon-champion', {}, 'Unable to summon champion.')
   }
@@ -710,6 +970,71 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
       const next = current.includes(mode) ? current.filter((item) => item !== mode) : [...current, mode]
       return next.length === 0 ? [mode] : next
     })
+  }
+
+  function queueOrSubmitDragChoices(cardName: string, choices: DragActionChoice[]) {
+    if (choices.length === 0) return
+    if (choices.length === 1) {
+      const [choice] = choices
+      void submitTypedAction(choice.type, choice.payload, `Unable to ${choice.label.toLowerCase()}.`)
+      return
+    }
+
+    setDragActionPrompt({ cardName, choices })
+  }
+
+  function cardNameAt(handIndex: number): string {
+    return state?.players.find((player) => player.id === playerId)?.hand[handIndex]?.name ?? 'Card'
+  }
+
+  function dropCardOnBattlefield(handIndex: number, battlefieldId: string) {
+    const choices: DragActionChoice[] = []
+    const playUnitAction = findServerApprovedAction(legalActions, playerId, 'play-unit', { handIndex, battlefieldId })
+    if (playUnitAction) {
+      choices.push({ key: playUnitAction.id, label: playUnitAction.label, type: 'play-unit', payload: payloadFromServerAction(playUnitAction) })
+    }
+
+    const playCardAction = findServerApprovedAction(legalActions, playerId, 'play-card', { handIndex })
+    if (playCardAction) {
+      choices.push({ key: playCardAction.id, label: playCardAction.label, type: 'play-card', payload: payloadFromServerAction(playCardAction) })
+    }
+
+    const hideCardAction = findServerApprovedAction(legalActions, playerId, 'hide-card', { handIndex, battlefieldId })
+    if (hideCardAction) {
+      choices.push({ key: `${hideCardAction.id}-${battlefieldId}`, label: 'Play hidden', type: 'hide-card', payload: payloadFromServerAction(hideCardAction, { battlefieldId }) })
+    }
+
+    queueOrSubmitDragChoices(cardNameAt(handIndex), choices)
+  }
+
+  function dropCardOnBase(handIndex: number) {
+    const choices: DragActionChoice[] = []
+    const playUnitAction = findServerApprovedAction(legalActions, playerId, 'play-unit', { handIndex })
+    if (playUnitAction) {
+      choices.push({ key: playUnitAction.id, label: playUnitAction.label, type: 'play-unit', payload: payloadFromServerAction(playUnitAction) })
+    }
+
+    const playCardAction = findServerApprovedAction(legalActions, playerId, 'play-card', { handIndex })
+    if (playCardAction) {
+      choices.push({ key: playCardAction.id, label: playCardAction.label, type: 'play-card', payload: payloadFromServerAction(playCardAction) })
+    }
+
+    queueOrSubmitDragChoices(cardNameAt(handIndex), choices)
+  }
+
+  function dropCardOnUnit(handIndex: number, targetUnitId: string) {
+    const choices: DragActionChoice[] = []
+    const attachAction = findServerApprovedAction(legalActions, playerId, 'attach-card', { handIndex, targetUnitId })
+    if (attachAction) {
+      choices.push({ key: attachAction.id, label: attachAction.label, type: 'attach-card', payload: payloadFromServerAction(attachAction) })
+    }
+
+    const playCardAction = findServerApprovedAction(legalActions, playerId, 'play-card', { handIndex })
+    if (playCardAction) {
+      choices.push({ key: playCardAction.id, label: playCardAction.label, type: 'play-card', payload: payloadFromServerAction(playCardAction) })
+    }
+
+    queueOrSubmitDragChoices(cardNameAt(handIndex), choices)
   }
 
   return (
@@ -896,8 +1221,19 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               viewerPlayerId={playerId}
               canPlayUnit={canPlayUnit}
               onPlayUnit={playUnit}
+              onDropCardOnBase={dropCardOnBase}
+              onDropCardOnBattlefield={dropCardOnBattlefield}
+              onDropCardOnUnit={dropCardOnUnit}
               playableCardHandIndexes={playableCardHandIndexes}
+              hideableCardHandIndexes={hideableCardHandIndexes}
               onPlayCard={requestPlayCard}
+              canAttachCard={canAttachCard}
+              handCardIntents={handCardIntents}
+              unitMoveIntents={unitMoveIntents}
+              onChooseHandAction={(choice) => {
+                void submitTypedAction(choice.type, choice.payload, `Unable to ${choice.label.toLowerCase()}.`)
+              }}
+              onAttachCard={attachCard}
               canMoveUnit={canMoveUnit}
               onMoveUnit={moveUnit}
               canSummonChampion={canSummonChampion}
@@ -947,8 +1283,18 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
                 viewerPlayerId={playerId}
               />
             )}
+            {dragActionPrompt && (
+              <DragActionModal
+                prompt={dragActionPrompt}
+                onCancel={() => setDragActionPrompt(null)}
+                onChoose={(choice) => {
+                  setDragActionPrompt(null)
+                  void submitTypedAction(choice.type, choice.payload, `Unable to ${choice.label.toLowerCase()}.`)
+                }}
+              />
+            )}
             {legalActions.length === 0 && <p>No legal actions for your seat right now.</p>}
-            {legalActions.filter((action) => !(canResolveCombat && action.type === 'resolve-combat')).map((action) => (
+            {visibleActionButtons.map((action) => (
               <button key={action.id} type="button" onClick={() => void submitAction(action)}>
                 {action.label}
               </button>

@@ -22,13 +22,19 @@
   gap: 10px;
 }
 
-.app-nav button {
+.app-nav a {
+  align-items: center;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.18);
   color: #f7efe2;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 12px;
+  text-decoration: none;
 }
 
-.app-nav button.active {
+.app-nav a.active {
   background: linear-gradient(135deg, #ff7a45, #ffcc66);
   color: #24110a;
 }
@@ -871,15 +877,17 @@ button:disabled {
   display: grid;
   gap: 10px;
   max-height: min(76vh, 520px);
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
   padding: 10px;
   pointer-events: none;
   position: fixed;
-  transform: translate(22px, calc(-100% - 18px));
   width: min(300px, 32vw);
   z-index: 40;
 }
 
 .hover-card-preview:has(.horizontal-card-art) {
+  max-width: calc(100vw - 24px);
   width: min(720px, 72vw);
 }
 
@@ -901,6 +909,67 @@ button:disabled {
   font-size: 0.9rem;
   line-height: 1.35;
   margin: 0;
+}
+
+.app-action-menu-backdrop {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.46);
+  display: grid;
+  inset: 0;
+  isolation: isolate;
+  justify-items: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 2147483647;
+}
+
+.app-action-menu {
+  background:
+    linear-gradient(135deg, rgba(200, 170, 110, 0.12), transparent 18%),
+    linear-gradient(180deg, #111821, #05080d);
+  border: 1px solid rgba(240, 210, 138, 0.72);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.64);
+  color: var(--rift-text);
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 48px);
+  max-width: min(460px, calc(100vw - 48px));
+  overflow: auto;
+  padding: 18px;
+  position: relative;
+  width: min(460px, calc(100vw - 48px));
+  z-index: 1;
+}
+
+.app-action-menu header,
+.app-action-menu footer {
+  display: grid;
+  gap: 8px;
+}
+
+.app-action-menu header span {
+  color: var(--rift-gold);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.app-action-menu h3 {
+  margin: 0;
+}
+
+.app-action-menu-options {
+  display: grid;
+  gap: 10px;
+}
+
+.app-action-menu-options button,
+.app-action-menu footer button {
+  justify-content: center;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  width: 100%;
 }
 
 .deck-stack {
@@ -1515,5 +1584,297 @@ textarea {
     border-top: 1px solid rgba(255, 255, 255, 0.12);
     padding-left: 0;
     padding-top: 14px;
+  }
+}
+
+/* Dark, angular fantasy treatment inspired by ornate competitive game interfaces. */
+.app-shell {
+  background:
+    linear-gradient(180deg, rgba(5, 7, 10, 0.16), rgba(5, 7, 10, 0.88)),
+    repeating-linear-gradient(90deg, transparent 0 74px, rgba(200, 170, 110, 0.05) 75px 76px);
+  color: var(--rift-text);
+  padding: 22px;
+}
+
+.app-header {
+  background: rgba(8, 10, 14, 0.96);
+  border: 1px solid rgba(200, 170, 110, 0.24);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.46);
+  margin: -22px -22px 24px;
+  padding: 14px 22px;
+}
+
+.app-nav {
+  gap: 4px;
+}
+
+.app-nav a,
+.deck-tabs button,
+.secondary-button,
+.profile-menu-button,
+.online-list-item,
+.admin-list-item,
+.saved-deck,
+.deck-list-card {
+  background: linear-gradient(180deg, rgba(20, 24, 31, 0.94), rgba(7, 10, 15, 0.94));
+  border: 1px solid rgba(200, 170, 110, 0.28);
+  border-radius: 0;
+  color: var(--rift-text);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.app-nav a.active,
+.deck-tabs button.active,
+.admin-list-item.active,
+.online-list-item.active {
+  background: linear-gradient(180deg, rgba(39, 32, 19, 0.96), rgba(12, 14, 18, 0.96));
+  border-color: var(--rift-gold-bright);
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.18),
+    0 0 22px rgba(200, 170, 110, 0.18);
+  color: var(--rift-gold-bright);
+}
+
+button,
+.file-button {
+  background: linear-gradient(180deg, #1f6f83, #0b3f52);
+  border: 1px solid #7be3ec;
+  border-radius: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.82);
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px);
+  color: #061015;
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  min-height: 38px;
+  text-transform: uppercase;
+}
+
+.app-nav a:hover,
+button:hover:not(:disabled),
+.file-button:hover {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  opacity: 0.42;
+}
+
+.profile-avatar,
+.user-avatar,
+.score-dot,
+.battlefield header strong,
+.online-player-mat-header strong {
+  background: radial-gradient(circle at 38% 26%, var(--rift-gold-bright), var(--rift-gold) 48%, #4b391e 100%);
+  border-color: rgba(240, 210, 138, 0.7);
+  color: #090b0f;
+}
+
+.hero-panel,
+.table,
+.editor,
+.setup-panel,
+.importer,
+.deck-builder,
+.deck-card-pool,
+.deck-list-page,
+.auth-card,
+.profile-menu,
+.sticky-deck-list,
+.admin-page,
+.admin-list,
+.admin-panel,
+.admin-editor,
+.admin-import,
+.admin-import-result,
+.setup-summary,
+.setup-actions,
+.phase-bar,
+.showdown-panel,
+.manual-tools,
+.mulligan-panel,
+.player,
+.panel-card,
+.battlefield,
+.base,
+.hand-zone,
+.pass-shield,
+.shared-deck,
+.empty-deck-list,
+.deck-filters,
+.deck-list-filters,
+.migration-panel {
+  background:
+    linear-gradient(135deg, rgba(200, 170, 110, 0.08), transparent 18%),
+    linear-gradient(180deg, var(--rift-panel-2), var(--rift-panel));
+  border: 1px solid rgba(200, 170, 110, 0.3);
+  border-radius: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 210, 138, 0.06),
+    0 22px 70px rgba(0, 0, 0, 0.42);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+}
+
+.hero-panel,
+.deck-builder,
+.deck-list-page,
+.admin-page,
+.table {
+  border-color: rgba(200, 170, 110, 0.42);
+}
+
+.frontpage {
+  background:
+    linear-gradient(90deg, rgba(5, 7, 10, 0.92), rgba(5, 7, 10, 0.54)),
+    url("../assets/hero.png") center / cover;
+  min-height: 560px;
+}
+
+.eyebrow,
+label,
+.sticky-deck-list h4,
+.deck-summary-section summary,
+.hint,
+.import-status {
+  color: var(--rift-gold);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--rift-text);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  color: var(--rift-gold-bright);
+  text-shadow: 0 0 34px rgba(200, 170, 110, 0.24);
+}
+
+p,
+.log p,
+.rules p {
+  color: #d8d0c1;
+}
+
+.player small,
+.card small,
+.unit-card small,
+.mini-card span,
+.battlefield span,
+.shared-deck small,
+.empty-deck-list p,
+.admin-list-item small,
+.admin-list-item span,
+.no-runes,
+.rune-note,
+.profile-menu-header small,
+.auth-panel small {
+  color: var(--rift-muted);
+}
+
+input,
+select,
+textarea {
+  background: #05080d;
+  border: 1px solid rgba(200, 170, 110, 0.34);
+  border-radius: 0;
+  color: var(--rift-text);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--rift-gold-bright);
+  box-shadow: 0 0 0 1px rgba(240, 210, 138, 0.24);
+  outline: none;
+}
+
+.playmat {
+  background:
+    linear-gradient(90deg, rgba(200, 170, 110, 0.08) 1px, transparent 1px) 58px 0 / 1px 100% no-repeat,
+    radial-gradient(circle at 50% 15%, rgba(10, 200, 211, 0.08), transparent 32%),
+    linear-gradient(180deg, #090d13, #05070a);
+  border-color: rgba(200, 170, 110, 0.38);
+  border-radius: 0;
+}
+
+.mat-zone,
+.empty-slot,
+.hidden-hand {
+  background: rgba(4, 7, 11, 0.58);
+  border-color: rgba(200, 170, 110, 0.38);
+  border-radius: 0;
+}
+
+.zone-label {
+  background: #05070a;
+  color: var(--rift-gold-bright);
+}
+
+.card,
+.mini-card,
+.unit-card,
+.deck-stack,
+.hover-card-preview {
+  background: linear-gradient(180deg, rgba(18, 23, 31, 0.96), rgba(7, 10, 15, 0.96));
+  border: 1px solid rgba(200, 170, 110, 0.34);
+  border-radius: 2px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+}
+
+.card-art,
+.card:has(.card-art:only-child) .card-art,
+.mini-card:has(.card-art:only-child) .card-art,
+.unit-card:has(.card-art:only-child) .card-art,
+.unit-card .card-art,
+.rune-card .card-art {
+  border-color: rgba(200, 170, 110, 0.42);
+  border-radius: 2px;
+}
+
+.card b,
+.hidden-hand strong,
+.deck-stack,
+.battlefield header strong {
+  color: var(--rift-gold-bright);
+}
+
+.drop-zone:hover {
+  background: rgba(200, 170, 110, 0.08);
+  outline-color: rgba(240, 210, 138, 0.78);
+}
+
+.unit-card.selected,
+.unit-card.selectable:hover,
+.card.selected,
+.mini-card.selected,
+.player.active {
+  outline-color: var(--rift-gold-bright);
+  box-shadow: 0 0 24px rgba(200, 170, 110, 0.28);
+}
+
+.form-error,
+.deck-errors {
+  color: #ffb0a8;
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    padding: 14px;
+  }
+
+  .app-header {
+    margin: -14px -14px 18px;
+    padding: 12px 14px;
   }
 }
