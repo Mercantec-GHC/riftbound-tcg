@@ -1554,6 +1554,11 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             .Select(value => value!.Value)
             .ToArray();
         var effectType = Enum.TryParse<CardEffectType>(card.EffectType, true, out var parsedEffect) ? parsedEffect : CardEffectType.Rally;
+        var steps = DeserializeEffectSteps(card.EffectsJson)
+            .Select(step => Enum.TryParse<CardEffectType>(step.Type, true, out var parsedStepType) ? new CardEffectStep(parsedStepType, step.Amount) : null)
+            .Where(step => step is not null)
+            .Select(step => step!)
+            .ToArray();
         return new CardDefinition(
             card.Id,
             card.Name,
@@ -1567,13 +1572,14 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
             card.Image,
             card.CardType,
             card.Supertype,
-            new CardEffectDefinition(effectType, card.EffectAmount));
+            new CardEffectDefinition(effectType, card.EffectAmount) { Steps = steps });
     }
 
     private static CardDto ToDto(CardEntity card)
     {
         var tags = Deserialize(card.TagsJson);
-        return new CardDto(card.Id, card.Name, EffectiveKind(card), tags.Length > 0 ? tags : InferTagsFromName(card.Name), card.Domain, Deserialize(card.DomainsJson), card.Cost, card.Might, card.Text, card.Image, card.CardType, card.Supertype, new CardEffectDto(card.EffectType, card.EffectAmount));
+        var steps = DeserializeEffectSteps(card.EffectsJson);
+        return new CardDto(card.Id, card.Name, EffectiveKind(card), tags.Length > 0 ? tags : InferTagsFromName(card.Name), card.Domain, Deserialize(card.DomainsJson), card.Cost, card.Might, card.Text, card.Image, card.CardType, card.Supertype, new CardEffectDto(card.EffectType, card.EffectAmount, steps.Length > 0 ? steps : null));
     }
 
     private async Task<CardUpsertResultDto> UpsertCardCoreAsync(CardDto card, CancellationToken cancellationToken)
@@ -1604,6 +1610,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         entity.Supertype = card.Supertype;
         entity.EffectType = card.Effect.Type;
         entity.EffectAmount = card.Effect.Amount;
+        entity.EffectsJson = Serialize(card.Effect.Steps ?? []);
         entity.UpdatedAt = now;
         return new CardUpsertResultDto(ToDto(entity), created);
     }
@@ -2102,6 +2109,11 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
     private static string[] Deserialize(string json)
     {
         return JsonSerializer.Deserialize<string[]>(json, JsonOptions) ?? [];
+    }
+
+    private static CardEffectStepDto[] DeserializeEffectSteps(string json)
+    {
+        return JsonSerializer.Deserialize<CardEffectStepDto[]>(json, JsonOptions) ?? [];
     }
 
     private static int StableSeed(string value)

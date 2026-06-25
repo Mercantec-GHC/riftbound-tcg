@@ -97,9 +97,28 @@ public enum CardEffectType
     Damage,
     Draw,
     Buff,
-    Rally
+    Rally,
+    Kill,
+    Banish,
+    Stun
 }
+
+/// <summary>
+/// One instruction in a card's effect sequence. Target-requiring steps (Damage, Buff, Kill,
+/// Banish, Stun) consume the next not-yet-consumed entry from the stack item's chosen targets,
+/// in step order; target-less steps (Draw) act on the controller only.
+/// </summary>
+public sealed record CardEffectStep(
+    CardEffectType Type,
+    int Amount);
 
 public sealed record CardEffectDefinition(
     CardEffectType Type,
-    int Amount);
+    int Amount)
+{
+    /// <summary>
+    /// Ordered multi-instruction form, e.g. "Deal 4 to a unit. Draw 1." When non-empty, the
+    /// resolver executes these in order instead of the single Type/Amount above.
+    /// </summary>
+    public IReadOnlyList<CardEffectStep> Steps { get; init; } = [];
+}

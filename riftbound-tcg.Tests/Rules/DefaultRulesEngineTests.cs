@@ -1294,6 +1294,153 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void buff_card_naming_two_units_applies_to_both_chosen_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("back-to-back", "Back to Back", "spell", "[Reaction] Give two friendly units each +2 Might this turn.", "buff", 2, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("ally-a", ownerId: 0, might: 2));
+        battlefield["units"]!.AsArray().Add(Unit("ally-b", ownerId: 0, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitIds"] = new[] { "ally-a", "ally-b" } }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var units = resolved.State.State["battlefields"]![0]!["units"]!.AsArray();
+        Assert.That(units.Select(unit => unit!["attachedMight"]!.GetValue<int>()), Is.All.EqualTo(2));
+    }
+
+    [Test]
+    public void buff_card_naming_two_units_rejects_a_single_target()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("back-to-back", "Back to Back", "spell", "[Reaction] Give two friendly units each +2 Might this turn.", "buff", 2, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("ally-a", ownerId: 0, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitIds"] = new[] { "ally-a" } }), state.SequenceNumber);
+
+        Assert.That(played.Accepted, Is.False);
+    }
+
+    [Test]
+    public void stun_card_naming_a_friendly_unit_and_an_enemy_unit_requires_two_targets()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("facebreaker", "Facebreaker", "spell", "[Action] Stun a friendly unit and an enemy unit at the same battlefield.", "stun", 0, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("ally-a", ownerId: 0, might: 2));
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitIds"] = new[] { "ally-a", "enemy-a" } }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var units = resolved.State.State["battlefields"]![0]!["units"]!.AsArray();
+        Assert.That(units.Select(unit => unit!["exhausted"]!.GetValue<bool>()), Is.All.True);
+    }
+
+    [Test]
+    public void negative_buff_effect_reduces_targeted_units_might()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("affliction", "Affliction", "spell", "[Reaction] Give a unit -10 Might this turn.", "buff", -10, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 6));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "enemy-a" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var unit = resolved.State.State["battlefields"]![0]!["units"]!.AsArray().Single();
+        Assert.That(unit!["attachedMight"]!.GetValue<int>(), Is.EqualTo(-10));
+    }
+
+    [Test]
+    public void kill_effect_moves_targeted_unit_to_owners_trash()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("execute", "Execute", "spell", "[Action] Kill a unit.", "kill", 0, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "enemy-a" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        Assert.That(resolved.State.State["battlefields"]![0]!["units"]!.AsArray(), Is.Empty);
+        Assert.That(Player(resolved.State, 1)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void banish_effect_removes_targeted_unit_without_sending_it_to_trash()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("exile", "Exile", "spell", "[Action] Banish a unit.", "banish", 0, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "enemy-a" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        Assert.That(resolved.State.State["battlefields"]![0]!["units"]!.AsArray(), Is.Empty);
+        Assert.That(Player(resolved.State, 1)["trash"]!.AsArray(), Is.Empty);
+        Assert.That(Player(resolved.State, 1)["banished"]!.AsArray(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void stun_effect_exhausts_targeted_unit()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("daze", "Daze", "spell", "[Action] Stun a unit.", "stun", 0, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "enemy-a" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var unit = resolved.State.State["battlefields"]![0]!["units"]!.AsArray().Single();
+        Assert.That(unit!["exhausted"]!.GetValue<bool>(), Is.True);
+    }
+
+    [Test]
+    public void multi_step_effect_applies_damage_then_draws_a_card()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, CardWithSteps("strike-and-study", "Strike and Study", "[Action] Deal 4 to a unit. Draw 1.", cost: 0, ("damage", 4), ("draw", 1)));
+        Player(state, 0)["deck"]!.AsArray().Add(Card("deck-filler", "Deck Filler", "unit", "", "rally", 0, cost: 0));
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("enemy-a", ownerId: 1, might: 6));
+        var handCountBefore = Player(state, 0)["hand"]!.AsArray().Count;
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "enemy-a" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var unit = resolved.State.State["battlefields"]![0]!["units"]!.AsArray().Single();
+        Assert.That(unit!["damage"]!.GetValue<int>(), Is.EqualTo(4));
+        // Card play removes the played spell from hand and draw adds one back; net hand size is unchanged.
+        Assert.That(Player(resolved.State, 0)["hand"]!.AsArray(), Has.Count.EqualTo(handCountBefore));
+    }
+
+    [Test]
     public void up_to_targeted_effect_can_be_played_with_zero_targets()
     {
         var engine = new DefaultRulesEngine();
@@ -1776,6 +1923,32 @@ public class DefaultRulesEngineTests
             ["cardType"] = kind,
             ["supertype"] = null,
             ["effect"] = new JsonObject { ["type"] = effectType, ["amount"] = amount }
+        };
+    }
+
+    private static JsonObject CardWithSteps(string id, string name, string text, int cost, params (string Type, int Amount)[] steps)
+    {
+        return new JsonObject
+        {
+            ["id"] = $"{id}-test",
+            ["catalogId"] = id,
+            ["name"] = name,
+            ["kind"] = "spell",
+            ["tags"] = new JsonArray(),
+            ["domain"] = "Fury",
+            ["domains"] = new JsonArray("Fury"),
+            ["cost"] = cost,
+            ["might"] = 0,
+            ["text"] = text,
+            ["image"] = string.Empty,
+            ["cardType"] = "spell",
+            ["supertype"] = null,
+            ["effect"] = new JsonObject
+            {
+                ["type"] = steps[0].Type,
+                ["amount"] = steps[0].Amount,
+                ["steps"] = new JsonArray(steps.Select(step => new JsonObject { ["type"] = step.Type, ["amount"] = step.Amount } as JsonNode).ToArray())
+            }
         };
     }
 

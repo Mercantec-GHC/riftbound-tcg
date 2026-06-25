@@ -28,6 +28,7 @@ public sealed class GameDbContext(DbContextOptions<GameDbContext> options) : DbC
             entity.HasIndex(card => card.Domain);
             entity.Property(card => card.TagsJson).HasColumnType("jsonb");
             entity.Property(card => card.DomainsJson).HasColumnType("jsonb");
+            entity.Property(card => card.EffectsJson).HasColumnType("jsonb");
         });
 
         modelBuilder.Entity<UserEntity>(entity =>
@@ -147,6 +148,12 @@ public sealed class CardEntity
     public string? Supertype { get; set; }
     public string EffectType { get; set; } = "rally";
     public int EffectAmount { get; set; }
+
+    /// <summary>
+    /// Ordered multi-instruction effect ("[{"type":"damage","amount":4},{"type":"draw","amount":1}]"),
+    /// e.g. for "Deal 4 to a unit. Draw 1." When empty/"[]", EffectType/EffectAmount above apply instead.
+    /// </summary>
+    public string EffectsJson { get; set; } = "[]";
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

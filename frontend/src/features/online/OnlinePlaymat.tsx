@@ -86,9 +86,16 @@ function ReadOnlyArtCard({
   )
 }
 
-function ReadOnlyUnit({ unit, draggable, onDragStart }: { unit: Unit; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void }) {
+function ReadOnlyUnit({ unit, draggable, onDragStart, targetable, onSelectTarget }: { unit: Unit; draggable?: boolean; onDragStart?: (event: React.DragEvent) => void; targetable?: boolean; onSelectTarget?: (unitId: string) => void }) {
   return (
-    <div className={`online-unit-card-wrap ${draggable ? 'movable' : ''}`.trim()} draggable={draggable} onDragStart={onDragStart}>
+    <div
+      className={`online-unit-card-wrap ${draggable ? 'movable' : ''} ${targetable ? 'targetable' : ''}`.trim()}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onClick={targetable ? () => onSelectTarget?.(unit.uid) : undefined}
+      role={targetable ? 'button' : undefined}
+      title={targetable ? `Target ${unit.name}` : undefined}
+    >
       <ReadOnlyArtCard card={unit} className={`online-unit-card ${unit.exhausted ? 'exhausted' : ''}`.trim()} />
       {(unit.damage > 0 || unit.exhausted) && (
         <div className="online-card-badges">
@@ -129,6 +136,9 @@ function OnlineBattlefieldLane({
   canMoveUnit,
   onPlayUnit,
   onMoveUnit,
+  targetSelection,
+  onSelectUnitTarget,
+  onSelectLaneTarget,
 }: {
   cardsById: Map<string, Card>
   controller: BattlefieldController | null
@@ -140,23 +150,30 @@ function OnlineBattlefieldLane({
   canMoveUnit?: boolean
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
+  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  onSelectUnitTarget?: (unitId: string) => void
+  onSelectLaneTarget?: (laneId: string) => void
 }) {
   const dragData = useDragData()
   const catalogCard = battlefieldCatalogCard(field, cardsById)
   const canDropUnit = canDropPlayedUnit || canDropMovedUnit
   const viewerUnits = field.units.filter((unit) => unitOwnerId(unit) === viewerPlayerId)
   const opponentUnits = field.units.filter((unit) => unitOwnerId(unit) !== viewerPlayerId)
+  const unitsTargetable = targetSelection?.kind === 'unit'
+  const laneTargetable = targetSelection?.kind === 'lane'
 
   const renderUnitSide = (units: Unit[], side: 'opponent' | 'viewer') => (
     <div className={`unit-row online-battlefield-units online-battlefield-units-${side}`}>
       {units.map((unit) => {
-        const isMovable = Boolean(canMoveUnit && side === 'viewer')
+        const isMovable = Boolean(canMoveUnit && side === 'viewer' && !targetSelection)
         return (
           <ReadOnlyUnit
             key={unit.uid}
             unit={unit}
             draggable={isMovable}
             onDragStart={isMovable ? (event) => dragData(event, { type: 'unit', unitId: unit.uid }) : undefined}
+            targetable={unitsTargetable && !targetSelection?.excludeUnitIds?.includes(unit.uid)}
+            onSelectTarget={onSelectUnitTarget}
           />
         )
       })}
@@ -165,7 +182,7 @@ function OnlineBattlefieldLane({
 
   return (
     <article
-      className={`online-battlefield ${canDropUnit ? 'drop-zone' : ''}`.trim()}
+      className={`online-battlefield ${canDropUnit ? 'drop-zone' : ''} ${laneTargetable ? 'targetable' : ''}`.trim()}
       aria-label={field.name}
       onDragOver={canDropUnit ? (event) => event.preventDefault() : undefined}
       onDrop={canDropUnit ? (event) => {
@@ -174,6 +191,9 @@ function OnlineBattlefieldLane({
         if (payload?.type === 'card' && canDropPlayedUnit) onPlayUnit?.(payload.handIndex, field.id)
         if (payload?.type === 'unit' && canDropMovedUnit) onMoveUnit?.(payload.unitId, field.id)
       } : undefined}
+      onClick={laneTargetable ? () => onSelectLaneTarget?.(field.id) : undefined}
+      role={laneTargetable ? 'button' : undefined}
+      title={laneTargetable ? `Target ${field.name}` : undefined}
     >
       {renderUnitSide(opponentUnits, 'opponent')}
       <div className="online-battlefield-art-wrap">
@@ -291,6 +311,8 @@ function OnlinePlayerMat({
   canMoveUnit,
   canSummonChampion,
   onSummonChampion,
+  targetSelection,
+  onSelectUnitTarget,
 }: {
   isViewer: boolean
   player: Player
@@ -304,6 +326,8 @@ function OnlinePlayerMat({
   canMoveUnit?: boolean
   canSummonChampion?: boolean
   onSummonChampion?: () => void
+  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  onSelectUnitTarget?: (unitId: string) => void
 }) {
   const dragData = useDragData()
   const handZone = (
@@ -360,13 +384,15 @@ function OnlinePlayerMat({
       <span className="zone-label">Base</span>
       <div className="unit-row">
         {player.base.map((unit) => {
-          const isMovable = Boolean(isViewer && canMoveUnit)
+          const isMovable = Boolean(isViewer && canMoveUnit && !targetSelection)
           return (
             <ReadOnlyUnit
               key={unit.uid}
               unit={unit}
               draggable={isMovable}
               onDragStart={isMovable ? (event) => dragData(event, { type: 'unit', unitId: unit.uid }) : undefined}
+              targetable={targetSelection?.kind === 'unit' && !targetSelection?.excludeUnitIds?.includes(unit.uid)}
+              onSelectTarget={onSelectUnitTarget}
             />
           )
         })}
@@ -485,6 +511,9 @@ function BattlefieldZone({
   onPlayUnit,
   canMoveUnit,
   onMoveUnit,
+  targetSelection,
+  onSelectUnitTarget,
+  onSelectLaneTarget,
 }: {
   cardsById: Map<string, Card>
   game: GameState
@@ -494,6 +523,9 @@ function BattlefieldZone({
   onPlayUnit?: (handIndex: number, battlefieldId?: string) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
+  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  onSelectUnitTarget?: (unitId: string) => void
+  onSelectLaneTarget?: (laneId: string) => void
 }) {
   const matchPlayersById = new Map(matchPlayers.map((player) => [player.playerId, player]))
   const gamePlayersById = new Map(game.players.map((player) => [player.id, player]))
@@ -523,6 +555,9 @@ function BattlefieldZone({
               canMoveUnit={canMoveUnit}
               onPlayUnit={onPlayUnit}
               onMoveUnit={onMoveUnit}
+              targetSelection={targetSelection}
+              onSelectUnitTarget={onSelectUnitTarget}
+              onSelectLaneTarget={onSelectLaneTarget}
             />
           )
         })}
@@ -545,6 +580,9 @@ export function OnlinePlaymat({
   onMoveUnit,
   canSummonChampion,
   onSummonChampion,
+  targetSelection,
+  onSelectUnitTarget,
+  onSelectLaneTarget,
 }: {
   cards: Card[]
   game: GameState
@@ -559,6 +597,9 @@ export function OnlinePlaymat({
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   canSummonChampion?: boolean
   onSummonChampion?: () => void
+  targetSelection?: { kind: 'unit' | 'lane'; excludeUnitIds?: string[] }
+  onSelectUnitTarget?: (unitId: string) => void
+  onSelectLaneTarget?: (laneId: string) => void
 }) {
   const cardsById = new Map(cards.map((card) => [card.id, card]))
   const hydratedGame: GameState = {
@@ -574,8 +615,29 @@ export function OnlinePlaymat({
     const opponent = opponents[0]
     return (
       <section className="online-shared-playmat duel-playmat">
-        {opponent && <OnlinePlayerMat isViewer={false} placement="opponent" player={opponent} victoryScore={hydratedGame.victoryScore} />}
-        <BattlefieldZone cardsById={cardsById} game={hydratedGame} matchPlayers={matchPlayers ?? []} viewerPlayerId={viewerPlayerId} canPlayUnit={canPlayUnit} onPlayUnit={onPlayUnit} canMoveUnit={canMoveUnit} onMoveUnit={onMoveUnit} />
+        {opponent && (
+          <OnlinePlayerMat
+            isViewer={false}
+            placement="opponent"
+            player={opponent}
+            victoryScore={hydratedGame.victoryScore}
+            targetSelection={targetSelection}
+            onSelectUnitTarget={onSelectUnitTarget}
+          />
+        )}
+        <BattlefieldZone
+          cardsById={cardsById}
+          game={hydratedGame}
+          matchPlayers={matchPlayers ?? []}
+          viewerPlayerId={viewerPlayerId}
+          canPlayUnit={canPlayUnit}
+          onPlayUnit={onPlayUnit}
+          canMoveUnit={canMoveUnit}
+          onMoveUnit={onMoveUnit}
+          targetSelection={targetSelection}
+          onSelectUnitTarget={onSelectUnitTarget}
+          onSelectLaneTarget={onSelectLaneTarget}
+        />
         {viewer && (
           <OnlinePlayerMat
             isViewer
@@ -590,6 +652,8 @@ export function OnlinePlaymat({
             canMoveUnit={canMoveUnit}
             canSummonChampion={canSummonChampion}
             onSummonChampion={onSummonChampion}
+            targetSelection={targetSelection}
+            onSelectUnitTarget={onSelectUnitTarget}
           />
         )}
       </section>
@@ -599,7 +663,19 @@ export function OnlinePlaymat({
   const orderedPlayers = [...opponents, ...(viewer ? [viewer] : [])]
   return (
     <section className="online-shared-playmat shared-table-playmat">
-      <BattlefieldZone cardsById={cardsById} game={hydratedGame} matchPlayers={matchPlayers ?? []} viewerPlayerId={viewerPlayerId} canPlayUnit={canPlayUnit} onPlayUnit={onPlayUnit} canMoveUnit={canMoveUnit} onMoveUnit={onMoveUnit} />
+      <BattlefieldZone
+        cardsById={cardsById}
+        game={hydratedGame}
+        matchPlayers={matchPlayers ?? []}
+        viewerPlayerId={viewerPlayerId}
+        canPlayUnit={canPlayUnit}
+        onPlayUnit={onPlayUnit}
+        canMoveUnit={canMoveUnit}
+        onMoveUnit={onMoveUnit}
+        targetSelection={targetSelection}
+        onSelectUnitTarget={onSelectUnitTarget}
+        onSelectLaneTarget={onSelectLaneTarget}
+      />
 
       <section className="online-player-mats" aria-label="Player play spaces">
         {orderedPlayers.map((player) => (
@@ -617,6 +693,8 @@ export function OnlinePlaymat({
             canMoveUnit={player.id === viewerPlayerId ? canMoveUnit : false}
             canSummonChampion={player.id === viewerPlayerId ? canSummonChampion : false}
             onSummonChampion={onSummonChampion}
+            targetSelection={targetSelection}
+            onSelectUnitTarget={onSelectUnitTarget}
           />
         ))}
       </section>

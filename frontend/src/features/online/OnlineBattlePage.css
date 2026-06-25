@@ -492,6 +492,40 @@
   border-radius: 10px;
 }
 
+.online-unit-card-wrap.targetable {
+  cursor: crosshair;
+  outline: 2px solid rgba(240, 90, 90, 0.75);
+  border-radius: 10px;
+  animation: online-target-pulse 1.2s ease-in-out infinite;
+}
+
+.online-battlefield.targetable {
+  cursor: crosshair;
+  outline: 2px solid rgba(240, 90, 90, 0.75);
+  border-radius: 10px;
+}
+
+@keyframes online-target-pulse {
+  0%, 100% { outline-color: rgba(240, 90, 90, 0.45); }
+  50% { outline-color: rgba(240, 90, 90, 0.95); }
+}
+
+.online-target-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: rgba(240, 90, 90, 0.12);
+  border: 1px solid rgba(240, 90, 90, 0.4);
+  border-radius: 8px;
+}
+
+.online-target-prompt p {
+  margin: 0;
+}
+
 .online-card-badges {
   display: flex;
   flex-wrap: wrap;

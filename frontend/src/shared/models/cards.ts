@@ -1,11 +1,17 @@
 export type Domain = 'Fury' | 'Calm' | 'Mind' | 'Body' | 'Chaos' | 'Order'
 export type CardKind = 'unit' | 'spell' | 'gear' | 'champion' | 'legend' | 'battlefield' | 'token' | 'rune'
-export type EffectType = 'damage' | 'draw' | 'buff' | 'rally'
+export type EffectType = 'damage' | 'draw' | 'buff' | 'rally' | 'kill' | 'banish' | 'stun'
 export type SpellSubtype = 'action' | 'reaction'
+
+export type EffectStep = {
+  type: EffectType
+  amount: number
+}
 
 export type Effect = {
   type: EffectType
   amount: number
+  steps?: EffectStep[]
 }
 
 export type Card = {

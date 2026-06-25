@@ -31,6 +31,11 @@ public sealed record CardDto(
 
 public sealed record CardEffectDto(
     string Type,
+    int Amount,
+    IReadOnlyList<CardEffectStepDto>? Steps = null);
+
+public sealed record CardEffectStepDto(
+    string Type,
     int Amount);
 
 public sealed record CardUpsertResultDto(

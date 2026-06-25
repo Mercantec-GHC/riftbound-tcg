@@ -150,6 +150,68 @@ Major gaps:
 - Card text is not parsed into a general instruction tree.
 - Modes, linked instructions, full non-public target rules, "do as much as possible" as a general rule, prevention/replacement hooks for all actions, and most card categories are incomplete.
 
+#### Card Effect Coverage Audit (2026-06-24)
+
+A full pass against the live `cards` table (1,048 rows) was done to scope what it would take to wire real effects for every card from its `Text` field:
+
+- 1,022 of 1,048 cards have non-trivial rules text; the rest are vanilla (mostly runes).
+- Before this pass, every card defaulted to `EffectType = "rally"`, `EffectAmount = 0` regardless of its text — i.e. no card had a real effect wired, despite the simple single-instruction model (`Damage`/`Draw`/`Buff`/`Rally`) existing.
+- Card text is overwhelmingly bespoke: even after stripping keyword reminder text (e.g. `[Action] (...)`), only ~12 of 1,048 cards reduce to an exact, mechanically-identical instruction (`"Draw N."`, `"Deal N to a unit."`, `"Kill a unit."`, `"Give a unit +N Might this turn."`, and a two-step `"Give a unit +N Might this turn. Draw 1."`). The remaining ~1,010 cards require individually reading and judging each card's wording — this is fundamentally a large hand-authoring effort, not a pattern-matching/scripting one.
+
+What was added this pass:
+
+- `CardEffectStep` and `CardEffectDefinition.Steps` (`riftbound-tcg.Core/Cards/CardContracts.cs`) support an ordered multi-instruction sequence (e.g. "Deal 4 to a unit. Draw 1." → two steps), in addition to the legacy single `Type`/`Amount`.
+- Three new effect types: `Kill` (to trash, runs Deathknell), `Banish` (removed from the game), `Stun` (exhausts the unit).
+- `DefaultRulesEngine.ResolveTopStackItem` executes `effect.steps` in order when present, with each target-requiring step consuming its own target from the chosen target list; falls back to the original single-effect path otherwise (existing lane-wide/legacy cards are unaffected and still covered by tests).
+- `ValidateTargetSelection` now recognizes `kill`/`banish`/`stun`, and derives a multi-step card's target requirement from its first target-requiring step.
+- New `cards.EffectsJson` column (jsonb, default `[]`) stores the step list; `CardEntity`/`CardDto`/`ToCardDefinition` round-trip it. See `riftbound-tcg.Server/Api/Data/Migrations/002_card_effect_steps.sql`.
+- The 12 cards matching an exact, unambiguous pattern were authored and verified against the live DB (`Final Spark` x2, `Consult the Past` x2, `Premonition`, `Progress Day`, `Discipline` x2 multi-step, `Punch First`, `Primal Strength`, `Vengeance` x2).
+- Tests: `EffectResolverTests` (Kill/Banish/Stun/multi-step) and `DefaultRulesEngineTests` (kill/banish/stun/multi-step end-to-end through play-card + chain resolution).
+- Found and fixed a target-legality bug while authoring: `buff`-type effects ("Give a unit +/-N Might this turn") were restricted to friendly units only, but most of these cards' text has no friendly/enemy qualifier (unlike `rally`/"ready", which is always self-targeting). `UnitCanBeTargetedByEffect` now allows `buff` to target any unit.
+
+#### Spell Category Pass (2026-06-24, session 2)
+
+Went through all 202 Spell rows (192 distinct names) by hand, read every card's text, and classified each as either mechanically authorable now or blocked by a missing engine capability. Authored 16 more distinct spells this pass (28 of 192 distinct spells now have real effects, ~15%):
+
+`Falling Comet`, `Hextech Ray`, `Incinerate`, `Blast of Power`, `Rune Prison`, `Firestorm` (lane-wide damage via the existing lane-target path), `Void Seeker` (2-step damage+draw), `Sky Splitter`, `Upstage Comedy`, `Concentrate`, `Downstage Dramatics`, `Feral Strength`, `Frigid Touch`, `Moonlight Affliction`, `Combat Experience`, `Back Off`.
+
+Two judgment calls worth knowing about for future passes:
+- Cards with a `[Repeat]` additional-cost clause, or a `[Level N]` clause that only changes cost/amount, were authored using their **base, unpaid/non-leveled** resolution (e.g. "Ready a unit." for a `[Repeat]` card, "+1 Might" for a `[Level 6] +3 Might instead" card). This only ever under-delivers relative to the full card text — it never grants something the card couldn't otherwise do — so it was treated as a safe partial implementation rather than skipped entirely.
+- Cards whose text has a genuine `if/then` conditional that changes the *outcome* (extra damage, an extra draw only on a kill, a banish-instead-of-trash branch, etc.) were **not** authored, even partially, because dropping the condition would make the unconditional portion fire every time — that's not under-delivering, it's incorrect/exploitable behavior (e.g. `Disintegrate`'s "if this kills it, draw 1" would otherwise always draw).
+
+What's still blocking most of the remaining ~164 distinct spells, roughly by frequency:
+- **Multiple distinct targets in one instruction** (e.g. "Choose a friendly unit and an enemy unit. They deal damage to each other.") — the play-card API only accepts one `targetUnitId`/`targetLaneId` per action.
+- **"All units"/global effects** with no target selection at all (e.g. "Kill all units.", "Ready your units.") — not just "no target," but a different resolution shape than "consume a target."
+- **Variable amounts** ("equal to its Might", "equal to its Energy cost") — `CardEffectStep.Amount` is a fixed integer.
+- **Choose-one / modal effects** ("Choose one — ...") — no mode-selection concept exists yet.
+- **Non-effect-resolver mechanics**: token creation, move, return-to-hand/recall, attach/detach, control-change, channel-rune, look-at/reveal-and-choose, counter-a-spell. These have some support as low-level `InternalGameActionExecutor` building blocks but aren't wired into the card-effect/stack pipeline.
+- **Triggered/replacement abilities embedded in spell text** ("When any unit takes damage this turn, kill it.") — these need the ability framework, not the effect resolver.
+
+#### Full Re-Audit Pass + Multi-Target Support (2026-06-24, session 3)
+
+A player reported that "Back to Back" ("Give two friendly units each +2 Might this turn.") had no effect when played. Root cause: it was never authored — it needs **two distinct unit targets**, which the engine and the play-card action payload had no way to express (only a single `targetUnitId`). This was exactly the "multiple distinct targets" gap called out above.
+
+Fixed generally, not just for this one card:
+
+- `DefaultRulesEngine.RequiredTargetCount(card)` reads phrases like "two friendly units" or "a friendly unit and an enemy unit" out of card text and returns how many distinct unit targets are needed (defaults to 1, the existing behavior).
+- The `play-card` action now also accepts `targetUnitIds: string[]` alongside the existing single `targetUnitId`/`targetLaneId`. `ValidateMultiUnitTargetSelection` checks the count matches, every id is distinct, and every id is independently legal for the effect.
+- No resolver changes were needed: the existing single-effect path already applies the effect to every target in the list (it was already doing this for lane-wide damage), so once multiple legal targets are validated, all of them get the effect.
+- Frontend ([OnlineBattlePage.tsx](../frontend/src/features/online/OnlineBattlePage.tsx)) mirrors `RequiredTargetCount` client-side and the targeting flow now accumulates picks (1-of-N, 2-of-N, ...) before submitting, showing progress in the prompt banner.
+
+Then did a full re-pass over all 192 distinct spells (not just the ones touched by this bug) to check for other cards wrongly left at the default no-op that should now be authorable. Found and fixed:
+
+- **Newly unlocked by multi-target**: `Back to Back` (+2/+2, 2 targets), `Bonds of Strength` (+1/+1, 2 targets, ignoring its `[Repeat]` clause), `Facebreaker` (stun + stun, 2 targets — required extending the phrase-matcher to also catch "a friendly unit and an enemy unit", not just "two units").
+- **Missed in the first pass**: cards with an "as you play this, you may spend X as an additional cost; if you do, ignore this spell's cost" clause that only modifies cost, not effect — same safe-to-omit-cost-text reasoning as `[Repeat]`/`[Level N]` cards. `Wallop` (Rally), `Call to Glory` (Buff +3). Also `Meditation` ("as an additional cost, you may exhaust a friendly unit; if you do, draw 2, otherwise draw 1") — authored as the floor value, Draw 1, since the bonus draw is gated on a cost we don't model paying.
+- `Zenith Blade` ("Stun an enemy unit at a battlefield. You may move a friendly unit...") — authored the required Stun half; the optional move is dropped (same omission-only-under-delivers reasoning).
+
+**Total now authored: 30 of 192 distinct spells (~16%).** Re-confirmed the remaining ~162 all still require one of the previously-identified missing capabilities (multiple *different*-effect targets, "all units" with no target selection, variable Might-based amounts, choose-one modes, token/move/recall/control/counter mechanics, or triggered abilities) — none were mechanically authorable with the current engine without further capability work.
+
+Remaining work (large, multi-session):
+
+- The other ~1,010 cards each need individual reading and a hand-written effect/ability mapping — there is no mechanical shortcut. Reasonable next slices: read and author one card category at a time (e.g. all Spells, then Units' on-play triggers, then Gear), starting with single/double-instruction cards before tackling modes, conditionals, and choose-one branches.
+- Multi-step target selection currently supports at most one target per target-requiring step, consumed in step order; cards needing two independent targets in one instruction (e.g. "Choose a friendly unit and an enemy unit...") are not yet supported.
+- Triggered abilities (on-play, hold/conquer, deathknell-beyond-kill, keyword-driven effects like Legion/Vision/Equip/Repeat/Weaponmaster/Ambush/Hunt) are a separate, larger body of work tracked under Abilities and Keywords below.
+
 ### Chain And Reaction Window
 
 Status: **Partial**
@@ -413,8 +475,10 @@ Important frontend-only/prototype concerns:
 6. Done: implemented battlefield-to-base movement, simultaneous standard moves, and several team/multiplayer movement restrictions.
 7. Done: added domain Power and universal Power payment basics.
 8. Done: added replay-from-events support with snapshot tail replay.
-9. Next: turn internal game actions into a consistently used general action/effect pipeline across card effects.
-10. Next: complete ability and keyword behavior for the parsed keyword catalog.
-11. Next: expand privacy/reveal/facedown rules from redaction support into a full information model.
-12. Next: finish FFA/team player-removal cleanup and remaining multiplayer destination/combat restrictions.
-13. Next: decide whether frontend local rules remain a local-hotseat feature or should be retired in favor of server-provided legal actions only.
+9. Done: added a multi-step card effect model (`CardEffectStep`/`Steps`, `Kill`/`Banish`/`Stun` effect types, `EffectsJson` column) and authored the 12 cards whose text is an exact, unambiguous instruction match. See "Card Effect Coverage Audit (2026-06-24)" above for what remains.
+10. Next: hand-author the remaining ~1,010 cards' effects/abilities one category at a time — this is the largest remaining body of work and has no scripting shortcut.
+11. Next: turn internal game actions into a consistently used general action/effect pipeline across card effects.
+12. Next: complete ability and keyword behavior for the parsed keyword catalog.
+13. Next: expand privacy/reveal/facedown rules from redaction support into a full information model.
+14. Next: finish FFA/team player-removal cleanup and remaining multiplayer destination/combat restrictions.
+15. Next: decide whether frontend local rules remain a local-hotseat feature or should be retired in favor of server-provided legal actions only.

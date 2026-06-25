@@ -554,18 +554,34 @@ export function playCard(state: GameState, laneId?: string, targetUnitId?: strin
   )
 }
 
-function applyStackEffect(state: GameState, item: StackItem): GameState {
-  if (item.effect.type === 'draw') return updatePlayer(state, item.playerId, (player) => draw(player, item.effect.amount))
-  if (item.effect.type === 'buff' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, attachedMight: unit.attachedMight + item.effect.amount }))
-  if (item.effect.type === 'rally' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, exhausted: false }))
-  if (item.effect.type === 'damage') {
+// Removes a unit from base/battlefield. `toTrash` sends it to its owner's trash (Kill);
+// otherwise it's simply removed from play (Banish — the hotseat prototype has no banished zone).
+function killOrBanishUnit(state: GameState, unitId: string, toTrash: boolean): GameState {
+  const [next, unit] = removeUnit(state, unitId)
+  if (!unit || !toTrash) return next
+  return updatePlayer(next, unit.owner, (player) => ({ ...player, trash: [unit, ...player.trash] }))
+}
+
+function applyStackStep(state: GameState, item: StackItem, step: { type: string; amount: number }): GameState {
+  if (step.type === 'draw') return updatePlayer(state, item.playerId, (player) => draw(player, step.amount))
+  if (step.type === 'buff' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, attachedMight: unit.attachedMight + step.amount }))
+  if (step.type === 'rally' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, exhausted: false }))
+  if (step.type === 'stun' && item.targetUnitId) return mapUnit(state, item.targetUnitId, (unit) => ({ ...unit, exhausted: true }))
+  if (step.type === 'kill' && item.targetUnitId) return killOrBanishUnit(state, item.targetUnitId, true)
+  if (step.type === 'banish' && item.targetUnitId) return killOrBanishUnit(state, item.targetUnitId, false)
+  if (step.type === 'damage') {
     const laneId = item.targetLaneId
     const target = laneId
       ? state.battlefields.find((field) => field.id === laneId)?.units.find((unit) => unit.owner !== item.playerId)
       : allUnits(state).find((unit) => unit.uid === item.targetUnitId && unit.owner !== item.playerId)
-    return target ? mapUnit(state, target.uid, (unit) => ({ ...unit, damage: unit.damage + item.effect.amount })) : state
+    return target ? mapUnit(state, target.uid, (unit) => ({ ...unit, damage: unit.damage + step.amount })) : state
   }
   return state
+}
+
+function applyStackEffect(state: GameState, item: StackItem): GameState {
+  const steps = item.effect.steps && item.effect.steps.length > 0 ? item.effect.steps : [item.effect]
+  return steps.reduce((current, step) => applyStackStep(current, item, step), state)
 }
 
 export function resolveTopOfStack(state: GameState): GameState {

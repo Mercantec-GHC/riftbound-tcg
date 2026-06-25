@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './OnlineBattlePage.css'
 import { createCardsApi, createLobbiesApi, createMatchesApi, createMatchmakingApi, type ApiClient } from '../../shared/api'
 import type { AuthSession, LegalAction, Lobby, MatchEvent, MatchSnapshot, MatchmakingTicket } from '../../shared/api'
-import { gameModes, type Card, type GameMode, type GameState, type SavedDeck, type Unit } from '../../shared/models'
+import { gameModes, type Card, type EffectType, type GameMode, type GameState, type SavedDeck, type Unit } from '../../shared/models'
 import { findServerApprovedAction, hasServerApprovedAction, serverApprovedHandIndexes } from './onlineActionGuards'
 import { OnlinePlaymat } from './OnlinePlaymat'
 
@@ -101,6 +101,45 @@ function validateAssignments(assigningUnits: Unit[], targetUnits: Unit[], assign
   }
 
   return messages
+}
+
+type TargetKind = 'none' | 'unit' | 'lane'
+
+const TARGETABLE_EFFECT_TYPES: EffectType[] = ['damage', 'buff', 'rally', 'kill', 'banish', 'stun']
+
+// Mirrors the server's target-legality shape closely enough to drive UI: which effect actually
+// needs a target (the first target-requiring step for multi-step cards), and whether it's a
+// single unit or a whole battlefield lane. "Up to"/"any number" cards are left as 'none' here --
+// they already work with zero targets today, so this only adds prompting for cards that
+// currently can't be played online at all without a target.
+function effectTargetKind(card: Card | undefined): TargetKind {
+  if (!card) return 'none'
+  const text = card.text ?? ''
+  if (/\bup to\b|\bany number\b/i.test(text)) return 'none'
+
+  const effectType = card.effect.steps?.find((step) => TARGETABLE_EFFECT_TYPES.includes(step.type))?.type ?? card.effect.type
+  if (!TARGETABLE_EFFECT_TYPES.includes(effectType)) return 'none'
+
+  if (effectType === 'damage' && /\bunits\b.*\bbattlefields?\b/i.test(text)) {
+    return 'lane'
+  }
+
+  return 'unit'
+}
+
+const TARGET_COUNT_WORDS: Record<string, number> = { two: 2, three: 3, four: 4 }
+
+// Mirrors the server's RequiredTargetCount: cards like "Give two friendly units each +2 Might"
+// need that many distinct unit targets picked before the action can be submitted.
+function requiredTargetCount(card: Card | undefined): number {
+  if (!card) return 1
+  const text = card.text ?? ''
+  if (/\ba (friendly |enemy )?unit and an? (friendly |enemy )?unit\b/i.test(text)) return 2
+
+  const match = /\b(two|three|four|\d+)\b\s+(friendly\s+)?units\b/i.exec(text)
+  if (!match) return 1
+  const word = match[1].toLowerCase()
+  return TARGET_COUNT_WORDS[word] ?? (Number.parseInt(word, 10) || 1)
 }
 
 function combatPanelKey(game: GameState): string {
@@ -263,6 +302,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
   const [legalActions, setLegalActions] = useState<LegalAction[]>([])
   const [mulliganHandIndexes, setMulliganHandIndexes] = useState<number[]>([])
   const [combatModalOpen, setCombatModalOpen] = useState(false)
+  const [targetSelection, setTargetSelection] = useState<{ handIndex: number; cardName: string; kind: 'unit' | 'lane'; requiredCount: number; selectedUnitIds: string[] } | null>(null)
   const [events, setEvents] = useState<MatchEvent[]>([])
   const [battlefieldNames, setBattlefieldNames] = useState<Record<string, string>>({})
   const [status, setStatus] = useState('Create or join a lobby, or use quick queue for 1v1.')
@@ -598,8 +638,54 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
     await submitTypedAction('move-unit', { unitId, battlefieldId }, 'Unable to move unit.')
   }
 
-  async function playCard(handIndex: number) {
-    await submitTypedAction('play-card', { handIndex }, 'Unable to play card.')
+  async function playCard(handIndex: number, targetUnitId?: string, targetLaneId?: string, targetUnitIds?: string[]) {
+    const payload: Record<string, unknown> = { handIndex }
+    if (targetUnitId) payload.targetUnitId = targetUnitId
+    if (targetLaneId) payload.targetLaneId = targetLaneId
+    if (targetUnitIds && targetUnitIds.length > 0) payload.targetUnitIds = targetUnitIds
+    await submitTypedAction('play-card', payload, 'Unable to play card.')
+  }
+
+  function requestPlayCard(handIndex: number) {
+    const card = state?.players.find((player) => player.id === playerId)?.hand[handIndex]
+    const kind = effectTargetKind(card)
+    if (kind === 'none') {
+      void playCard(handIndex)
+      return
+    }
+
+    setTargetSelection({ handIndex, cardName: card?.name ?? 'this card', kind, requiredCount: requiredTargetCount(card), selectedUnitIds: [] })
+  }
+
+  async function chooseTarget(targetUnitId?: string, targetLaneId?: string) {
+    if (!targetSelection) return
+
+    if (targetLaneId) {
+      await playCard(targetSelection.handIndex, undefined, targetLaneId)
+      setTargetSelection(null)
+      return
+    }
+
+    if (!targetUnitId) return
+    const selectedUnitIds = targetSelection.selectedUnitIds.includes(targetUnitId)
+      ? targetSelection.selectedUnitIds
+      : [...targetSelection.selectedUnitIds, targetUnitId]
+
+    if (selectedUnitIds.length < targetSelection.requiredCount) {
+      setTargetSelection({ ...targetSelection, selectedUnitIds })
+      return
+    }
+
+    if (selectedUnitIds.length === 1) {
+      await playCard(targetSelection.handIndex, selectedUnitIds[0])
+    } else {
+      await playCard(targetSelection.handIndex, undefined, undefined, selectedUnitIds)
+    }
+    setTargetSelection(null)
+  }
+
+  function cancelTargetSelection() {
+    setTargetSelection(null)
   }
 
   async function summonChampion() {
@@ -811,7 +897,7 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               canPlayUnit={canPlayUnit}
               onPlayUnit={playUnit}
               playableCardHandIndexes={playableCardHandIndexes}
-              onPlayCard={playCard}
+              onPlayCard={requestPlayCard}
               canMoveUnit={canMoveUnit}
               onMoveUnit={moveUnit}
               canSummonChampion={canSummonChampion}
@@ -819,11 +905,23 @@ export function OnlineBattlePage({ apiClient, cards, decks, session }: OnlineBat
               mulliganSelection={
                 isMulliganTurn ? { selectedIndexes: mulliganHandIndexes, onToggle: toggleMulliganHandIndex } : undefined
               }
+              targetSelection={targetSelection ? { kind: targetSelection.kind, excludeUnitIds: targetSelection.selectedUnitIds } : undefined}
+              onSelectUnitTarget={(unitId) => void chooseTarget(unitId, undefined)}
+              onSelectLaneTarget={(laneId) => void chooseTarget(undefined, laneId)}
             />
           </section>
 
           <aside className="online-actions">
             <h3>Actions</h3>
+            {targetSelection && (
+              <div className="online-target-prompt" role="status">
+                <p>
+                  Choose {targetSelection.kind === 'lane' ? 'a battlefield' : 'a unit'} target for <strong>{targetSelection.cardName}</strong>
+                  {targetSelection.requiredCount > 1 && ` (${targetSelection.selectedUnitIds.length}/${targetSelection.requiredCount} chosen)`}.
+                </p>
+                <button type="button" onClick={cancelTargetSelection}>Cancel</button>
+              </div>
+            )}
             {state.effectStack.length > 0 && (
               <div className="online-stack">
                 <strong>Chain</strong>

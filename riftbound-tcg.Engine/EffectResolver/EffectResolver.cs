@@ -29,25 +29,50 @@ public static class EffectResolver
         IReadOnlyList<PlayerState> players,
         IReadOnlyList<BattlefieldState> battlefields)
     {
-        return item.Effect.Type switch
+        if (item.Effect.Steps.Count == 0)
         {
-            CardEffectType.Draw => (ApplyDraw(item, players), battlefields.ToList()),
-            CardEffectType.Buff => ApplyUnitMod(item, players, battlefields, (u, amt) => u with { AttachedMight = u.AttachedMight + amt }),
-            CardEffectType.Rally => ApplyUnitMod(item, players, battlefields, (u, _) => u with { Exhausted = false }),
-            CardEffectType.Damage => ApplyDamage(item, players, battlefields),
+            return ApplyStep(item, item.Effect.Type, item.Effect.Amount, players, battlefields);
+        }
+
+        var currentPlayers = players.ToList();
+        var currentBattlefields = battlefields.ToList();
+        foreach (var step in item.Effect.Steps)
+        {
+            (currentPlayers, currentBattlefields) = ApplyStep(item, step.Type, step.Amount, currentPlayers, currentBattlefields);
+        }
+
+        return (currentPlayers, currentBattlefields);
+    }
+
+    private static (List<PlayerState>, List<BattlefieldState>) ApplyStep(
+        StackItem item,
+        CardEffectType type,
+        int amount,
+        IReadOnlyList<PlayerState> players,
+        IReadOnlyList<BattlefieldState> battlefields)
+    {
+        return type switch
+        {
+            CardEffectType.Draw => (ApplyDraw(item, amount, players), battlefields.ToList()),
+            CardEffectType.Buff => ApplyUnitMod(item, players, battlefields, (u, amt) => u with { AttachedMight = u.AttachedMight + amt }, amount),
+            CardEffectType.Rally => ApplyUnitMod(item, players, battlefields, (u, _) => u with { Exhausted = false }, amount),
+            CardEffectType.Stun => ApplyUnitMod(item, players, battlefields, (u, _) => u with { Exhausted = true }, amount),
+            CardEffectType.Damage => ApplyDamage(item, amount, players, battlefields),
+            CardEffectType.Kill => ApplyKill(item, players, battlefields, banish: false),
+            CardEffectType.Banish => ApplyKill(item, players, battlefields, banish: true),
             _ => (players.ToList(), battlefields.ToList()),
         };
     }
 
-    private static List<PlayerState> ApplyDraw(StackItem item, IReadOnlyList<PlayerState> players)
+    private static List<PlayerState> ApplyDraw(StackItem item, int amount, IReadOnlyList<PlayerState> players)
     {
         return players.Select(p =>
         {
             if (p.Id != item.PlayerId) return p;
-            var drawn = p.DeckCardIds.Take(item.Effect.Amount).ToList();
+            var drawn = p.DeckCardIds.Take(amount).ToList();
             return p with
             {
-                DeckCardIds = p.DeckCardIds.Skip(item.Effect.Amount).ToList(),
+                DeckCardIds = p.DeckCardIds.Skip(amount).ToList(),
                 HandCardIds = p.HandCardIds.Concat(drawn).ToList(),
             };
         }).ToList();
@@ -57,19 +82,20 @@ public static class EffectResolver
         StackItem item,
         IReadOnlyList<PlayerState> players,
         IReadOnlyList<BattlefieldState> battlefields,
-        Func<UnitState, int, UnitState> modify)
+        Func<UnitState, int, UnitState> modify,
+        int amount)
     {
         if (item.TargetUnitId is null)
             return (players.ToList(), battlefields.ToList());
 
         var updatedPlayers = players.Select(p => p with
         {
-            Base = p.Base.Select(u => u.Uid == item.TargetUnitId ? modify(u, item.Effect.Amount) : u).ToList(),
+            Base = p.Base.Select(u => u.Uid == item.TargetUnitId ? modify(u, amount) : u).ToList(),
         }).ToList();
 
         var updatedFields = battlefields.Select(b => b with
         {
-            Units = b.Units.Select(u => u.Uid == item.TargetUnitId ? modify(u, item.Effect.Amount) : u).ToList(),
+            Units = b.Units.Select(u => u.Uid == item.TargetUnitId ? modify(u, amount) : u).ToList(),
         }).ToList();
 
         return (updatedPlayers, updatedFields);
@@ -77,6 +103,7 @@ public static class EffectResolver
 
     private static (List<PlayerState>, List<BattlefieldState>) ApplyDamage(
         StackItem item,
+        int amount,
         IReadOnlyList<PlayerState> players,
         IReadOnlyList<BattlefieldState> battlefields)
     {
@@ -101,12 +128,44 @@ public static class EffectResolver
 
         var updatedPlayers = players.Select(p => p with
         {
-            Base = p.Base.Select(u => u.Uid == targetUid ? u with { Damage = u.Damage + item.Effect.Amount } : u).ToList(),
+            Base = p.Base.Select(u => u.Uid == targetUid ? u with { Damage = u.Damage + amount } : u).ToList(),
         }).ToList();
 
         var updatedFields = battlefields.Select(b => b with
         {
-            Units = b.Units.Select(u => u.Uid == targetUid ? u with { Damage = u.Damage + item.Effect.Amount } : u).ToList(),
+            Units = b.Units.Select(u => u.Uid == targetUid ? u with { Damage = u.Damage + amount } : u).ToList(),
+        }).ToList();
+
+        return (updatedPlayers, updatedFields);
+    }
+
+    // Kill moves the targeted unit to its owner's trash; banish removes it from the game instead.
+    private static (List<PlayerState>, List<BattlefieldState>) ApplyKill(
+        StackItem item,
+        IReadOnlyList<PlayerState> players,
+        IReadOnlyList<BattlefieldState> battlefields,
+        bool banish)
+    {
+        if (item.TargetUnitId is null)
+            return (players.ToList(), battlefields.ToList());
+
+        var targetUid = item.TargetUnitId;
+        var removedFromBase = players.SelectMany(p => p.Base).FirstOrDefault(u => u.Uid == targetUid);
+        var removedFromField = battlefields.SelectMany(b => b.Units).FirstOrDefault(u => u.Uid == targetUid);
+        var removed = removedFromBase ?? removedFromField;
+        if (removed is null)
+            return (players.ToList(), battlefields.ToList());
+
+        var updatedPlayers = players.Select(p => p with
+        {
+            Base = p.Base.Where(u => u.Uid != targetUid).ToList(),
+            TrashCardIds = !banish && p.Id == removed.OwnerPlayerId ? p.TrashCardIds.Append(removed.CardId).ToList() : p.TrashCardIds,
+            BanishedCardIds = banish && p.Id == removed.OwnerPlayerId ? (p.BanishedCardIds ?? []).Append(removed.CardId).ToList() : p.BanishedCardIds,
+        }).ToList();
+
+        var updatedFields = battlefields.Select(b => b with
+        {
+            Units = b.Units.Where(u => u.Uid != targetUid).ToList(),
         }).ToList();
 
         return (updatedPlayers, updatedFields);
