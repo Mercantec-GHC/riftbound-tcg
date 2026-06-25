@@ -1,6 +1,13 @@
 import type { Card } from './cards'
 import type { SavedDeck } from './decks'
 
+export type CardStatusEffect = {
+  id: string
+  type: string
+  amount: number
+  sourceCard: Card
+}
+
 export type StackItem = {
   id: string
   cardId: string
@@ -21,6 +28,8 @@ export type Unit = Card & {
   exhausted: boolean
   damage: number
   attachedMight: number
+  attachedCards?: Card[]
+  statusEffects?: CardStatusEffect[]
   attacker?: boolean
   defender?: boolean
 }
@@ -37,6 +46,7 @@ export type Player = {
   id: number
   name: string
   points: number
+  xp?: number
   runes: {
     ready: Card[]
     exhausted: Card[]

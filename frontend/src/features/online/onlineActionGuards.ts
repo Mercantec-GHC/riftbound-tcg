@@ -29,11 +29,15 @@ export function findServerApprovedAction(
   payload: Record<string, unknown> = {},
 ): LegalAction | null {
   const candidates = legalActions.filter((action) => action.type === type && action.playerId === playerId)
-  return candidates.find((action) => payloadMatchesServerSchema(action, payload)) ?? null
+  const matches = candidates
+    .filter((action) => payloadMatchesServerSchema(action, payload))
+    .sort((left, right) =>
+      Object.keys(right.payloadSchema ?? {}).length - Object.keys(left.payloadSchema ?? {}).length)
+  return matches[0] ?? null
 }
 
 export function hasServerApprovedAction(legalActions: LegalAction[], playerId: number, type: string): boolean {
-  return findServerApprovedAction(legalActions, playerId, type) !== null
+  return legalActions.some((action) => action.type === type && action.playerId === playerId)
 }
 
 export function serverApprovedHandIndexes(legalActions: LegalAction[], playerId: number, type: string): number[] {

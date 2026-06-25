@@ -35,7 +35,14 @@ public sealed record ContinuousEffect(
     IReadOnlyList<string>? DependsOnEffectIds = null,
     IReadOnlyList<string>? RequiredTraits = null,
     IReadOnlyList<string>? RequiredAbilities = null,
-    int? RequiredMinimumMight = null);
+    int? RequiredMinimumMight = null,
+    string AppliesTo = "self",
+    string? SourceUnitId = null,
+    int? SourceControllerId = null,
+    int? TargetControllerId = null,
+    string? TargetKind = "unit",
+    string? TargetZoneType = null,
+    string? TargetBattlefieldId = null);
 
 public static class ContinuousEffectLayerResolver
 {
@@ -43,15 +50,22 @@ public static class ContinuousEffectLayerResolver
 
     public static LayeredCharacteristics EvaluateUnit(JsonObject unit)
     {
+        return EvaluateUnit(unit, EffectsFromSource(unit));
+    }
+
+    public static LayeredCharacteristics EvaluateUnit(JsonObject unit, IEnumerable<ContinuousEffect> effects)
+    {
         var baseMight = unit["might"]?.GetValue<int>() ?? 0;
         var baseTraits = ReadStringArray(unit["tags"]).Concat(ReadStringArray(unit["traits"]));
-        var baseAbilities = ReadStringArray(unit["abilities"]).Concat(ReadStringArray(unit["keywords"]));
+        var baseAbilities = HasActiveRulesText(unit)
+            ? ReadStringArray(unit["abilities"]).Concat(ReadStringArray(unit["keywords"]))
+            : EmptyStringArray;
         var uid = unit["uid"]?.GetValue<string>();
 
-        var effects = ReadContinuousEffects(unit, uid).ToList();
+        var relevantEffects = effects.ToList();
         if ((unit["attachedMight"]?.GetValue<int>() ?? 0) is var attachedMight && attachedMight != 0)
         {
-            effects.Add(new ContinuousEffect(
+            relevantEffects.Add(new ContinuousEffect(
                 Id: "__legacy-attached-might",
                 Layer: ContinuousEffectLayer.Arithmetic,
                 Operation: ContinuousEffectOperation.Add,
@@ -62,8 +76,11 @@ public static class ContinuousEffectLayerResolver
                 TargetUnitId: uid));
         }
 
-        return Evaluate(baseMight, baseTraits, baseAbilities, effects, uid);
+        return Evaluate(baseMight, baseTraits, baseAbilities, relevantEffects, unit);
     }
+
+    public static IReadOnlyList<ContinuousEffect> EffectsFromSource(JsonObject source, int sourceOrderOffset = 0) =>
+        ReadContinuousEffects(source, sourceOrderOffset).ToArray();
 
     public static LayeredCharacteristics Evaluate(
         int baseMight,
@@ -72,9 +89,30 @@ public static class ContinuousEffectLayerResolver
         IEnumerable<ContinuousEffect> effects,
         string? unitId = null)
     {
+        return Evaluate(baseMight, baseTraits, baseAbilities, effects, unitId, null);
+    }
+
+    private static LayeredCharacteristics Evaluate(
+        int baseMight,
+        IEnumerable<string>? baseTraits,
+        IEnumerable<string>? baseAbilities,
+        IEnumerable<ContinuousEffect> effects,
+        JsonObject unit)
+    {
+        return Evaluate(baseMight, baseTraits, baseAbilities, effects, unit["uid"]?.GetValue<string>(), unit);
+    }
+
+    private static LayeredCharacteristics Evaluate(
+        int baseMight,
+        IEnumerable<string>? baseTraits,
+        IEnumerable<string>? baseAbilities,
+        IEnumerable<ContinuousEffect> effects,
+        string? unitId,
+        JsonObject? unit)
+    {
         var current = new MutableCharacteristics(baseMight, baseTraits ?? EmptyStringArray, baseAbilities ?? EmptyStringArray);
         var relevantEffects = effects
-            .Where(effect => string.IsNullOrWhiteSpace(effect.TargetUnitId) || effect.TargetUnitId == unitId)
+            .Where(effect => AppliesTo(effect, unitId, unit))
             .Where(effect => IsSupported(effect))
             .ToList();
         var appliedIds = new HashSet<string>(StringComparer.Ordinal);
@@ -111,14 +149,22 @@ public static class ContinuousEffectLayerResolver
         return current.ToImmutable();
     }
 
-    private static IEnumerable<ContinuousEffect> ReadContinuousEffects(JsonObject unit, string? unitId)
+    private static IEnumerable<ContinuousEffect> ReadContinuousEffects(JsonObject unit, int sourceOrderOffset)
     {
+        if (!HasActiveRulesText(unit))
+        {
+            yield break;
+        }
+
         if (unit["continuousEffects"] is not JsonArray effects)
         {
             yield break;
         }
 
         var sourceOrder = 0;
+        var unitId = unit["uid"]?.GetValue<string>();
+        var sourceControllerId = unit["controllerId"]?.GetValue<int?>() ?? unit["ownerId"]?.GetValue<int?>();
+        var sourceTimestamp = unit["layerTimestamp"]?.GetValue<int?>();
         foreach (var node in effects)
         {
             if (node is not JsonObject effect)
@@ -131,15 +177,16 @@ public static class ContinuousEffectLayerResolver
             var operation = ReadOperation(effect["operation"]?.GetValue<string>());
             var property = effect["property"]?.GetValue<string>() ?? (layer == ContinuousEffectLayer.Arithmetic ? "might" : "traits");
             var id = effect["id"]?.GetValue<string>() ?? $"effect-{sourceOrder}";
-            var targetUnitId = effect["targetUnitId"]?.GetValue<string>() ?? unitId;
+            var appliesTo = effect["appliesTo"]?.GetValue<string>() ?? "self";
+            var targetUnitId = effect["targetUnitId"]?.GetValue<string>() ?? (string.Equals(appliesTo, "self", StringComparison.OrdinalIgnoreCase) ? unitId : null);
 
             yield return new ContinuousEffect(
                 Id: id,
                 Layer: layer,
                 Operation: operation,
                 Property: property,
-                Timestamp: effect["timestamp"]?.GetValue<int>() ?? sourceOrder,
-                SourceOrder: sourceOrder,
+                Timestamp: effect["timestamp"]?.GetValue<int?>() ?? sourceTimestamp ?? sourceOrder,
+                SourceOrder: sourceOrderOffset + sourceOrder,
                 Amount: ReadAmount(effect["value"]) ?? effect["amount"]?.GetValue<int?>(),
                 TextValue: ReadTextValue(effect["value"]) ?? effect["textValue"]?.GetValue<string>(),
                 TextValues: ReadStringArray(effect["value"]).Concat(ReadStringArray(effect["values"])).ToArray(),
@@ -147,9 +194,66 @@ public static class ContinuousEffectLayerResolver
                 DependsOnEffectIds: ReadStringArray(effect["dependsOn"]).ToArray(),
                 RequiredTraits: ReadStringArray(effect["requiresTraits"]).Concat(ReadStringArray(effect["requiresTags"])).ToArray(),
                 RequiredAbilities: ReadStringArray(effect["requiresAbilities"]).Concat(ReadStringArray(effect["requiresKeywords"])).ToArray(),
-                RequiredMinimumMight: effect["requiresMinimumMight"]?.GetValue<int?>());
+                RequiredMinimumMight: effect["requiresMinimumMight"]?.GetValue<int?>(),
+                AppliesTo: appliesTo,
+                SourceUnitId: effect["sourceUnitId"]?.GetValue<string>() ?? unitId,
+                SourceControllerId: effect["sourceControllerId"]?.GetValue<int?>() ?? sourceControllerId,
+                TargetControllerId: effect["targetControllerId"]?.GetValue<int?>(),
+                TargetKind: effect["targetKind"]?.GetValue<string>() ?? "unit",
+                TargetZoneType: effect["targetZoneType"]?.GetValue<string>(),
+                TargetBattlefieldId: effect["targetBattlefieldId"]?.GetValue<string>());
             sourceOrder++;
         }
+    }
+
+    private static bool AppliesTo(ContinuousEffect effect, string? unitId, JsonObject? unit)
+    {
+        if (!string.IsNullOrWhiteSpace(effect.TargetUnitId) && effect.TargetUnitId != unitId)
+        {
+            return false;
+        }
+
+        if (unit is null)
+        {
+            return string.IsNullOrWhiteSpace(effect.TargetUnitId) || effect.TargetUnitId == unitId;
+        }
+
+        var controllerId = unit["controllerId"]?.GetValue<int?>() ?? unit["ownerId"]?.GetValue<int?>();
+        var kind = unit["kind"]?.GetValue<string>() ?? "unit";
+        var location = unit["location"] as JsonObject;
+        var zoneType = location?["type"]?.GetValue<string>();
+        var battlefieldId = location?["battlefieldId"]?.GetValue<string>();
+
+        if (effect.TargetControllerId is not null && effect.TargetControllerId != controllerId)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(effect.TargetKind) && !string.Equals(effect.TargetKind, kind, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(effect.TargetZoneType) && !string.Equals(effect.TargetZoneType, zoneType, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(effect.TargetBattlefieldId) && !string.Equals(effect.TargetBattlefieldId, battlefieldId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return effect.AppliesTo.ToLowerInvariant() switch
+        {
+            "self" => string.IsNullOrWhiteSpace(effect.SourceUnitId) || effect.SourceUnitId == unitId,
+            "all" or "all-units" or "units" => true,
+            "friendly" or "friendly-units" => effect.SourceControllerId is null || effect.SourceControllerId == controllerId,
+            "other-friendly" or "other-friendly-units" => effect.SourceControllerId is null || effect.SourceControllerId == controllerId && effect.SourceUnitId != unitId,
+            "enemy" or "enemy-units" => effect.SourceControllerId is not null && effect.SourceControllerId != controllerId,
+            "target" or "target-unit" => !string.IsNullOrWhiteSpace(effect.TargetUnitId) && effect.TargetUnitId == unitId,
+            _ => true
+        };
     }
 
     private static IReadOnlyList<ContinuousEffect> OrderWithinLayer(IReadOnlyList<ContinuousEffect> candidates, HashSet<string> alreadyAppliedIds)
@@ -334,6 +438,14 @@ public static class ContinuousEffectLayerResolver
         {
             yield return text;
         }
+    }
+
+    private static bool HasActiveRulesText(JsonObject card)
+    {
+        return card["rulesTextActive"]?.GetValue<bool?>() != false
+            && card["isFaceDown"]?.GetValue<bool?>() != true
+            && card["facedown"]?.GetValue<bool?>() != true
+            && card["faceDown"]?.GetValue<bool?>() != true;
     }
 
     private sealed class MutableCharacteristics

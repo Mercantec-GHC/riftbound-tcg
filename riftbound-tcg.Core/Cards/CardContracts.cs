@@ -84,7 +84,41 @@ public sealed record CardDefinition(
 {
     public IReadOnlyList<Domain> PowerCost { get; init; } = [];
     public IReadOnlyList<CardKeywordDefinition> Keywords { get; init; } = [];
+    public IReadOnlyList<CardContinuousEffectDefinition> ContinuousEffects { get; init; } = [];
+    public IReadOnlyList<CardRuleModifierDefinition> RuleModifiers { get; init; } = [];
 }
+
+public sealed record CardContinuousEffectDefinition(
+    string Id,
+    string Layer,
+    string Operation,
+    string Property,
+    int? Amount = null,
+    string? TextValue = null,
+    IReadOnlyList<string>? TextValues = null,
+    string AppliesTo = "self",
+    IReadOnlyList<string>? DependsOn = null,
+    IReadOnlyList<string>? RequiresTraits = null,
+    IReadOnlyList<string>? RequiresAbilities = null,
+    int? RequiresMinimumMight = null,
+    int? Timestamp = null);
+
+public enum RuleModifierPolarity
+{
+    Can,
+    Cannot
+}
+
+public sealed record CardRuleModifierDefinition(
+    string Id,
+    RuleModifierPolarity Polarity,
+    string ActionType,
+    string AppliesTo = "self",
+    string? Timing = null,
+    string? Destination = null,
+    string? EffectType = null,
+    string? Target = null,
+    string? CardKind = null);
 
 public enum SpellSubtype
 {

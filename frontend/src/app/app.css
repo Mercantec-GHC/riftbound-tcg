@@ -22,13 +22,19 @@
   gap: 10px;
 }
 
-.app-nav button {
+.app-nav a {
+  align-items: center;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.18);
   color: #f7efe2;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 12px;
+  text-decoration: none;
 }
 
-.app-nav button.active {
+.app-nav a.active {
   background: linear-gradient(135deg, #ff7a45, #ffcc66);
   color: #24110a;
 }
@@ -871,15 +877,17 @@ button:disabled {
   display: grid;
   gap: 10px;
   max-height: min(76vh, 520px);
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
   padding: 10px;
   pointer-events: none;
   position: fixed;
-  transform: translate(22px, calc(-100% - 18px));
   width: min(300px, 32vw);
   z-index: 40;
 }
 
 .hover-card-preview:has(.horizontal-card-art) {
+  max-width: calc(100vw - 24px);
   width: min(720px, 72vw);
 }
 
@@ -901,6 +909,67 @@ button:disabled {
   font-size: 0.9rem;
   line-height: 1.35;
   margin: 0;
+}
+
+.app-action-menu-backdrop {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.46);
+  display: grid;
+  inset: 0;
+  isolation: isolate;
+  justify-items: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 2147483647;
+}
+
+.app-action-menu {
+  background:
+    linear-gradient(135deg, rgba(200, 170, 110, 0.12), transparent 18%),
+    linear-gradient(180deg, #111821, #05080d);
+  border: 1px solid rgba(240, 210, 138, 0.72);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.64);
+  color: var(--rift-text);
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 48px);
+  max-width: min(460px, calc(100vw - 48px));
+  overflow: auto;
+  padding: 18px;
+  position: relative;
+  width: min(460px, calc(100vw - 48px));
+  z-index: 1;
+}
+
+.app-action-menu header,
+.app-action-menu footer {
+  display: grid;
+  gap: 8px;
+}
+
+.app-action-menu header span {
+  color: var(--rift-gold);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.app-action-menu h3 {
+  margin: 0;
+}
+
+.app-action-menu-options {
+  display: grid;
+  gap: 10px;
+}
+
+.app-action-menu-options button,
+.app-action-menu footer button {
+  justify-content: center;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  width: 100%;
 }
 
 .deck-stack {
@@ -1539,7 +1608,7 @@ textarea {
   gap: 4px;
 }
 
-.app-nav button,
+.app-nav a,
 .deck-tabs button,
 .secondary-button,
 .profile-menu-button,
@@ -1555,7 +1624,7 @@ textarea {
   text-transform: uppercase;
 }
 
-.app-nav button.active,
+.app-nav a.active,
 .deck-tabs button.active,
 .admin-list-item.active,
 .online-list-item.active {
@@ -1584,6 +1653,7 @@ button,
   text-transform: uppercase;
 }
 
+.app-nav a:hover,
 button:hover:not(:disabled),
 .file-button:hover {
   filter: brightness(1.08);
