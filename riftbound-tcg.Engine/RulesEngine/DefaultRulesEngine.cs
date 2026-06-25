@@ -447,6 +447,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     ReadInt(action.Payload, "handIndex"),
                     ReadString(action.Payload, "targetUnitId"),
                     ReadString(action.Payload, "targetLaneId"),
+                    ReadStringArray(action.Payload, "targetUnitIds"),
                     ReadInt(action.Payload, "repeatCount") ?? 0);
                 if (playCardResult is null)
                 {
@@ -1925,7 +1926,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
         });
     }
 
-    private static JsonObject? PlayCard(JsonObject state, int playerId, int? handIndex, string? targetUnitId, string? targetLaneId, int repeatCount)
+    private static JsonObject? PlayCard(JsonObject state, int playerId, int? handIndex, string? targetUnitId, string? targetLaneId, IReadOnlyList<string>? targetUnitIds, int repeatCount)
     {
         if (handIndex is null)
         {
@@ -1950,7 +1951,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
             return null;
         }
 
-        var targetSelection = ValidateTargetSelection(state, playerId, card, targetUnitId, targetLaneId);
+        var targetSelection = ValidateTargetSelection(state, playerId, card, targetUnitId, targetLaneId, targetUnitIds);
         if (!targetSelection.IsValid)
         {
             return null;
@@ -2192,8 +2193,6 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         var playerId = item["playerId"]?.GetValue<int>() ?? 0;
         var effect = item["effect"]?.AsObject();
-        var effectType = effect?["type"]?.GetValue<string>() ?? "rally";
-        var amount = effect?["amount"]?.GetValue<int>() ?? 0;
         var targetUnitId = item["targetUnitId"]?.GetValue<string>();
         var targetLaneId = item["targetLaneId"]?.GetValue<string>();
         var targets = ReadStackTargets(item, targetUnitId, targetLaneId);
@@ -2202,9 +2201,30 @@ public sealed class DefaultRulesEngine : IRulesEngine
 
         for (var execution = 0; execution < executionCount; execution++)
         {
-            state = IsDelayedCreationEffect(effectType)
-                ? CreateDelayedAbility(state, item, playerId, effect!)
-                : ResolveEffectThroughInternalActions(state, playerId, effectType, amount, targets, card);
+            if (effect?["steps"] is JsonArray steps && steps.Count > 0)
+            {
+                // Each target-requiring step consumes its own target(s) in order, so
+                // "Deal 4 to a unit. Draw 1." doesn't apply the draw to the damage target.
+                // [Repeat] re-runs this whole sequence against the same originally-chosen targets.
+                var remainingTargets = targets.ToList();
+                foreach (var stepNode in steps)
+                {
+                    var step = stepNode!.AsObject();
+                    var stepType = step["type"]?.GetValue<string>() ?? "rally";
+                    var stepAmount = step["amount"]?.GetValue<int>() ?? 0;
+                    state = ResolveEffectThroughInternalActions(state, playerId, stepType, stepAmount, TakeStepTargets(remainingTargets, stepType), card);
+                }
+            }
+            else
+            {
+                // Legacy single-instruction cards apply to every chosen/legal target (e.g. lane-wide damage).
+                var effectType = effect?["type"]?.GetValue<string>() ?? "rally";
+                var amount = effect?["amount"]?.GetValue<int>() ?? 0;
+                state = IsDelayedCreationEffect(effectType)
+                    ? CreateDelayedAbility(state, item, playerId, effect!)
+                    : ResolveEffectThroughInternalActions(state, playerId, effectType, amount, targets, card);
+            }
+
             if (PendingBurnOut(state) is not null || state["stage"]?.GetValue<string>() == "game-over")
             {
                 break;
@@ -5245,9 +5265,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
             || !HasKeyword(card, KeywordKind.Reaction);
     }
 
-    private static TargetSelection ValidateTargetSelection(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId)
+    private static TargetSelection ValidateTargetSelection(JsonObject state, int playerId, JsonObject card, string? targetUnitId, string? targetLaneId, IReadOnlyList<string>? targetUnitIds = null)
     {
         var effect = card["effect"]?.AsObject();
+        var effectType = FirstTargetRequiringStepType(effect) ?? effect?["type"]?.GetValue<string>() ?? "rally";
+        var targetRequirement = RequiredTargetRequirement(card);
+        var requiredCount = targetRequirement.Count;
+
+        if (requiredCount > 1 && effectType is "buff" or "rally" or "kill" or "banish" or "stun")
+        {
+            return ValidateMultiUnitTargetSelection(state, playerId, effectType, targetRequirement, targetUnitIds ?? [], card);
+        }
+
         return ValidateEffectTargetSelection(state, playerId, effect, targetUnitId, targetLaneId, AllowsZeroTargets(card), card);
     }
 
@@ -5300,7 +5329,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 : TargetSelection.Invalid;
         }
 
-        if (effectType is "buff" or "rally")
+        if (effectType is "buff" or "rally" or "kill" or "banish" or "stun")
         {
             if (hasUnitTarget && FindUnit(state, targetUnitId!) is { } unit && UnitCanBeTargetedByEffect(state, playerId, effectType, unit, sourceCard))
             {
@@ -5315,6 +5344,150 @@ public sealed class DefaultRulesEngine : IRulesEngine
         return hasUnitTarget || hasLaneTarget
             ? TargetSelection.Invalid
             : new TargetSelection(true, null, null, []);
+    }
+
+    // Reads "two friendly units"/"three units" etc. out of card text so cards like "Give two
+    // friendly units each +2 Might this turn." can require that many distinct unit targets.
+    // Defaults to 1 (the existing single-target behavior) when no such phrase is present.
+    private static readonly Dictionary<string, int> NumberWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["two"] = 2,
+        ["three"] = 3,
+        ["four"] = 4,
+    };
+
+    private static MultiUnitTargetRequirement RequiredTargetRequirement(JsonObject card)
+    {
+        var text = card["text"]?.GetValue<string>() ?? string.Empty;
+        var pairMatch = Regex.Match(text, @"\ba\s+(friendly|enemy)?\s*unit\s+and\s+an?\s+(friendly|enemy)?\s*unit\b", RegexOptions.IgnoreCase);
+        if (pairMatch.Success)
+        {
+            return new MultiUnitTargetRequirement(2,
+            [
+                ParseTargetQualifier(pairMatch.Groups[1].Value),
+                ParseTargetQualifier(pairMatch.Groups[2].Value)
+            ]);
+        }
+
+        var match = Regex.Match(text, @"\b(two|three|four|\d+)\b\s+((friendly|enemy)\s+)?units\b", RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            return new MultiUnitTargetRequirement(1, [TargetQualifier.Any]);
+        }
+
+        var word = match.Groups[1].Value;
+        var count = NumberWords.TryGetValue(word, out var value) ? value : int.TryParse(word, out var parsed) ? parsed : 1;
+        var qualifier = ParseTargetQualifier(match.Groups[3].Value);
+        return new MultiUnitTargetRequirement(count, Enumerable.Repeat(qualifier, count).ToArray());
+    }
+
+    private static TargetSelection ValidateMultiUnitTargetSelection(JsonObject state, int playerId, string effectType, MultiUnitTargetRequirement requirement, IReadOnlyList<string> targetUnitIds, JsonObject? sourceCard = null)
+    {
+        var requiredCount = requirement.Count;
+        var distinctIds = targetUnitIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToArray();
+        if (distinctIds.Length != requiredCount)
+        {
+            return TargetSelection.Invalid;
+        }
+
+        var targetUnits = new List<JsonObject>(requiredCount);
+        foreach (var unitId in distinctIds)
+        {
+            if (FindUnit(state, unitId) is not { } unit || !UnitCanBeTargetedByEffect(state, playerId, effectType, unit, sourceCard))
+            {
+                return TargetSelection.Invalid;
+            }
+
+            targetUnits.Add(unit);
+        }
+
+        if (!SelectedUnitsMatchQualifiers(state, playerId, targetUnits, requirement.Qualifiers))
+        {
+            return TargetSelection.Invalid;
+        }
+
+        var targets = targetUnits.Select(unit => UnitTargetFrom(state, unit, effectType, null)).ToList();
+        return new TargetSelection(true, distinctIds[0], null, targets);
+    }
+
+    private static TargetQualifier ParseTargetQualifier(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "friendly" => TargetQualifier.Friendly,
+            "enemy" => TargetQualifier.Enemy,
+            _ => TargetQualifier.Any
+        };
+    }
+
+    private static bool SelectedUnitsMatchQualifiers(JsonObject state, int playerId, IReadOnlyList<JsonObject> targetUnits, IReadOnlyList<TargetQualifier> qualifiers)
+    {
+        if (qualifiers.Count != targetUnits.Count)
+        {
+            return false;
+        }
+
+        var used = new bool[qualifiers.Count];
+        return MatchAt(0);
+
+        bool MatchAt(int unitIndex)
+        {
+            if (unitIndex >= targetUnits.Count)
+            {
+                return true;
+            }
+
+            var unit = targetUnits[unitIndex];
+            for (var qualifierIndex = 0; qualifierIndex < qualifiers.Count; qualifierIndex++)
+            {
+                if (used[qualifierIndex] || !UnitMatchesQualifier(state, playerId, unit, qualifiers[qualifierIndex]))
+                {
+                    continue;
+                }
+
+                used[qualifierIndex] = true;
+                if (MatchAt(unitIndex + 1))
+                {
+                    return true;
+                }
+
+                used[qualifierIndex] = false;
+            }
+
+            return false;
+        }
+    }
+
+    private static bool UnitMatchesQualifier(JsonObject state, int playerId, JsonObject unit, TargetQualifier qualifier)
+    {
+        return qualifier switch
+        {
+            TargetQualifier.Any => true,
+            TargetQualifier.Friendly => IsFriendlyUnit(state, playerId, unit),
+            TargetQualifier.Enemy => IsEnemyUnit(state, playerId, unit),
+            _ => false
+        };
+    }
+
+    // For a multi-step card, target selection is validated/tagged against the first step that
+    // needs a target, so the player picks one target up front for the whole resolved sequence.
+    private static string? FirstTargetRequiringStepType(JsonObject? effect)
+    {
+        if (effect?["steps"] is not JsonArray steps)
+        {
+            return null;
+        }
+
+        foreach (var stepNode in steps)
+        {
+            var stepType = stepNode?["type"]?.GetValue<string>();
+            if (stepType is "damage" or "buff" or "rally" or "kill" or "banish" or "stun")
+            {
+                return stepType;
+            }
+        }
+
+        return null;
     }
 
     private static bool AbilityAllowsZeroTargets(JsonObject ability, JsonObject effect)
@@ -5728,6 +5901,24 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private static IReadOnlyList<Domain> DomainOrder() =>
         [Domain.Fury, Domain.Calm, Domain.Mind, Domain.Body, Domain.Chaos, Domain.Order];
 
+    // A multi-step card's target-requiring step consumes the next not-yet-consumed target tagged
+    // for this step's effect type (one target per step), falling back to the next untagged target.
+    private static List<EffectTarget> TakeStepTargets(List<EffectTarget> remainingTargets, string stepType)
+    {
+        var matched = remainingTargets.Where(t => string.Equals(t.EffectType, stepType, StringComparison.Ordinal)).Take(1).ToList();
+        if (matched.Count == 0)
+        {
+            matched = remainingTargets.Take(1).ToList();
+        }
+
+        foreach (var target in matched)
+        {
+            remainingTargets.Remove(target);
+        }
+
+        return matched;
+    }
+
     private static JsonObject ResolveEffectThroughInternalActions(
         JsonObject state,
         int playerId,
@@ -5771,6 +5962,18 @@ public sealed class DefaultRulesEngine : IRulesEngine
                     }),
                 "rally" => new InternalGameAction(
                     InternalGameActionType.Ready,
+                    playerId,
+                    new Dictionary<string, object?> { ["unitId"] = unitId }),
+                "kill" => new InternalGameAction(
+                    InternalGameActionType.Kill,
+                    playerId,
+                    new Dictionary<string, object?> { ["unitId"] = unitId }),
+                "banish" => new InternalGameAction(
+                    InternalGameActionType.Banish,
+                    playerId,
+                    new Dictionary<string, object?> { ["unitId"] = unitId }),
+                "stun" => new InternalGameAction(
+                    InternalGameActionType.Stun,
                     playerId,
                     new Dictionary<string, object?> { ["unitId"] = unitId }),
                 _ => null
@@ -6094,7 +6297,11 @@ public sealed class DefaultRulesEngine : IRulesEngine
         var baseAllowed = effectType switch
         {
             "damage" => IsEnemyUnit(state, playerId, unit),
-            "buff" or "rally" => IsFriendlyUnit(state, playerId, unit),
+            // "Give a unit +/-N Might" cards have no friendly/enemy qualifier in their text, so any
+            // unit is a legal target (unlike "rally"/"ready", which only ever targets a friendly unit).
+            "buff" => true,
+            "rally" => IsFriendlyUnit(state, playerId, unit),
+            "kill" or "banish" or "stun" => true,
             _ => false
         };
 
@@ -6628,7 +6835,7 @@ public sealed class DefaultRulesEngine : IRulesEngine
                 ["keywords"] = ToArray(KeywordCatalog.For(definition).Select(ToKeywordObject)),
                 ["continuousEffects"] = ToArray(definition.ContinuousEffects.Select(ToContinuousEffectObject)),
                 ["ruleModifiers"] = ToArray(definition.RuleModifiers.Select(ToRuleModifierObject)),
-                ["effect"] = new JsonObject { ["type"] = definition.Effect.Type.ToString().ToLowerInvariant(), ["amount"] = definition.Effect.Amount }
+                ["effect"] = EffectNode(definition.Effect)
             };
         }
 
@@ -6652,6 +6859,21 @@ public sealed class DefaultRulesEngine : IRulesEngine
             ["ruleModifiers"] = new JsonArray(),
             ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
         };
+    }
+
+    private static JsonObject EffectNode(CardEffectDefinition effect)
+    {
+        var node = new JsonObject { ["type"] = effect.Type.ToString().ToLowerInvariant(), ["amount"] = effect.Amount };
+        if (effect.Steps.Count > 0)
+        {
+            node["steps"] = ToArray(effect.Steps.Select(step => new JsonObject
+            {
+                ["type"] = step.Type.ToString().ToLowerInvariant(),
+                ["amount"] = step.Amount
+            }));
+        }
+
+        return node;
     }
 
     private static JsonObject ToContinuousEffectObject(CardContinuousEffectDefinition effect)
@@ -7200,6 +7422,15 @@ public sealed class DefaultRulesEngine : IRulesEngine
     private sealed record RuneResource(string Id, Domain Domain);
 
     private sealed record BattlefieldSetupSelection(string CatalogId, int? ChosenByPlayerId);
+
+    private enum TargetQualifier
+    {
+        Any,
+        Friendly,
+        Enemy
+    }
+
+    private sealed record MultiUnitTargetRequirement(int Count, IReadOnlyList<TargetQualifier> Qualifiers);
 
     private sealed record TargetSelection(
         bool IsValid,

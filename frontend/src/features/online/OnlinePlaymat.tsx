@@ -31,6 +31,8 @@ type DragIntent =
   | { type: 'unit'; unitId: string }
   | { type: 'champion' }
 
+type TargetSelection = { kind: 'unit' | 'lane'; excludeUnitIds?: string[]; allowedOwnerIds?: number[] }
+
 function unitOwnerId(unit: Unit): number {
   return (unit as Unit & { ownerId?: number }).ownerId ?? unit.owner
 }
@@ -160,6 +162,8 @@ function ReadOnlyUnit({
   onDragEnd,
   canDropCard,
   onDropCard,
+  targetable,
+  onSelectTarget,
 }: {
   unit: Unit
   draggable?: boolean
@@ -167,6 +171,8 @@ function ReadOnlyUnit({
   onDragEnd?: () => void
   canDropCard?: boolean
   onDropCard?: (handIndex: number, unitId: string) => void
+  targetable?: boolean
+  onSelectTarget?: (unitId: string) => void
 }) {
   const attachedCards = unit.attachedCards ?? []
   const statusEffects = unit.statusEffects ?? []
@@ -174,7 +180,7 @@ function ReadOnlyUnit({
 
   return (
     <div
-      className={`online-unit-card-wrap ${draggable ? 'movable' : ''} ${canDropCard ? 'drop-zone attach-drop-zone' : ''}`.trim()}
+      className={`online-unit-card-wrap ${draggable ? 'movable' : ''} ${canDropCard ? 'drop-zone attach-drop-zone' : ''} ${targetable ? 'targetable' : ''}`.trim()}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -185,6 +191,9 @@ function ReadOnlyUnit({
         const payload = readDragData(event)
         if (payload?.type === 'card') onDropCard?.(payload.handIndex, unit.uid)
       } : undefined}
+      onClick={targetable ? () => onSelectTarget?.(unit.uid) : undefined}
+      role={targetable ? 'button' : undefined}
+      title={targetable ? `Target ${unit.name}` : undefined}
     >
       <ReadOnlyArtCard card={unit} className={`online-unit-card ${unit.exhausted ? 'exhausted' : ''}`.trim()} />
       {hasStatusIcons && (
@@ -255,6 +264,9 @@ function OnlineBattlefieldLane({
   onDropCard,
   onDropCardOnUnit,
   onMoveUnit,
+  targetSelection,
+  onSelectUnitTarget,
+  onSelectLaneTarget,
 }: {
   cardsById: Map<string, Card>
   controller: BattlefieldController | null
@@ -275,6 +287,9 @@ function OnlineBattlefieldLane({
   onDropCard?: (handIndex: number, battlefieldId: string) => void
   onDropCardOnUnit?: (handIndex: number, unitId: string) => void
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
+  targetSelection?: TargetSelection
+  onSelectUnitTarget?: (unitId: string) => void
+  onSelectLaneTarget?: (laneId: string) => void
 }) {
   const dragData = useDragData()
   const catalogCard = battlefieldCatalogCard(field, cardsById)
@@ -289,12 +304,14 @@ function OnlineBattlefieldLane({
   const blocksCurrentDrag = Boolean(dragIntent && !canDropUnit)
   const viewerUnits = field.units.filter((unit) => unitOwnerId(unit) === viewerPlayerId)
   const opponentUnits = field.units.filter((unit) => unitOwnerId(unit) !== viewerPlayerId)
+  const unitsTargetable = targetSelection?.kind === 'unit'
+  const laneTargetable = targetSelection?.kind === 'lane'
 
   const renderUnitSide = (units: Unit[], side: 'opponent' | 'viewer') => (
     <div className={`unit-row online-battlefield-units online-battlefield-units-${side}`}>
       {units.map((unit) => {
         const moveIntent = unitMoveIntents[unit.uid]
-        const isMovable = Boolean(canMoveUnit && side === 'viewer' && moveIntent && (moveIntent.battlefieldIds.length > 0 || moveIntent.canMoveToBase))
+        const isMovable = Boolean(canMoveUnit && side === 'viewer' && !targetSelection && moveIntent && (moveIntent.battlefieldIds.length > 0 || moveIntent.canMoveToBase))
         const acceptsDraggedCard = Boolean(draggedHandIntent?.attachUnitIds.includes(unit.uid))
         return (
           <ReadOnlyUnit
@@ -308,6 +325,10 @@ function OnlineBattlefieldLane({
             onDragEnd={() => onDragIntent(null)}
             canDropCard={acceptsDraggedCard || (!dragIntent && canDropAttachedCard)}
             onDropCard={onDropCardOnUnit}
+            targetable={unitsTargetable
+              && !targetSelection?.excludeUnitIds?.includes(unit.uid)
+              && (!targetSelection?.allowedOwnerIds || targetSelection.allowedOwnerIds.includes(unitOwnerId(unit)))}
+            onSelectTarget={onSelectUnitTarget}
           />
         )
       })}
@@ -321,6 +342,7 @@ function OnlineBattlefieldLane({
         hasAnyDrop ? 'drop-zone' : '',
         canDropUnit ? 'drop-zone-active' : '',
         blocksCurrentDrag ? 'drop-zone-blocked' : '',
+        laneTargetable ? 'targetable' : '',
       ].filter(Boolean).join(' ')}
       aria-label={field.name}
       onDragOver={canDropUnit ? (event) => event.preventDefault() : undefined}
@@ -333,6 +355,9 @@ function OnlineBattlefieldLane({
         }
         if (payload?.type === 'unit' && canDropMovedUnit) onMoveUnit?.(payload.unitId, field.id)
       } : undefined}
+      onClick={laneTargetable ? () => onSelectLaneTarget?.(field.id) : undefined}
+      role={laneTargetable ? 'button' : undefined}
+      title={laneTargetable ? `Target ${field.name}` : undefined}
     >
       {renderUnitSide(opponentUnits, 'opponent')}
       <div className="online-battlefield-art-wrap">
@@ -501,6 +526,8 @@ function OnlinePlayerMat({
   onDragIntent = () => undefined,
   onChooseHandAction = () => undefined,
   onSummonChampion,
+  targetSelection,
+  onSelectUnitTarget,
 }: {
   isViewer: boolean
   player: Player
@@ -525,6 +552,8 @@ function OnlinePlayerMat({
   onDragIntent?: (intent: DragIntent | null) => void
   onChooseHandAction?: (choice: BoardActionChoice) => void
   onSummonChampion?: () => void
+  targetSelection?: TargetSelection
+  onSelectUnitTarget?: (unitId: string) => void
 }) {
   const dragData = useDragData()
   const handZone = (
@@ -607,7 +636,7 @@ function OnlinePlayerMat({
       <div className="unit-row">
         {player.base.map((unit) => {
           const moveIntent = unitMoveIntents[unit.uid]
-          const isMovable = Boolean(isViewer && canMoveUnit && moveIntent && (moveIntent.battlefieldIds.length > 0 || moveIntent.canMoveToBase))
+          const isMovable = Boolean(isViewer && canMoveUnit && !targetSelection && moveIntent && (moveIntent.battlefieldIds.length > 0 || moveIntent.canMoveToBase))
           const acceptsDraggedCard = Boolean(draggedHandIntent?.attachUnitIds.includes(unit.uid))
           return (
             <ReadOnlyUnit
@@ -621,6 +650,10 @@ function OnlinePlayerMat({
               onDragEnd={() => onDragIntent(null)}
               canDropCard={acceptsDraggedCard || (!dragIntent && Boolean(isViewer && canAttachCard))}
               onDropCard={onDropCardOnUnit ?? onAttachCard}
+              targetable={targetSelection?.kind === 'unit'
+                && !targetSelection?.excludeUnitIds?.includes(unit.uid)
+                && (!targetSelection?.allowedOwnerIds || targetSelection.allowedOwnerIds.includes(unitOwnerId(unit)))}
+              onSelectTarget={onSelectUnitTarget}
             />
           )
         })}
@@ -748,6 +781,9 @@ function BattlefieldZone({
   onDragIntent,
   canMoveUnit,
   onMoveUnit,
+  targetSelection,
+  onSelectUnitTarget,
+  onSelectLaneTarget,
 }: {
   cardsById: Map<string, Card>
   game: GameState
@@ -766,6 +802,9 @@ function BattlefieldZone({
   onDragIntent: (intent: DragIntent | null) => void
   canMoveUnit?: boolean
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
+  targetSelection?: TargetSelection
+  onSelectUnitTarget?: (unitId: string) => void
+  onSelectLaneTarget?: (laneId: string) => void
 }) {
   const matchPlayersById = new Map(matchPlayers.map((player) => [player.playerId, player]))
   const gamePlayersById = new Map(game.players.map((player) => [player.id, player]))
@@ -804,6 +843,9 @@ function BattlefieldZone({
               onDropCard={onDropCardOnBattlefield}
               onDropCardOnUnit={onDropCardOnUnit}
               onMoveUnit={onMoveUnit}
+              targetSelection={targetSelection}
+              onSelectUnitTarget={onSelectUnitTarget}
+              onSelectLaneTarget={onSelectLaneTarget}
             />
           )
         })}
@@ -835,6 +877,9 @@ export function OnlinePlaymat({
   onMoveUnit,
   canSummonChampion,
   onSummonChampion,
+  targetSelection,
+  onSelectUnitTarget,
+  onSelectLaneTarget,
 }: {
   cards: Card[]
   game: GameState
@@ -858,6 +903,9 @@ export function OnlinePlaymat({
   onMoveUnit?: (unitId: string, battlefieldId: string) => void
   canSummonChampion?: boolean
   onSummonChampion?: () => void
+  targetSelection?: TargetSelection
+  onSelectUnitTarget?: (unitId: string) => void
+  onSelectLaneTarget?: (laneId: string) => void
 }) {
   const [dragIntent, setDragIntent] = useState<DragIntent | null>(null)
   const cardsById = new Map(cards.map((card) => [card.id, card]))
@@ -874,7 +922,16 @@ export function OnlinePlaymat({
     const opponent = opponents[0]
     return (
       <section className="online-shared-playmat duel-playmat">
-        {opponent && <OnlinePlayerMat isViewer={false} placement="opponent" player={opponent} victoryScore={hydratedGame.victoryScore} />}
+        {opponent && (
+          <OnlinePlayerMat
+            isViewer={false}
+            placement="opponent"
+            player={opponent}
+            victoryScore={hydratedGame.victoryScore}
+            targetSelection={targetSelection}
+            onSelectUnitTarget={onSelectUnitTarget}
+          />
+        )}
         <BattlefieldZone
           cardsById={cardsById}
           game={hydratedGame}
@@ -893,6 +950,9 @@ export function OnlinePlaymat({
           onDragIntent={setDragIntent}
           canMoveUnit={canMoveUnit}
           onMoveUnit={onMoveUnit}
+          targetSelection={targetSelection}
+          onSelectUnitTarget={onSelectUnitTarget}
+          onSelectLaneTarget={onSelectLaneTarget}
         />
         {viewer && (
           <OnlinePlayerMat
@@ -919,6 +979,8 @@ export function OnlinePlaymat({
             onMoveUnit={onMoveUnit}
             canSummonChampion={canSummonChampion}
             onSummonChampion={onSummonChampion}
+            targetSelection={targetSelection}
+            onSelectUnitTarget={onSelectUnitTarget}
           />
         )}
       </section>
@@ -946,6 +1008,9 @@ export function OnlinePlaymat({
         onDragIntent={setDragIntent}
         canMoveUnit={canMoveUnit}
         onMoveUnit={onMoveUnit}
+        targetSelection={targetSelection}
+        onSelectUnitTarget={onSelectUnitTarget}
+        onSelectLaneTarget={onSelectLaneTarget}
       />
 
       <section className="online-player-mats" aria-label="Player play spaces">
@@ -975,6 +1040,8 @@ export function OnlinePlaymat({
             onMoveUnit={onMoveUnit}
             canSummonChampion={player.id === viewerPlayerId ? canSummonChampion : false}
             onSummonChampion={onSummonChampion}
+            targetSelection={targetSelection}
+            onSelectUnitTarget={onSelectUnitTarget}
           />
         ))}
       </section>

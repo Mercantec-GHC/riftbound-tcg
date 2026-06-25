@@ -1,4 +1,4 @@
-import type { Card } from './cards'
+import type { Card, Effect } from './cards'
 import type { SavedDeck } from './decks'
 
 export type CardStatusEffect = {
@@ -13,10 +13,7 @@ export type StackItem = {
   cardId: string
   cardName: string
   playerId: number
-  effect: {
-    type: 'damage' | 'draw' | 'buff' | 'rally'
-    amount: number
-  }
+  effect: Effect
   targetUnitId?: string
   targetLaneId?: string
 }

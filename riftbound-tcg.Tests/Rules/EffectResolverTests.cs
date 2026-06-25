@@ -133,6 +133,82 @@ public class EffectResolverTests
         Assert.That(result.UpdatedBattlefields.Single().Units, Is.Empty);
     }
 
+    // --- Kill ---
+
+    [Test]
+    public void ResolveTop_Kill_RemovesUnitAndSendsItToOwnersTrash()
+    {
+        var unit = StateBuilder.Unit("u-enemy", owner: 1);
+        var field = StateBuilder.Field("lane-1", unit);
+        var p0 = StateBuilder.Player(0);
+        var p1 = StateBuilder.Player(1);
+
+        var result = EffectResolver.ResolveTop([Item(0, CardEffectType.Kill, 0, targetUnitId: "u-enemy")], [p0, p1], [field])!;
+
+        Assert.That(result.UpdatedBattlefields.Single().Units, Is.Empty);
+        Assert.That(result.UpdatedPlayers.Single(p => p.Id == 1).TrashCardIds, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void ResolveTop_Kill_NoTarget_NoChange()
+    {
+        var player = StateBuilder.Player(0);
+
+        var result = EffectResolver.ResolveTop([Item(0, CardEffectType.Kill, 0)], [player], [])!;
+
+        Assert.That(result.UpdatedPlayers.Single().Base, Is.Empty);
+    }
+
+    // --- Banish ---
+
+    [Test]
+    public void ResolveTop_Banish_RemovesUnitWithoutSendingItToTrash()
+    {
+        var unit = StateBuilder.Unit("u-enemy", owner: 1);
+        var field = StateBuilder.Field("lane-1", unit);
+        var p0 = StateBuilder.Player(0);
+        var p1 = StateBuilder.Player(1);
+
+        var result = EffectResolver.ResolveTop([Item(0, CardEffectType.Banish, 0, targetUnitId: "u-enemy")], [p0, p1], [field])!;
+
+        Assert.That(result.UpdatedBattlefields.Single().Units, Is.Empty);
+        Assert.That(result.UpdatedPlayers.Single(p => p.Id == 1).TrashCardIds, Is.Empty);
+        Assert.That(result.UpdatedPlayers.Single(p => p.Id == 1).BanishedCardIds, Has.Count.EqualTo(1));
+    }
+
+    // --- Stun ---
+
+    [Test]
+    public void ResolveTop_Stun_ExhaustsTargetUnit()
+    {
+        var unit = StateBuilder.Unit("u-1", owner: 0);
+        var player = StateBuilder.Player(0) with { Base = [unit] };
+
+        var result = EffectResolver.ResolveTop([Item(0, CardEffectType.Stun, 0, targetUnitId: "u-1")], [player], [])!;
+
+        Assert.That(result.UpdatedPlayers.Single().Base.Single().Exhausted, Is.True);
+    }
+
+    // --- Multi-step ---
+
+    [Test]
+    public void ResolveTop_MultiStep_AppliesEachStepInOrder()
+    {
+        var unit = StateBuilder.Unit("u-1", owner: 0);
+        var player = StateBuilder.Player(0, deckSize: 5, handSize: 0) with { Base = [unit] };
+        var item = new StackItem(
+            "stack-multi", "card-id", "Test Card", 0,
+            new CardEffectDefinition(CardEffectType.Buff, 0) { Steps = [new(CardEffectType.Buff, 2), new(CardEffectType.Draw, 1)] },
+            "u-1", null);
+
+        var result = EffectResolver.ResolveTop([item], [player], [])!;
+
+        var updated = result.UpdatedPlayers.Single();
+        Assert.That(updated.Base.Single().AttachedMight, Is.EqualTo(2));
+        Assert.That(updated.HandCardIds, Has.Count.EqualTo(1));
+        Assert.That(updated.DeckCardIds, Has.Count.EqualTo(4));
+    }
+
     // --- Stack management ---
 
     [Test]
