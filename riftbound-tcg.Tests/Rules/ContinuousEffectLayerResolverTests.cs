@@ -118,13 +118,110 @@ public class ContinuousEffectLayerResolverTests
         Assert.That(result.Might, Is.EqualTo(5));
     }
 
-    private static JsonObject Unit(string uid, int might) =>
+    [Test]
+    public void board_effects_apply_only_to_matching_objects()
+    {
+        var source = Unit("source", 1, ownerId: 0);
+        source["continuousEffects"] = new JsonArray(
+            Effect("friendly-ganking", "ability", "add", "abilities", "Ganking", "friendly-units"),
+            Effect("enemy-tank", "ability", "add", "abilities", "Tank", "enemy-units"));
+        var friendly = Unit("friendly", 2, ownerId: 0);
+        var enemy = Unit("enemy", 2, ownerId: 1);
+        var effects = ContinuousEffectLayerResolver.EffectsFromSource(source);
+
+        var friendlyResult = ContinuousEffectLayerResolver.EvaluateUnit(friendly, effects);
+        var enemyResult = ContinuousEffectLayerResolver.EvaluateUnit(enemy, effects);
+
+        Assert.That(friendlyResult.Abilities, Contains.Item("Ganking"));
+        Assert.That(friendlyResult.Abilities, Does.Not.Contain("Tank"));
+        Assert.That(enemyResult.Abilities, Contains.Item("Tank"));
+        Assert.That(enemyResult.Abilities, Does.Not.Contain("Ganking"));
+    }
+
+    [Test]
+    public void board_effects_use_source_layer_timestamp_order()
+    {
+        var earlySource = Unit("early-source", 1, ownerId: 0, layerTimestamp: 1);
+        earlySource["continuousEffects"] = new JsonArray(Effect("early-set", "trait", "set", "might", 5, "friendly-units"));
+        var lateSource = Unit("late-source", 1, ownerId: 0, layerTimestamp: 2);
+        lateSource["continuousEffects"] = new JsonArray(Effect("late-set", "trait", "set", "might", 7, "friendly-units"));
+        var target = Unit("target", 1, ownerId: 0);
+        var effects = ContinuousEffectLayerResolver.EffectsFromSource(lateSource, 0)
+            .Concat(ContinuousEffectLayerResolver.EffectsFromSource(earlySource, 1000));
+
+        var result = ContinuousEffectLayerResolver.EvaluateUnit(target, effects);
+
+        Assert.That(result.Might, Is.EqualTo(7));
+    }
+
+    [Test]
+    public void same_timestamp_board_effects_use_source_order_after_timestamp()
+    {
+        var firstSource = Unit("first-source", 1, ownerId: 0, layerTimestamp: 4);
+        firstSource["continuousEffects"] = new JsonArray(Effect("first-set", "trait", "set", "might", 5, "friendly-units"));
+        var secondSource = Unit("second-source", 1, ownerId: 0, layerTimestamp: 4);
+        secondSource["continuousEffects"] = new JsonArray(Effect("second-set", "trait", "set", "might", 7, "friendly-units"));
+        var target = Unit("target", 1, ownerId: 0);
+        var effects = ContinuousEffectLayerResolver.EffectsFromSource(firstSource, 0)
+            .Concat(ContinuousEffectLayerResolver.EffectsFromSource(secondSource, 1000));
+
+        var result = ContinuousEffectLayerResolver.EvaluateUnit(target, effects);
+
+        Assert.That(result.Might, Is.EqualTo(7));
+    }
+
+    [Test]
+    public void board_effect_dependencies_override_timestamp_inside_their_layer()
+    {
+        var buffSource = Unit("buff-source", 1, ownerId: 0, layerTimestamp: 2);
+        buffSource["continuousEffects"] = new JsonArray(Effect("depended-on-buff", "arithmetic", "add", "might", 2, "friendly-units"));
+        var setSource = Unit("set-source", 1, ownerId: 0, layerTimestamp: 1);
+        var setEffect = Effect("dependent-set", "arithmetic", "set", "might", 10, "friendly-units");
+        setEffect["dependsOn"] = new JsonArray("depended-on-buff");
+        setSource["continuousEffects"] = new JsonArray(setEffect);
+        var target = Unit("target", 4, ownerId: 0);
+        var effects = ContinuousEffectLayerResolver.EffectsFromSource(setSource, 0)
+            .Concat(ContinuousEffectLayerResolver.EffectsFromSource(buffSource, 1000));
+
+        var result = ContinuousEffectLayerResolver.EvaluateUnit(target, effects);
+
+        Assert.That(result.Might, Is.EqualTo(10));
+    }
+
+    private static JsonObject Unit(string uid, int might, int ownerId = 0, int layerTimestamp = 1) =>
         new()
         {
             ["uid"] = uid,
+            ["ownerId"] = ownerId,
+            ["controllerId"] = ownerId,
+            ["kind"] = "unit",
+            ["location"] = new JsonObject { ["type"] = "battlefield", ["battlefieldId"] = "field-a", ["attachedToUid"] = null },
+            ["layerTimestamp"] = layerTimestamp,
             ["might"] = might,
             ["tags"] = new JsonArray(),
             ["abilities"] = new JsonArray(),
             ["attachedMight"] = 0
+        };
+
+    private static JsonObject Effect(string id, string layer, string operation, string property, string value, string appliesTo) =>
+        new()
+        {
+            ["id"] = id,
+            ["layer"] = layer,
+            ["operation"] = operation,
+            ["property"] = property,
+            ["textValue"] = value,
+            ["appliesTo"] = appliesTo
+        };
+
+    private static JsonObject Effect(string id, string layer, string operation, string property, int amount, string appliesTo) =>
+        new()
+        {
+            ["id"] = id,
+            ["layer"] = layer,
+            ["operation"] = operation,
+            ["property"] = property,
+            ["amount"] = amount,
+            ["appliesTo"] = appliesTo
         };
 }

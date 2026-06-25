@@ -5,12 +5,16 @@ namespace riftbound_tcg.Engine.GameActions;
 
 public enum InternalGameActionType
 {
+    Draw,
     Recycle,
     Discard,
     Reveal,
+    Deal,
     Kill,
     Banish,
     Stun,
+    Ready,
+    ModifyMight,
     Counter,
     Prevent,
     Create,
@@ -32,6 +36,18 @@ public sealed record InternalGameActionResult(
     string Message,
     JsonObject State);
 
+public enum InternalGameActionResolutionMode
+{
+    AllOrNothing,
+    DoAsMuchAsPossible
+}
+
+public sealed record InternalGameActionBatchResult(
+    bool Accepted,
+    string Message,
+    JsonObject State,
+    IReadOnlyList<InternalGameActionResult> ActionResults);
+
 public static class InternalGameActionExecutor
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -45,7 +61,20 @@ public static class InternalGameActionExecutor
         "attachedMight",
         "attacker",
         "defender",
-        "attachedUnitId"
+        "attachedUnitId",
+        "controllerId",
+        "isFaceDown",
+        "faceDown",
+        "facedown",
+        "rulesTextActive",
+        "hidden",
+        "hiddenAtBattlefieldId",
+        "hiddenTurnNumber",
+        "information",
+        "attachedCards",
+        "topCardId",
+        "layerTimestamp",
+        "statusEffects"
     ];
 
     public static InternalGameActionResult Apply(JsonObject state, InternalGameAction action)
@@ -58,12 +87,16 @@ public static class InternalGameActionExecutor
         var next = Clone(state);
         var result = action.Type switch
         {
+            InternalGameActionType.Draw => Draw(next, action),
             InternalGameActionType.Recycle => Recycle(next, action),
             InternalGameActionType.Discard => Discard(next, action),
             InternalGameActionType.Reveal => Reveal(next, action),
+            InternalGameActionType.Deal => Deal(next, action),
             InternalGameActionType.Kill => Kill(next, action),
             InternalGameActionType.Banish => Banish(next, action),
             InternalGameActionType.Stun => Stun(next, action),
+            InternalGameActionType.Ready => Ready(next, action),
+            InternalGameActionType.ModifyMight => ModifyMight(next, action),
             InternalGameActionType.Counter => Counter(next, action),
             InternalGameActionType.Prevent => Prevent(next, action),
             InternalGameActionType.Create => Create(next, action),
@@ -81,6 +114,60 @@ public static class InternalGameActionExecutor
             : new InternalGameActionResult(true, "accepted", result);
     }
 
+    public static InternalGameActionBatchResult ApplyAll(
+        JsonObject state,
+        IEnumerable<InternalGameAction> actions,
+        InternalGameActionResolutionMode mode)
+    {
+        var current = mode == InternalGameActionResolutionMode.AllOrNothing ? Clone(state) : state;
+        var results = new List<InternalGameActionResult>();
+
+        foreach (var action in actions)
+        {
+            var result = Apply(current, action);
+            results.Add(result);
+            if (!result.Accepted)
+            {
+                if (mode == InternalGameActionResolutionMode.AllOrNothing)
+                {
+                    return new InternalGameActionBatchResult(false, result.Message, state, results);
+                }
+
+                continue;
+            }
+
+            current = result.State;
+        }
+
+        return new InternalGameActionBatchResult(
+            true,
+            mode == InternalGameActionResolutionMode.DoAsMuchAsPossible && results.Any(result => !result.Accepted)
+                ? "accepted partial"
+                : "accepted",
+            current,
+            results);
+    }
+
+    private static JsonObject? Draw(JsonObject state, InternalGameAction action)
+    {
+        var amount = ReadInt(action.Payload, "amount");
+        var player = FindPlayer(state, action.PlayerId);
+        var deck = player?["deck"]?.AsArray();
+        var hand = player?["hand"]?.AsArray();
+        if (amount is null || amount.Value <= 0 || deck is null || hand is null)
+        {
+            return null;
+        }
+
+        for (var i = 0; i < amount.Value && deck.Count > 0; i++)
+        {
+            hand.Add(deck[0]?.DeepClone());
+            deck.RemoveAt(0);
+        }
+
+        return state;
+    }
+
     private static JsonObject? Recycle(JsonObject state, InternalGameAction action)
     {
         var player = FindPlayer(state, action.PlayerId);
@@ -92,12 +179,14 @@ public static class InternalGameActionExecutor
 
         var recycled = trash.Select(card => card?.DeepClone()).Where(card => card is not null).ToList();
         trash.Clear();
-        ShuffleInPlace(state, recycled);
-
-        var deck = player["deck"]!.AsArray();
-        foreach (var card in recycled)
+        foreach (var group in recycled.GroupBy(card => OwnerPlayerId(state, card?.AsObject(), action.PlayerId)))
         {
-            deck.Add(card);
+            var groupedCards = group.ToList();
+            ShuffleInPlace(state, groupedCards);
+            foreach (var card in groupedCards)
+            {
+                PutCardInOwnerZone(state, group.Key, card, "deck");
+            }
         }
 
         return state;
@@ -115,7 +204,7 @@ public static class InternalGameActionExecutor
 
         var card = hand[handIndex.Value]?.DeepClone();
         hand.RemoveAt(handIndex.Value);
-        player!["trash"]!.AsArray().Add(card);
+        PutCardInOwnerZone(state, action.PlayerId, card, "trash");
         return state;
     }
 
@@ -131,13 +220,36 @@ public static class InternalGameActionExecutor
         }
 
         var revealed = EnsureArray(state, "revealedCards");
-        revealed.Add(new JsonObject
+        var entry = new JsonObject
         {
+            ["id"] = $"reveal-{revealed.Count + 1}",
             ["playerId"] = action.PlayerId,
             ["zone"] = zone,
             ["index"] = index.Value,
+            ["active"] = true,
             ["card"] = source[index.Value]?.DeepClone()
-        });
+        };
+
+        var revealedTo = ReadIntArray(action.Payload, "revealedToPlayerIds");
+        if (revealedTo.Length > 0)
+        {
+            entry["revealedToPlayerIds"] = ToArray(revealedTo);
+        }
+
+        revealed.Add(entry);
+        return state;
+    }
+
+    private static JsonObject? Deal(JsonObject state, InternalGameAction action)
+    {
+        var unitId = ReadString(action.Payload, "unitId");
+        var amount = ReadInt(action.Payload, "amount");
+        if (string.IsNullOrWhiteSpace(unitId) || amount is null || amount.Value <= 0 || FindUnit(state, unitId) is not { } located)
+        {
+            return null;
+        }
+
+        located.Unit["damage"] = (located.Unit["damage"]?.GetValue<int>() ?? 0) + amount.Value;
         return state;
     }
 
@@ -152,7 +264,7 @@ public static class InternalGameActionExecutor
         DetachGearFromUnit(state, unitId);
         var ownerId = located.Unit["ownerId"]?.GetValue<int>() ?? action.PlayerId;
         located.Container.Remove(located.Unit);
-        FindPlayer(state, ownerId)?["trash"]!.AsArray().Add(CardWithoutRuntimeState(located.Unit));
+        PutCardInOwnerZone(state, ownerId, CardWithoutRuntimeState(located.Unit), "trash");
         return state;
     }
 
@@ -162,8 +274,9 @@ public static class InternalGameActionExecutor
         if (!string.IsNullOrWhiteSpace(unitId) && FindUnit(state, unitId) is { } locatedUnit)
         {
             DetachGearFromUnit(state, unitId);
+            var ownerId = locatedUnit.Unit["ownerId"]?.GetValue<int>() ?? action.PlayerId;
             locatedUnit.Container.Remove(locatedUnit.Unit);
-            EnsureArray(state, "banished").Add(CardWithoutRuntimeState(locatedUnit.Unit));
+            PutCardInOwnerZone(state, ownerId, CardWithoutRuntimeState(locatedUnit.Unit), "banished");
             return state;
         }
 
@@ -178,7 +291,7 @@ public static class InternalGameActionExecutor
 
         var card = source[index.Value]?.DeepClone();
         source.RemoveAt(index.Value);
-        EnsureArray(state, "banished").Add(card);
+        PutCardInOwnerZone(state, action.PlayerId, card, "banished");
         return state;
     }
 
@@ -191,6 +304,50 @@ public static class InternalGameActionExecutor
         }
 
         located.Unit["exhausted"] = true;
+        return state;
+    }
+
+    private static JsonObject? Ready(JsonObject state, InternalGameAction action)
+    {
+        var unitId = ReadString(action.Payload, "unitId");
+        if (string.IsNullOrWhiteSpace(unitId) || FindUnit(state, unitId) is not { } located)
+        {
+            return null;
+        }
+
+        located.Unit["exhausted"] = false;
+        return state;
+    }
+
+    private static JsonObject? ModifyMight(JsonObject state, InternalGameAction action)
+    {
+        var unitId = ReadString(action.Payload, "unitId");
+        var amount = ReadInt(action.Payload, "amount");
+        if (string.IsNullOrWhiteSpace(unitId) || amount is null || FindUnit(state, unitId) is not { } located)
+        {
+            return null;
+        }
+
+        located.Unit["attachedMight"] = (located.Unit["attachedMight"]?.GetValue<int>() ?? 0) + amount.Value;
+        if (ReadJsonObject(action.Payload, "sourceCard") is { } sourceCard)
+        {
+            var effects = EnsureArray(located.Unit, "statusEffects");
+            var sourceCardId = ReadString(action.Payload, "sourceCardId")
+                ?? sourceCard["catalogId"]?.GetValue<string>()
+                ?? sourceCard["id"]?.GetValue<string>()
+                ?? "unknown-source";
+            var effectType = ReadString(action.Payload, "effectType") ?? "buff";
+            effects.Add(new JsonObject
+            {
+                ["id"] = $"status-{sourceCardId}-{effects.Count + 1}",
+                ["type"] = effectType,
+                ["amount"] = amount.Value,
+                ["sourceCardId"] = sourceCardId,
+                ["sourceName"] = ReadString(action.Payload, "sourceName") ?? sourceCard["name"]?.GetValue<string>() ?? "Effect",
+                ["sourceCard"] = sourceCard
+            });
+        }
+
         return state;
     }
 
@@ -216,7 +373,7 @@ public static class InternalGameActionExecutor
             stack.RemoveAt(i);
             if (card is not null)
             {
-                FindPlayer(state, ownerId)?["trash"]!.AsArray().Add(card);
+                PutCardInOwnerZone(state, ownerId, card, "trash");
             }
 
             return state;
@@ -265,15 +422,23 @@ public static class InternalGameActionExecutor
             ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
         };
 
-        if (destination is "hand" or "deck" or "trash")
+        var createsToken = ReadBool(action.Payload, "isToken") ?? true;
+        if (destination is "hand" or "deck" or "trash" or "banished")
         {
-            var zone = Zone(FindPlayer(state, action.PlayerId), destination);
-            if (zone is null)
+            if (createsToken)
             {
                 return null;
             }
 
-            zone.Add(card);
+            var destinationPlayerId = ReadInt(action.Payload, "targetPlayerId") ?? action.PlayerId;
+            var ownerId = ReadInt(action.Payload, "ownerId") ?? destinationPlayerId;
+            card["ownerId"] = ownerId;
+            if (FindPlayer(state, destinationPlayerId) is null)
+            {
+                return null;
+            }
+
+            PutCardInOwnerZone(state, destinationPlayerId, card, destination);
             return state;
         }
 
@@ -282,14 +447,21 @@ public static class InternalGameActionExecutor
             return null;
         }
 
+        card["supertype"] = createsToken ? "Token" : null;
         card["uid"] = $"{kind}-{state["nextUid"]?.GetValue<int>() ?? 1}";
         card["ownerId"] = action.PlayerId;
+        card["controllerId"] = action.PlayerId;
         card["location"] = new JsonObject
         {
             ["type"] = destination,
             ["battlefieldId"] = destination == "battlefield" ? ReadString(action.Payload, "battlefieldId") : null
         };
         card["exhausted"] = ReadBool(action.Payload, "exhausted") ?? false;
+        card["isToken"] = createsToken;
+        card["isFaceDown"] = false;
+        card["rulesTextActive"] = true;
+        card["attachedCards"] = new JsonArray();
+        card["topCardId"] = null;
 
         state["nextUid"] = (state["nextUid"]?.GetValue<int>() ?? 1) + 1;
         if (kind == "gear")
@@ -450,7 +622,7 @@ public static class InternalGameActionExecutor
         DetachGearFromUnit(state, unitId);
         var ownerId = located.Unit["ownerId"]?.GetValue<int>() ?? action.PlayerId;
         located.Container.Remove(located.Unit);
-        FindPlayer(state, ownerId)?["hand"]!.AsArray().Add(CardWithoutRuntimeState(located.Unit));
+        PutCardInOwnerZone(state, ownerId, CardWithoutRuntimeState(located.Unit), "hand");
         return state;
     }
 
@@ -476,8 +648,45 @@ public static class InternalGameActionExecutor
             "deck" => player?["deck"]?.AsArray(),
             "hand" => player?["hand"]?.AsArray(),
             "trash" => player?["trash"]?.AsArray(),
+            "banished" => player?["banished"]?.AsArray(),
             _ => null
         };
+    }
+
+    private static void PutCardInOwnerZone(JsonObject state, int destinationPlayerId, JsonNode? card, string zoneName)
+    {
+        if (card is null)
+        {
+            return;
+        }
+
+        var cardObject = card.AsObject();
+        if (IsToken(cardObject))
+        {
+            return;
+        }
+
+        var ownerId = OwnerPlayerId(state, cardObject, destinationPlayerId);
+        var owner = FindPlayer(state, ownerId);
+        if (owner is null)
+        {
+            return;
+        }
+
+        var zone = Zone(owner, zoneName);
+        if (zone is null)
+        {
+            zone = new JsonArray();
+            owner[zoneName] = zone;
+        }
+
+        zone.Add(card);
+    }
+
+    private static int OwnerPlayerId(JsonObject state, JsonObject? card, int destinationPlayerId)
+    {
+        var ownerId = card?["ownerId"]?.GetValue<int?>() ?? destinationPlayerId;
+        return FindPlayer(state, ownerId) is null ? destinationPlayerId : ownerId;
     }
 
     private static JsonObject? FindPlayer(JsonObject state, int playerId)
@@ -555,6 +764,10 @@ public static class InternalGameActionExecutor
 
         return copy;
     }
+
+    private static bool IsToken(JsonObject card) =>
+        card["isToken"]?.GetValue<bool?>() == true
+        || string.Equals(card["supertype"]?.GetValue<string>(), "Token", StringComparison.OrdinalIgnoreCase);
 
     private static JsonArray EnsureArray(JsonObject state, string key)
     {
@@ -653,6 +866,17 @@ public static class InternalGameActionExecutor
         };
     }
 
+    private static JsonArray ToArray(IEnumerable<int> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+        {
+            array.Add(value);
+        }
+
+        return array;
+    }
+
     private static string? ReadString(IReadOnlyDictionary<string, object?> payload, string key)
     {
         if (!payload.TryGetValue(key, out var value) || value is null)
@@ -664,6 +888,21 @@ public static class InternalGameActionExecutor
         {
             string text when !string.IsNullOrWhiteSpace(text) => text,
             JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
+            _ => null
+        };
+    }
+
+    private static JsonObject? ReadJsonObject(IReadOnlyDictionary<string, object?> payload, string key)
+    {
+        if (!payload.TryGetValue(key, out var value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            JsonObject jsonObject => jsonObject.DeepClone().AsObject(),
+            JsonElement element when element.ValueKind == JsonValueKind.Object => JsonNode.Parse(element.GetRawText())?.AsObject(),
             _ => null
         };
     }

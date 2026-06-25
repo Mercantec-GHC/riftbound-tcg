@@ -19,6 +19,8 @@ public sealed class CardBuilder
     private IReadOnlyList<Domain> _domains = [riftbound_tcg.Core.Cards.Domain.Fury];
     private string? _supertype;
     private string? _cardType;
+    private IReadOnlyList<CardContinuousEffectDefinition> _continuousEffects = [];
+    private IReadOnlyList<CardRuleModifierDefinition> _ruleModifiers = [];
 
     public CardBuilder Id(string id) { _id = id; return this; }
     public CardBuilder Name(string name) { _name = name; return this; }
@@ -33,6 +35,8 @@ public sealed class CardBuilder
     public CardBuilder Domains(params Domain[] domains) { _domains = domains; _domain = domains.FirstOrDefault(); return this; }
     public CardBuilder Supertype(string? supertype) { _supertype = supertype; return this; }
     public CardBuilder CardType(string cardType) { _cardType = cardType; return this; }
+    public CardBuilder ContinuousEffects(params CardContinuousEffectDefinition[] effects) { _continuousEffects = effects; return this; }
+    public CardBuilder RuleModifiers(params CardRuleModifierDefinition[] modifiers) { _ruleModifiers = modifiers; return this; }
 
     public CardDefinition Build() => new(
         Id: _id,
@@ -49,7 +53,9 @@ public sealed class CardBuilder
         Supertype: _supertype,
         Effect: _effect)
     {
-        PowerCost = _powerCost
+        PowerCost = _powerCost,
+        ContinuousEffects = _continuousEffects,
+        RuleModifiers = _ruleModifiers
     };
 
     public static CardBuilder Spell() => new CardBuilder().Kind(CardKind.Spell);

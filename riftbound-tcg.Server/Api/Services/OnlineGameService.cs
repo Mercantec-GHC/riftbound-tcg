@@ -1329,7 +1329,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
         var users = await db.Users.ToDictionaryAsync(user => user.Id, cancellationToken);
         var seats = players.Select((player, index) => new EngineSeatConfig(index, player.UserId, users.TryGetValue(player.UserId, out var user) ? user.DisplayName : player.UserId, player.TeamId)).ToArray();
         var engineDecks = decks.Select(deck => new EnginePlayerDeck(deck.Id, deck.LegendId, deck.ChampionId, Deserialize(deck.BattlefieldDeckIdsJson), Deserialize(deck.RuneDeckIdsJson), Deserialize(deck.MainDeckIdsJson))).ToArray();
-        var selectedBattlefields = battlefieldIds.Count > 0 ? battlefieldIds : engineDecks.SelectMany(deck => deck.BattlefieldDeckIds).Take(ModeSpec.For(mode).BattlefieldCount).ToArray();
+        var selectedBattlefields = battlefieldIds.Where(id => !string.IsNullOrWhiteSpace(id)).ToArray();
         var catalog = await BuildCardCatalogAsync(engineDecks, cancellationToken);
         var engineState = rulesEngine.CreateInitialState(new EngineMatchConfig(matchId, mode, seats, selectedBattlefields, firstPlayerId), engineDecks, StableSeed(matchId), catalog);
 
@@ -1927,7 +1927,7 @@ public sealed class OnlineGameService(GameDbContext db, IRulesEngine rulesEngine
     private static MatchSnapshotDto ToSnapshot(MatchEntity match, IEnumerable<MatchPlayerEntity> players, IReadOnlyDictionary<string, string?> avatarImageHashes, string stateJson, int sequenceNumber, int? viewerPlayerId = null)
     {
         var state = JsonNode.Parse(stateJson)!.AsObject();
-        var view = viewerPlayerId is null ? state : PlayerViewRedactor.Redact(state, viewerPlayerId.Value);
+        var view = viewerPlayerId is null ? PlayerViewRedactor.RedactForSpectator(state) : PlayerViewRedactor.Redact(state, viewerPlayerId.Value);
         return new MatchSnapshotDto(match.Id, match.Mode, match.Status, players.OrderBy(player => player.PlayerId).Select(player => ToDto(player, avatarImageHashes)).ToArray(), match.CreatedAt, match.UpdatedAt, match.CompletedAt, match.WinnerPlayerId, match.WinningTeamId, view, sequenceNumber);
     }
 

@@ -22,6 +22,93 @@ public class AbilityFrameworkTests
     }
 
     [Test]
+    public void simultaneous_triggers_controlled_by_one_player_require_an_order_choice()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("first-source", "First Source", 0, "unit-first", Triggered("first-trigger", "action-applied", Effect("draw", 1))));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("second-source", "Second Source", 0, "unit-second", Triggered("second-trigger", "action-applied", Effect("draw", 1))));
+
+        var result = engine.ApplyAction(state, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["chainWindow"], Is.Null);
+        Assert.That(result.State.State["effectStack"]!.AsArray(), Is.Empty);
+        var legal = engine.GetLegalActions(result.State, 0).Single(action => action.Type == "order-triggered-abilities");
+        Assert.That(legal.PayloadSchema?["abilityIds"]!.AsArray().Select(id => id!.GetValue<string>()), Is.EqualTo(new[] { "unit-first:first-trigger:0", "unit-second:second-trigger:1" }));
+    }
+
+    [Test]
+    public void triggered_ability_order_rejects_missing_duplicate_or_wrong_controller_submissions()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("first-source", "First Source", 0, "unit-first", Triggered("first-trigger", "action-applied", Effect("draw", 1))));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("second-source", "Second Source", 0, "unit-second", Triggered("second-trigger", "action-applied", Effect("draw", 1))));
+
+        var pending = engine.ApplyAction(state, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), state.SequenceNumber).State;
+        var groupId = engine.GetLegalActions(pending, 0).Single(action => action.Type == "order-triggered-abilities").PayloadSchema!["groupId"]!.GetValue<string>();
+
+        var wrongController = engine.ApplyAction(
+            pending,
+            new EngineGameAction(1, "order-triggered-abilities", new Dictionary<string, object?> { ["groupId"] = groupId, ["abilityIds"] = new[] { "unit-first:first-trigger:0", "unit-second:second-trigger:1" } }),
+            pending.SequenceNumber);
+        var missing = engine.ApplyAction(
+            pending,
+            new EngineGameAction(0, "order-triggered-abilities", new Dictionary<string, object?> { ["groupId"] = groupId, ["abilityIds"] = new[] { "unit-first:first-trigger:0" } }),
+            pending.SequenceNumber);
+        var duplicate = engine.ApplyAction(
+            pending,
+            new EngineGameAction(0, "order-triggered-abilities", new Dictionary<string, object?> { ["groupId"] = groupId, ["abilityIds"] = new[] { "unit-first:first-trigger:0", "unit-first:first-trigger:0" } }),
+            pending.SequenceNumber);
+
+        Assert.That(wrongController.Accepted, Is.False);
+        Assert.That(missing.Accepted, Is.False);
+        Assert.That(duplicate.Accepted, Is.False);
+    }
+
+    [Test]
+    public void chosen_trigger_order_is_placed_on_the_chain_and_resolves_last_in_first_out()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("first-source", "First Source", 0, "unit-first", Triggered("first-trigger", "action-applied", Effect("draw", 1))));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("second-source", "Second Source", 0, "unit-second", Triggered("second-trigger", "action-applied", Effect("draw", 1))));
+
+        var pending = engine.ApplyAction(state, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), state.SequenceNumber).State;
+        var groupId = engine.GetLegalActions(pending, 0).Single(action => action.Type == "order-triggered-abilities").PayloadSchema!["groupId"]!.GetValue<string>();
+        var ordered = engine.ApplyAction(
+            pending,
+            new EngineGameAction(0, "order-triggered-abilities", new Dictionary<string, object?>
+            {
+                ["groupId"] = groupId,
+                ["abilityIds"] = new[] { "unit-first:first-trigger:0", "unit-second:second-trigger:1" }
+            }),
+            pending.SequenceNumber);
+
+        Assert.That(ordered.Accepted, Is.True);
+        Assert.That(StackNames(ordered.State), Is.EqualTo(new[] { "Second Source", "First Source" }));
+        var afterFirstPass = engine.ApplyAction(ordered.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), ordered.State.SequenceNumber);
+        var afterSecondPass = engine.ApplyAction(afterFirstPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterFirstPass.State.SequenceNumber);
+        Assert.That(afterSecondPass.State.State["log"]![0]!["text"]!.GetValue<string>(), Is.EqualTo("Second Source resolved."));
+    }
+
+    [Test]
+    public void simultaneous_triggers_from_multiple_controllers_are_placed_starting_with_turn_player()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("turn-source", "Turn Source", 0, "unit-turn", Triggered("turn-trigger", "action-applied", Effect("draw", 1))));
+        FindPlayer(state, 1)["base"]!.AsArray().Add(Unit("next-source", "Next Source", 1, "unit-next", Triggered("next-trigger", "action-applied", Effect("draw", 1))));
+
+        var result = engine.ApplyAction(state, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(StackNames(result.State), Is.EqualTo(new[] { "Next Source", "Turn Source" }));
+        Assert.That(result.State.State["chainWindow"]!["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
+    [Test]
     public void delayed_triggered_abilities_fire_once_when_their_event_occurs()
     {
         var engine = new DefaultRulesEngine();
@@ -103,6 +190,138 @@ public class AbilityFrameworkTests
         Assert.That(result.State.State["abilityContributions"]!["unit-vanguard"]!["might"]!.GetValue<int>(), Is.EqualTo(2));
     }
 
+    [Test]
+    public void controlled_abilities_use_current_controller_not_card_owner()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var borrowed = Unit("borrowed", "Borrowed Relay", 1, "unit-borrowed", Activated("draw-borrowed", Effect("draw", 1), exhaust: false, runes: 0));
+        borrowed["controllerId"] = 0;
+        state.State["battlefields"]![0]!["units"]!.AsArray().Add(borrowed);
+
+        Assert.That(engine.GetLegalActions(state, 0).Select(action => action.Type), Contains.Item("activate-ability"));
+        Assert.That(engine.GetLegalActions(state, 1).Select(action => action.Type), Does.Not.Contain("activate-ability"));
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "activate-ability", new Dictionary<string, object?> { ["sourceUid"] = "unit-borrowed", ["abilityId"] = "draw-borrowed" }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(result.State.State["effectStack"]![0]!["playerId"]!.GetValue<int>(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void triggers_created_by_resolving_a_trigger_are_queued_before_older_chain_items_continue()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("action-drawer", "Action Drawer", 0, "unit-action-drawer", Triggered("draw-after-action", "action-applied", Effect("draw", 1))));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("draw-watcher", "Draw Watcher", 0, "unit-draw-watcher", Triggered("draw-after-draw", "cards-drawn", Effect("draw", 1))));
+        FindPlayer(state, 0)["deck"]!.AsArray().Add(DeckCard("nested-a"));
+        FindPlayer(state, 0)["deck"]!.AsArray().Add(DeckCard("nested-b"));
+
+        var triggered = engine.ApplyAction(state, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), state.SequenceNumber);
+        var afterControllerPass = engine.ApplyAction(triggered.State, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), triggered.State.SequenceNumber);
+        var afterResolve = engine.ApplyAction(afterControllerPass.State, new EngineGameAction(1, "pass-chain-window", new Dictionary<string, object?>()), afterControllerPass.State.SequenceNumber);
+
+        Assert.That(afterResolve.Accepted, Is.True);
+        Assert.That(StackNames(afterResolve.State), Is.EqualTo(new[] { "Draw Watcher" }));
+        Assert.That(afterResolve.State.State["chainWindow"]!["priorityPlayerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(AbilityEvents(afterResolve.State, "trigger-collected"), Has.Some.EqualTo("draw-after-draw"));
+    }
+
+    [Test]
+    public void modal_activated_abilities_validate_targets_for_selected_mode()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("modalist", "Modalist", 0, "unit-modalist", Modal("modal-burst",
+            Mode("harm", Effect("damage", 2)),
+            Mode("aid", Effect("buff", 2)))));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("ally", "Ally", 0, "unit-ally"));
+        FindPlayer(state, 1)["base"]!.AsArray().Add(Unit("enemy", "Enemy", 1, "unit-enemy"));
+
+        var rejected = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "activate-ability", new Dictionary<string, object?> { ["sourceUid"] = "unit-modalist", ["abilityId"] = "modal-burst", ["modeId"] = "harm", ["targetUnitId"] = "unit-ally" }),
+            state.SequenceNumber);
+        var accepted = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "activate-ability", new Dictionary<string, object?> { ["sourceUid"] = "unit-modalist", ["abilityId"] = "modal-burst", ["modeId"] = "harm", ["targetUnitId"] = "unit-enemy" }),
+            state.SequenceNumber);
+
+        Assert.That(rejected.Accepted, Is.False);
+        Assert.That(accepted.Accepted, Is.True);
+        Assert.That(accepted.State.State["effectStack"]![0]!["targets"]!.AsArray().Single()!["unitId"]!.GetValue<string>(), Is.EqualTo("unit-enemy"));
+    }
+
+    [Test]
+    public void delayed_replacements_can_be_scoped_and_used_multiple_times()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        state.State["turnPhase"] = "draw";
+        FindPlayer(state, 0)["deck"]!.AsArray().Add(DeckCard("delayed-a"));
+        FindPlayer(state, 0)["deck"]!.AsArray().Add(DeckCard("delayed-b"));
+        FindPlayer(state, 0)["deck"]!.AsArray().Add(DeckCard("delayed-c"));
+        FindPlayer(state, 0)["deck"]!.AsArray().Add(DeckCard("delayed-d"));
+        state.State["delayedAbilities"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "double-next-two-draws",
+            ["kind"] = "delayed-replacement",
+            ["event"] = "draw-cards",
+            ["playerId"] = 0,
+            ["targetPlayerId"] = 0,
+            ["sourceUid"] = "delayed-source",
+            ["sourceCardId"] = "delayed-source-card",
+            ["sourceName"] = "Delayed Source",
+            ["uses"] = 2,
+            ["effect"] = Effect("modify-amount", 1)
+        });
+
+        var first = engine.ApplyAction(state, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), state.SequenceNumber);
+        first.State.State["turnPhase"] = "draw";
+        var second = engine.ApplyAction(first.State, new EngineGameAction(0, "advance-phase", new Dictionary<string, object?>()), first.State.SequenceNumber);
+
+        Assert.That(first.Accepted, Is.True);
+        Assert.That(second.Accepted, Is.True);
+        Assert.That(FindPlayer(second.State, 0)["hand"]!.AsArray(), Has.Count.EqualTo(9));
+        Assert.That(second.State.State["delayedAbilities"]!.AsArray(), Is.Empty);
+        Assert.That(AbilityEvents(second.State, "delayed-fired").Count(id => id == "double-next-two-draws"), Is.EqualTo(2));
+    }
+
+    [Test]
+    public void priority_and_meta_actions_do_not_create_action_applied_triggers()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("watcher", "Watcher", 0, "unit-watcher", Triggered("after-action", "action-applied", Effect("draw", 1))));
+        state.State["effectStack"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "manual-stack",
+            ["card"] = Unit("manual", "Manual", 0, "unit-manual"),
+            ["cardId"] = "manual",
+            ["cardName"] = "Manual",
+            ["kind"] = "ability",
+            ["playerId"] = 0,
+            ["effect"] = Effect("rally", 0)
+        });
+        state.State["chainWindow"] = new JsonObject
+        {
+            ["priorityPlayerId"] = 0,
+            ["startedByPlayerId"] = 0,
+            ["source"] = "triggered",
+            ["passesFocusOnClose"] = false,
+            ["passedByPlayer"] = new JsonObject()
+        };
+
+        var result = engine.ApplyAction(state, new EngineGameAction(0, "pass-chain-window", new Dictionary<string, object?>()), state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        Assert.That(AbilityEvents(result.State, "trigger-collected"), Does.Not.Contain("after-action"));
+    }
+
     private static EngineMatchState ReachMainPhase(DefaultRulesEngine engine)
     {
         var state = engine.CreateInitialState(Config(), Decks(), 123);
@@ -143,6 +362,13 @@ public class AbilityFrameworkTests
             .ToArray();
     }
 
+    private static string[] StackNames(EngineMatchState state)
+    {
+        return state.State["effectStack"]!.AsArray()
+            .Select(item => item!["cardName"]!.GetValue<string>())
+            .ToArray();
+    }
+
     private static int PlayerPoints(EngineMatchState state, int playerId) =>
         FindPlayer(state, playerId)["points"]!.GetValue<int>();
 
@@ -166,6 +392,7 @@ public class AbilityFrameworkTests
             ["effect"] = Effect("rally", 0),
             ["uid"] = uid,
             ["ownerId"] = ownerId,
+            ["controllerId"] = ownerId,
             ["exhausted"] = false,
             ["damage"] = 0,
             ["attachedMight"] = 0,
@@ -191,6 +418,20 @@ public class AbilityFrameworkTests
         return ability;
     }
 
+    private static JsonObject Modal(string id, params JsonObject[] modes)
+    {
+        var ability = Ability(id, "modal", Effect("rally", 0));
+        ability["modes"] = ToArray(modes);
+        return ability;
+    }
+
+    private static JsonObject Mode(string id, JsonObject effect) =>
+        new()
+        {
+            ["id"] = id,
+            ["effect"] = effect
+        };
+
     private static JsonObject Ability(string id, string kind, JsonObject effect, string? evt = null)
     {
         var ability = new JsonObject
@@ -210,6 +451,25 @@ public class AbilityFrameworkTests
 
     private static JsonObject Effect(string type, int amount) =>
         new() { ["type"] = type, ["amount"] = amount };
+
+    private static JsonObject DeckCard(string id) =>
+        new()
+        {
+            ["id"] = $"{id}-test",
+            ["catalogId"] = id,
+            ["name"] = id,
+            ["kind"] = "unit",
+            ["tags"] = new JsonArray(),
+            ["domain"] = "Fury",
+            ["domains"] = new JsonArray("Fury"),
+            ["cost"] = 0,
+            ["might"] = 1,
+            ["text"] = string.Empty,
+            ["image"] = string.Empty,
+            ["cardType"] = "Unit",
+            ["supertype"] = null,
+            ["effect"] = Effect("rally", 0)
+        };
 
     private static JsonArray ToArray(IEnumerable<JsonObject> nodes)
     {

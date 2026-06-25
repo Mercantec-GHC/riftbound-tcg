@@ -6,6 +6,16 @@ public static class PlayerViewRedactor
 {
     public static JsonObject Redact(JsonObject state, int viewerPlayerId)
     {
+        return Redact(state, (int?)viewerPlayerId);
+    }
+
+    public static JsonObject RedactForSpectator(JsonObject state)
+    {
+        return Redact(state, null);
+    }
+
+    private static JsonObject Redact(JsonObject state, int? viewerPlayerId)
+    {
         var view = state.DeepClone().AsObject();
         if (view["players"] is JsonArray players)
         {
@@ -17,25 +27,18 @@ public static class PlayerViewRedactor
                 }
 
                 var playerId = player["id"]?.GetValue<int>() ?? -1;
-                var isViewer = playerId == viewerPlayerId;
-                player["deck"] = HiddenCards(player["deck"] as JsonArray, playerId, "deck");
-                player["runeDeck"] = HiddenCards(player["runeDeck"] as JsonArray, playerId, "rune-deck");
-                if (!isViewer)
-                {
-                    player["hand"] = HiddenCards(player["hand"] as JsonArray, playerId, "hand");
-                }
-                else
-                {
-                    RedactCardArray(player["hand"] as JsonArray, viewerPlayerId, "hand", playerId);
-                }
+                player["deck"] = RedactHiddenZone(view, player["deck"] as JsonArray, viewerPlayerId, playerId, "deck");
+                player["runeDeck"] = RedactHiddenZone(view, player["runeDeck"] as JsonArray, viewerPlayerId, playerId, "rune-deck");
+                player["hand"] = RedactHiddenZone(view, player["hand"] as JsonArray, viewerPlayerId, playerId, "hand");
 
-                RedactCardArray(player["runes"]?["ready"] as JsonArray, viewerPlayerId, "ready-rune", playerId);
-                RedactCardArray(player["runes"]?["exhausted"] as JsonArray, viewerPlayerId, "exhausted-rune", playerId);
-                RedactCardArray(player["trash"] as JsonArray, viewerPlayerId, "trash", playerId);
-                RedactCardArray(player["base"] as JsonArray, viewerPlayerId, "base", playerId);
-                RedactCardArray(player["baseGear"] as JsonArray, viewerPlayerId, "base-gear", playerId);
-                RedactCardProperty(player, "champion", viewerPlayerId, "champion", playerId);
-                RedactCardProperty(player, "legend", viewerPlayerId, "legend", playerId);
+                RedactCardArray(view, player["runes"]?["ready"] as JsonArray, viewerPlayerId, "ready-rune", playerId);
+                RedactCardArray(view, player["runes"]?["exhausted"] as JsonArray, viewerPlayerId, "exhausted-rune", playerId);
+                RedactCardArray(view, player["trash"] as JsonArray, viewerPlayerId, "trash", playerId);
+                RedactCardArray(view, player["banished"] as JsonArray, viewerPlayerId, "banished", playerId);
+                RedactCardArray(view, player["base"] as JsonArray, viewerPlayerId, "base", playerId);
+                RedactCardArray(view, player["baseGear"] as JsonArray, viewerPlayerId, "base-gear", playerId);
+                RedactCardProperty(view, player, "champion", viewerPlayerId, "champion", playerId);
+                RedactCardProperty(view, player, "legend", viewerPlayerId, "legend", playerId);
             }
         }
 
@@ -43,7 +46,8 @@ public static class PlayerViewRedactor
         {
             foreach (var battlefield in battlefields.OfType<JsonObject>())
             {
-                RedactCardArray(battlefield["units"] as JsonArray, viewerPlayerId, "battlefield-unit", null);
+                RedactCardArray(view, battlefield["units"] as JsonArray, viewerPlayerId, "battlefield-unit", null);
+                RedactCardArray(view, battlefield["hiddenCards"] as JsonArray, viewerPlayerId, "battlefield-hidden", null);
             }
         }
 
@@ -51,11 +55,15 @@ public static class PlayerViewRedactor
         {
             foreach (var item in effectStack.OfType<JsonObject>())
             {
-                RedactStackItem(item, viewerPlayerId);
+                RedactStackItem(view, item, viewerPlayerId);
             }
         }
 
-        if (view["selectedCard"] is JsonObject selectedCard
+        RedactRevealedCards(view, viewerPlayerId);
+        RedactPendingVision(view, viewerPlayerId);
+
+        if (viewerPlayerId is null
+            || view["selectedCard"] is JsonObject selectedCard
             && (selectedCard["player"]?.GetValue<int?>() ?? selectedCard["playerId"]?.GetValue<int?>()) != viewerPlayerId)
         {
             view["selectedCard"] = null;
@@ -65,19 +73,26 @@ public static class PlayerViewRedactor
         return view;
     }
 
-    private static JsonArray HiddenCards(JsonArray? source, int ownerPlayerId, string zone)
+    private static JsonArray RedactHiddenZone(JsonObject state, JsonArray? source, int? viewerPlayerId, int ownerPlayerId, string zone)
     {
         var count = source?.Count ?? 0;
         var redacted = new JsonArray();
         for (var index = 0; index < count; index++)
         {
-            redacted.Add(HiddenCard(ownerPlayerId, zone, index));
+            if (source?[index] is JsonObject card
+                && InformationModel.IdentityVisibleTo(state, card, viewerPlayerId, zone, ownerPlayerId, index))
+            {
+                redacted.Add(card.DeepClone());
+                continue;
+            }
+
+            redacted.Add(HiddenCard(ownerPlayerId, zone, index, source?[index] as JsonObject));
         }
 
         return redacted;
     }
 
-    private static void RedactCardArray(JsonArray? cards, int viewerPlayerId, string zone, int? ownerPlayerId)
+    private static void RedactCardArray(JsonObject state, JsonArray? cards, int? viewerPlayerId, string zone, int? ownerPlayerId)
     {
         if (cards is null)
         {
@@ -86,24 +101,26 @@ public static class PlayerViewRedactor
 
         for (var index = 0; index < cards.Count; index++)
         {
-            if (cards[index] is JsonObject card && ShouldHideFacedown(card, viewerPlayerId))
+            if (cards[index] is JsonObject card
+                && !InformationModel.IdentityVisibleTo(state, card, viewerPlayerId, zone, OwnerId(card, ownerPlayerId), index))
             {
                 cards[index] = HiddenCard(OwnerId(card, ownerPlayerId), zone, index, card);
             }
         }
     }
 
-    private static void RedactCardProperty(JsonObject parent, string propertyName, int viewerPlayerId, string zone, int ownerPlayerId)
+    private static void RedactCardProperty(JsonObject state, JsonObject parent, string propertyName, int? viewerPlayerId, string zone, int ownerPlayerId)
     {
-        if (parent[propertyName] is JsonObject card && ShouldHideFacedown(card, viewerPlayerId))
+        if (parent[propertyName] is JsonObject card
+            && !InformationModel.IdentityVisibleTo(state, card, viewerPlayerId, zone, ownerPlayerId, 0))
         {
             parent[propertyName] = HiddenCard(OwnerId(card, ownerPlayerId), zone, 0, card);
         }
     }
 
-    private static void RedactStackItem(JsonObject item, int viewerPlayerId)
+    private static void RedactStackItem(JsonObject state, JsonObject item, int? viewerPlayerId)
     {
-        if (!ShouldHideFacedown(item, viewerPlayerId))
+        if (InformationModel.IdentityVisibleTo(state, item, viewerPlayerId, "stack", OwnerId(item, null), 0))
         {
             return;
         }
@@ -112,64 +129,45 @@ public static class PlayerViewRedactor
         item["cardName"] = "Hidden card";
     }
 
-    private static bool ShouldHideFacedown(JsonObject card, int viewerPlayerId)
+    private static void RedactRevealedCards(JsonObject state, int? viewerPlayerId)
     {
-        var faceDown = ReadBool(card, "faceDown")
-            || ReadBool(card, "facedown")
-            || ReadBool(card, "isFaceDown")
-            || ReadBool(card, "hidden");
-        if (!faceDown || ReadBool(card, "public") || ReadBool(card, "revealed"))
+        if (state["revealedCards"] is not JsonArray revealedCards)
         {
-            return false;
+            return;
         }
 
-        var ownerId = OwnerId(card, null);
-        if (ownerId == viewerPlayerId)
+        for (var index = 0; index < revealedCards.Count; index++)
         {
-            return false;
-        }
+            if (revealedCards[index] is not JsonObject entry
+                || entry["card"] is not JsonObject card)
+            {
+                continue;
+            }
 
-        return !RevealedTo(card, viewerPlayerId);
-    }
-
-    private static bool RevealedTo(JsonObject card, int viewerPlayerId)
-    {
-        return ContainsPlayerId(card["revealedToPlayerIds"], viewerPlayerId)
-            || ContainsPlayerId(card["revealedTo"], viewerPlayerId)
-            || ContainsPlayerId(card["visibleToPlayerIds"], viewerPlayerId)
-            || ContainsPlayerId(card["visibleTo"], viewerPlayerId);
-    }
-
-    private static bool ContainsPlayerId(JsonNode? node, int viewerPlayerId)
-    {
-        return node is JsonArray array
-            && array.Any(item => MatchesPlayerId(item, viewerPlayerId));
-    }
-
-    private static bool MatchesPlayerId(JsonNode? node, int viewerPlayerId)
-    {
-        if (node is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            return node.GetValue<int>() == viewerPlayerId;
-        }
-        catch (InvalidOperationException)
-        {
-            return node.GetValue<string>() == viewerPlayerId.ToString();
-        }
-        catch (FormatException)
-        {
-            return false;
+            var zone = entry["zone"]?.GetValue<string>() ?? "revealed";
+            var playerId = entry["playerId"]?.GetValue<int?>();
+            if (!InformationModel.IdentityVisibleTo(state, card, viewerPlayerId, zone, playerId, entry["index"]?.GetValue<int?>() ?? index))
+            {
+                var clone = entry.DeepClone().AsObject();
+                clone["card"] = HiddenCard(OwnerId(card, playerId), zone, index, card);
+                revealedCards[index] = clone;
+            }
         }
     }
 
-    private static bool ReadBool(JsonObject obj, string key)
+    private static void RedactPendingVision(JsonObject state, int? viewerPlayerId)
     {
-        return obj[key]?.GetValue<bool?>() == true;
+        if (state["pendingVision"] is not JsonObject pending
+            || pending["card"] is not JsonObject card)
+        {
+            return;
+        }
+
+        var playerId = pending["playerId"]?.GetValue<int?>();
+        if (viewerPlayerId != playerId)
+        {
+            pending["card"] = HiddenCard(OwnerId(card, playerId), "vision", 0, card);
+        }
     }
 
     private static int OwnerId(JsonObject card, int? fallback)
@@ -217,8 +215,12 @@ public static class PlayerViewRedactor
         Preserve(source, hidden, "faceDown");
         Preserve(source, hidden, "facedown");
         Preserve(source, hidden, "isFaceDown");
+        Preserve(source, hidden, "controllerId");
+        Preserve(source, hidden, "hiddenAtBattlefieldId");
+        Preserve(source, hidden, "hiddenTurnNumber");
         Preserve(source, hidden, "revealedToPlayerIds");
         Preserve(source, hidden, "revealedTo");
+        Preserve(source, hidden, "information");
         return hidden;
     }
 

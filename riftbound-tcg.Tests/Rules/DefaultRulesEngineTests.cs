@@ -18,6 +18,47 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void initial_setup_without_explicit_battlefields_selects_one_from_each_contributor_deck()
+    {
+        var engine = new DefaultRulesEngine();
+        var config = Config() with { BattlefieldIds = [] };
+        var decks = new[]
+        {
+            new EnginePlayerDeck("deck-a", "legend-a", "champion-a", ["a-field-0", "a-field-1", "a-field-2"], ["rune-a"], ["unit-a", "unit-b", "unit-c", "unit-d"]),
+            new EnginePlayerDeck("deck-b", "legend-b", "champion-b", ["b-field-0", "b-field-1", "b-field-2"], ["rune-b"], ["unit-e", "unit-f", "unit-g", "unit-h"])
+        };
+
+        var state = engine.CreateInitialState(config, decks, 123);
+        var battlefields = state.State["battlefields"]!.AsArray().Select(node => node!.AsObject()).ToArray();
+
+        Assert.That(battlefields, Has.Length.EqualTo(2));
+        Assert.That(battlefields[0]["chosenBy"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(battlefields[1]["chosenBy"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(battlefields[0]["catalogId"]!.GetValue<string>(), Does.StartWith("a-field-"));
+        Assert.That(battlefields[1]["catalogId"]!.GetValue<string>(), Does.StartWith("b-field-"));
+        Assert.That(FindPlayer(state, 0)["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefields[0]["catalogId"]!.GetValue<string>()));
+        Assert.That(FindPlayer(state, 1)["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefields[1]["catalogId"]!.GetValue<string>()));
+    }
+
+    [Test]
+    public void teams_setup_marks_selected_battlefields_as_contributed_by_non_first_players()
+    {
+        var engine = new DefaultRulesEngine();
+
+        var state = engine.CreateInitialState(
+            Config("teams-2v2", 4) with { BattlefieldIds = ["battlefield-1", "battlefield-2", "battlefield-3"] },
+            Decks(4),
+            123);
+        var battlefields = state.State["battlefields"]!.AsArray().Select(node => node!.AsObject()).ToArray();
+
+        Assert.That(battlefields.Select(field => field["chosenBy"]!.GetValue<int>()), Is.EqualTo(new[] { 1, 2, 3 }));
+        Assert.That(Player(state, 0)["battlefieldId"]!.GetValue<string>(), Is.EqualTo(string.Empty));
+        Assert.That(Player(state, 1)["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefields[0]["catalogId"]!.GetValue<string>()));
+        Assert.That(Player(state, 2)["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefields[1]["catalogId"]!.GetValue<string>()));
+        Assert.That(Player(state, 3)["battlefieldId"]!.GetValue<string>(), Is.EqualTo(battlefields[2]["catalogId"]!.GetValue<string>()));
+    }
+
+    [Test]
     public void legal_actions_are_returned_for_current_mulligan_player()
     {
         var engine = new DefaultRulesEngine();
@@ -309,7 +350,7 @@ public class DefaultRulesEngineTests
             .Select(node => node!.AsObject())
             .Single(battlefield => battlefield["id"]!.GetValue<string>() == playerOneBattlefield["id"]!.GetValue<string>());
         Assert.That(replacedBattlefield["catalogId"]!.GetValue<string>(), Is.EqualTo("token-battlefield"));
-        Assert.That(replacedBattlefield["controllerId"], Is.Null);
+        Assert.That(replacedBattlefield["controllerId"]!.GetValue<int>(), Is.EqualTo(2));
         Assert.That(replacedBattlefield["units"]!.AsArray().Select(unit => unit!["ownerId"]!.GetValue<int>()), Is.EqualTo(new[] { 2 }));
     }
 
@@ -387,6 +428,31 @@ public class DefaultRulesEngineTests
         Assert.That(resultPlayer["base"]!.AsArray().Single()!["kind"]!.GetValue<string>(), Is.EqualTo("champion"));
         Assert.That(resultPlayer["championSummoned"]!.GetValue<bool>(), Is.False);
         Assert.That(resultPlayer["champion"], Is.Not.Null);
+    }
+
+    [Test]
+    public void legal_play_unit_actions_include_exact_base_and_battlefield_payloads()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("payload-unit", "Payload Unit", "unit", "", "rally", 0, cost: 0));
+
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["controllerId"] = 0;
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+
+        var actions = engine.GetLegalActions(state, 0)
+            .Where(action => action.Type == "play-unit")
+            .ToArray();
+
+        Assert.That(actions, Has.Some.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["handIndex"]?.GetValue<int>() == 0 &&
+            action.PayloadSchema?["battlefieldId"] is null));
+        Assert.That(actions, Has.Some.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["handIndex"]?.GetValue<int>() == 0 &&
+            action.PayloadSchema?["battlefieldId"]?.GetValue<string>() == battlefieldId));
+        Assert.That(actions, Has.All.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["handIndex"]?.GetValue<int?>() is not null));
     }
 
     [Test]
@@ -609,6 +675,32 @@ public class DefaultRulesEngineTests
     }
 
     [Test]
+    public void summoned_champion_consumes_the_champion_zone_source()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        FindPlayer(state, 0)["champion"]!["abilities"] = new JsonArray(new JsonObject
+        {
+            ["id"] = "champion-enter",
+            ["kind"] = "triggered",
+            ["event"] = "unit-entered",
+            ["effect"] = new JsonObject { ["type"] = "draw", ["amount"] = 1 }
+        });
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "summon-champion", new Dictionary<string, object?>()),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.True);
+        var resultPlayer = FindPlayer(result.State, 0);
+        Assert.That(resultPlayer["champion"], Is.Null);
+        Assert.That(result.State.State["pendingTriggerGroups"]!.AsArray(), Is.Empty);
+        Assert.That(result.State.State["effectStack"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(result.State.State["effectStack"]![0]!["cardName"]!.GetValue<string>(), Is.EqualTo(resultPlayer["base"]!.AsArray()[0]!["name"]!.GetValue<string>()));
+    }
+
+    [Test]
     public void champion_cannot_be_summoned_without_enough_ready_runes_to_cover_cost()
     {
         var engine = new DefaultRulesEngine();
@@ -698,6 +790,34 @@ public class DefaultRulesEngineTests
         var resultPlayer = result.State.State["players"]!.AsArray().First(p => p!["id"]!.GetValue<int>() == 0)!.AsObject();
         var unit = resultPlayer["base"]!.AsArray().Single();
         Assert.That(unit!["exhausted"]!.GetValue<bool>(), Is.True);
+    }
+
+    [Test]
+    public void legal_move_unit_actions_include_exact_unit_and_destination_payloads()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        var player = FindPlayer(state, 0);
+        player["base"]!.AsArray().Clear();
+        player["base"]!.AsArray().Add(Unit("base-mover", 0, exhausted: false));
+        player["base"]!.AsArray().Add(Unit("tired-mover", 0, exhausted: true));
+
+        var battlefield = state.State["battlefields"]![0]!.AsObject();
+        battlefield["units"]!.AsArray().Add(Unit("field-mover", 0, exhausted: false));
+        var battlefieldId = battlefield["id"]!.GetValue<string>();
+
+        var actions = engine.GetLegalActions(state, 0)
+            .Where(action => action.Type == "move-unit")
+            .ToArray();
+
+        Assert.That(actions, Has.Some.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["unitId"]?.GetValue<string>() == "base-mover" &&
+            action.PayloadSchema?["battlefieldId"]?.GetValue<string>() == battlefieldId));
+        Assert.That(actions, Has.Some.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["unitId"]?.GetValue<string>() == "field-mover" &&
+            action.PayloadSchema?["battlefieldId"]?.GetValue<string>() == "base"));
+        Assert.That(actions, Has.None.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["unitId"]?.GetValue<string>() == "tired-mover"));
     }
 
     [Test]
@@ -907,6 +1027,38 @@ public class DefaultRulesEngineTests
         Assert.That(result.Accepted, Is.False);
         Assert.That(FindPlayer(result.State, 0)["base"]!.AsArray(), Has.Count.EqualTo(1));
         Assert.That(battlefield["units"]!.AsArray(), Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public void legal_attach_card_actions_include_exact_hand_and_target_payloads()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(
+            state,
+            0,
+            Card("test-hook", "Test Hook", "gear", "", "buff", 1, cost: 0),
+            Card("not-gear", "Not Gear", "unit", "", "rally", 0, cost: 0));
+
+        var enemy = FindPlayer(state, 1);
+        enemy["base"]!.AsArray().Add(Unit("enemy-target", 1, exhausted: false));
+
+        var actions = engine.GetLegalActions(state, 0)
+            .Where(action => action.Type == "attach-card")
+            .ToArray();
+
+        Assert.That(actions, Has.Some.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["handIndex"]?.GetValue<int>() == 0 &&
+            action.PayloadSchema?["targetUnitId"]?.GetValue<string>() == "enemy-target"));
+        Assert.That(actions, Has.None.Matches<EngineLegalAction>(action =>
+            action.PayloadSchema?["handIndex"]?.GetValue<int>() == 1));
+
+        var result = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "attach-card", new Dictionary<string, object?> { ["handIndex"] = 1, ["targetUnitId"] = "enemy-target" }),
+            state.SequenceNumber);
+
+        Assert.That(result.Accepted, Is.False);
     }
 
     [Test]
@@ -1213,7 +1365,62 @@ public class DefaultRulesEngineTests
         Assert.That(resolved.Accepted, Is.True);
         var resultBattlefield = resolved.State.State["battlefields"]![0]!.AsObject();
         Assert.That(resultBattlefield["units"]!.AsArray(), Is.Empty);
-        Assert.That(FindPlayer(resolved.State, 1)["trash"]!.AsArray(), Has.Count.EqualTo(1));
+        Assert.That(FindPlayer(resolved.State, 0)["trash"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("bolt"));
+        Assert.That(FindPlayer(resolved.State, 1)["trash"]!.AsArray().Single()!["catalogId"]!.GetValue<string>(), Is.EqualTo("target-card"));
+    }
+
+    [Test]
+    public void enemy_targeting_uses_controller_not_owner()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("bolt", "Bolt", "spell", "[Action] Deal 2 to an enemy unit.", "damage", 2, cost: 0));
+        var borrowed = Unit("borrowed-unit", ownerId: 1);
+        borrowed["controllerId"] = 0;
+        FindPlayer(state, 0)["base"]!.AsArray().Add(borrowed);
+
+        var played = engine.ApplyAction(
+            state,
+            new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "borrowed-unit" }),
+            state.SequenceNumber);
+
+        Assert.That(played.Accepted, Is.False);
+    }
+
+    [Test]
+    public void buff_effect_resolves_through_authoritative_stack_pipeline()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("battle-chant", "Battle Chant", "spell", "[Action] Give a friendly unit +2 Might this turn.", "buff", 2, cost: 0));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("friendly-unit", ownerId: 0, might: 2));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "friendly-unit" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var unit = FindPlayer(resolved.State, 0)["base"]!.AsArray().Single(node => node!["uid"]!.GetValue<string>() == "friendly-unit")!.AsObject();
+        Assert.That(unit["attachedMight"]!.GetValue<int>(), Is.EqualTo(2));
+        Assert.That(FindPlayer(resolved.State, 0)["trash"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("battle-chant"));
+    }
+
+    [Test]
+    public void rally_effect_resolves_through_authoritative_stack_pipeline()
+    {
+        var engine = new DefaultRulesEngine();
+        var state = ReachMainPhase(engine);
+        PutCardInHand(state, 0, Card("stand-ready", "Stand Ready", "spell", "[Action] Ready a friendly unit.", "rally", 1, cost: 0));
+        FindPlayer(state, 0)["base"]!.AsArray().Add(Unit("friendly-unit", ownerId: 0, exhausted: true));
+
+        var played = engine.ApplyAction(state, new EngineGameAction(0, "play-card", new Dictionary<string, object?> { ["handIndex"] = 0, ["targetUnitId"] = "friendly-unit" }), state.SequenceNumber);
+        Assert.That(played.Accepted, Is.True);
+
+        var resolved = PassChain(engine, played.State);
+
+        var unit = FindPlayer(resolved.State, 0)["base"]!.AsArray().Single(node => node!["uid"]!.GetValue<string>() == "friendly-unit")!.AsObject();
+        Assert.That(unit["exhausted"]!.GetValue<bool>(), Is.False);
+        Assert.That(FindPlayer(resolved.State, 0)["trash"]!.AsArray().Select(card => card!["catalogId"]!.GetValue<string>()), Contains.Item("stand-ready"));
     }
 
     [Test]

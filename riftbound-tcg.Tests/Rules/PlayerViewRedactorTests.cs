@@ -85,6 +85,125 @@ public sealed class PlayerViewRedactorTests
         Assert.That(faceUpView["battlefields"]![0]!["units"]![0]!["catalogId"]!.GetValue<string>(), Is.EqualTo("secret-unit"));
     }
 
+    [Test]
+    public void spectator_view_redacts_all_player_private_and_secret_zones()
+    {
+        var state = BaseState();
+        Player(state, 0)["hand"]!.AsArray().Add(Card("hand-a", "Player Zero Hand"));
+        Player(state, 1)["hand"]!.AsArray().Add(Card("hand-b", "Player One Hand"));
+        Player(state, 0)["deck"]!.AsArray().Add(Card("deck-a", "Player Zero Deck"));
+        Player(state, 1)["runeDeck"]!.AsArray().Add(Card("rune-a", "Player One Rune"));
+
+        var view = PlayerViewRedactor.RedactForSpectator(state);
+
+        Assert.That(Player(view, 0)["hand"]![0]!["name"]!.GetValue<string>(), Is.EqualTo("Hidden card"));
+        Assert.That(Player(view, 1)["hand"]![0]!["name"]!.GetValue<string>(), Is.EqualTo("Hidden card"));
+        Assert.That(Player(view, 0)["deck"]![0]!["catalogId"], Is.Null);
+        Assert.That(Player(view, 1)["runeDeck"]![0]!["catalogId"], Is.Null);
+        Assert.That(view["viewerPlayerId"], Is.Null);
+    }
+
+    [Test]
+    public void hidden_battlefield_cards_keep_public_ownership_but_hide_identity_from_non_controller()
+    {
+        var state = BaseState();
+        var hiddenCard = Card("hidden-trick", "Hidden Trick");
+        hiddenCard["uid"] = "hidden-1";
+        hiddenCard["ownerId"] = 1;
+        hiddenCard["controllerId"] = 1;
+        hiddenCard["hiddenAtBattlefieldId"] = "field-a";
+        hiddenCard["hiddenTurnNumber"] = 3;
+        hiddenCard["facedown"] = true;
+        hiddenCard["information"] = new JsonObject
+        {
+            ["privacy"] = "private",
+            ["controllerId"] = 1,
+            ["faceDownIdentityKnownToPlayerIds"] = new JsonArray(1)
+        };
+        state["battlefields"]![0]!["hiddenCards"]!.AsArray().Add(hiddenCard);
+
+        var opponentView = PlayerViewRedactor.Redact(state, viewerPlayerId: 0);
+        var redacted = opponentView["battlefields"]![0]!["hiddenCards"]![0]!.AsObject();
+        Assert.That(redacted["name"]!.GetValue<string>(), Is.EqualTo("Hidden card"));
+        Assert.That(redacted["catalogId"], Is.Null);
+        Assert.That(redacted["ownerId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(redacted["controllerId"]!.GetValue<int>(), Is.EqualTo(1));
+        Assert.That(redacted["hiddenAtBattlefieldId"]!.GetValue<string>(), Is.EqualTo("field-a"));
+        Assert.That(redacted["hiddenTurnNumber"]!.GetValue<int>(), Is.EqualTo(3));
+
+        var controllerView = PlayerViewRedactor.Redact(state, viewerPlayerId: 1);
+        Assert.That(controllerView["battlefields"]![0]!["hiddenCards"]![0]!["catalogId"]!.GetValue<string>(), Is.EqualTo("hidden-trick"));
+    }
+
+    [Test]
+    public void reveal_lifecycle_exposes_identity_while_active_then_redacts_when_removed()
+    {
+        var state = BaseState();
+        Player(state, 1)["hand"]!.AsArray().Add(Card("hand-secret", "Revealed Hand Card"));
+        Player(state, 0)["deck"]!.AsArray().Add(Card("deck-secret", "Revealed Deck Card"));
+        state["revealedCards"] = new JsonArray(
+            new JsonObject
+            {
+                ["playerId"] = 1,
+                ["zone"] = "hand",
+                ["index"] = 0,
+                ["active"] = true,
+                ["card"] = Player(state, 1)["hand"]![0]!.DeepClone()
+            },
+            new JsonObject
+            {
+                ["playerId"] = 0,
+                ["zone"] = "deck",
+                ["index"] = 0,
+                ["active"] = true,
+                ["card"] = Player(state, 0)["deck"]![0]!.DeepClone()
+            });
+
+        var opponentView = PlayerViewRedactor.Redact(state, viewerPlayerId: 0);
+        Assert.That(Player(opponentView, 1)["hand"]![0]!["catalogId"]!.GetValue<string>(), Is.EqualTo("hand-secret"));
+        Assert.That(Player(opponentView, 0)["deck"]![0]!["catalogId"]!.GetValue<string>(), Is.EqualTo("deck-secret"));
+        Assert.That(opponentView["revealedCards"]!.AsArray().Select(entry => entry!["card"]!["catalogId"]!.GetValue<string>()), Is.EquivalentTo(new[] { "hand-secret", "deck-secret" }));
+
+        state["revealedCards"] = new JsonArray();
+        var expiredView = PlayerViewRedactor.Redact(state, viewerPlayerId: 0);
+        Assert.That(Player(expiredView, 1)["hand"]![0]!["name"]!.GetValue<string>(), Is.EqualTo("Hidden card"));
+        Assert.That(Player(expiredView, 0)["deck"]![0]!["name"]!.GetValue<string>(), Is.EqualTo("Hidden card"));
+    }
+
+    [Test]
+    public void facedown_identity_history_can_make_a_facedown_object_known_to_specific_players()
+    {
+        var state = BaseState();
+        var facedownUnit = Card("borrowed-unit", "Borrowed Unit");
+        facedownUnit["uid"] = "unit-known";
+        facedownUnit["ownerId"] = 0;
+        facedownUnit["controllerId"] = 1;
+        facedownUnit["location"] = new JsonObject { ["type"] = "battlefield", ["battlefieldId"] = "field-a" };
+        facedownUnit["isFaceDown"] = true;
+        facedownUnit["information"] = new JsonObject
+        {
+            ["privacy"] = "private",
+            ["controllerId"] = 1,
+            ["faceDownIdentityKnownToPlayerIds"] = new JsonArray(0, 1),
+            ["visibilityHistory"] = new JsonArray(
+                new JsonObject { ["action"] = "facedown", ["playerId"] = 1, ["turnNumber"] = 2 },
+                new JsonObject { ["action"] = "revealed", ["playerId"] = 0, ["turnNumber"] = 3 })
+        };
+        state["battlefields"]![0]!["units"]!.AsArray().Add(facedownUnit);
+
+        var knownOwnerView = PlayerViewRedactor.Redact(state, viewerPlayerId: 0);
+        Assert.That(knownOwnerView["battlefields"]![0]!["units"]![0]!["catalogId"]!.GetValue<string>(), Is.EqualTo("borrowed-unit"));
+
+        var controllerView = PlayerViewRedactor.Redact(state, viewerPlayerId: 1);
+        Assert.That(controllerView["battlefields"]![0]!["units"]![0]!["catalogId"]!.GetValue<string>(), Is.EqualTo("borrowed-unit"));
+
+        var spectatorView = PlayerViewRedactor.RedactForSpectator(state);
+        var spectatorUnit = spectatorView["battlefields"]![0]!["units"]![0]!.AsObject();
+        Assert.That(spectatorUnit["catalogId"], Is.Null);
+        Assert.That(spectatorUnit["ownerId"]!.GetValue<int>(), Is.EqualTo(0));
+        Assert.That(spectatorUnit["controllerId"]!.GetValue<int>(), Is.EqualTo(1));
+    }
+
     private static string?[] CatalogIds(JsonArray cards)
     {
         return cards.Select(card => card?["catalogId"]?.GetValue<string>()).ToArray();
@@ -108,7 +227,8 @@ public sealed class PlayerViewRedactorTests
             ["battlefields"] = new JsonArray(new JsonObject
             {
                 ["id"] = "field-a",
-                ["units"] = new JsonArray()
+                ["units"] = new JsonArray(),
+                ["hiddenCards"] = new JsonArray()
             })
         };
     }
@@ -125,8 +245,30 @@ public sealed class PlayerViewRedactorTests
             ["trash"] = new JsonArray(),
             ["base"] = new JsonArray(),
             ["baseGear"] = new JsonArray(),
+            ["banished"] = new JsonArray(),
             ["champion"] = null,
             ["legend"] = null
+        };
+    }
+
+    private static JsonObject Card(string catalogId, string name)
+    {
+        return new JsonObject
+        {
+            ["id"] = $"{catalogId}-instance",
+            ["catalogId"] = catalogId,
+            ["name"] = name,
+            ["kind"] = "unit",
+            ["tags"] = new JsonArray(),
+            ["domain"] = "Fury",
+            ["domains"] = new JsonArray("Fury"),
+            ["cost"] = 1,
+            ["might"] = 1,
+            ["text"] = string.Empty,
+            ["image"] = "*",
+            ["cardType"] = "Unit",
+            ["supertype"] = null,
+            ["effect"] = new JsonObject { ["type"] = "rally", ["amount"] = 0 }
         };
     }
 
